@@ -20,6 +20,8 @@ DEFAULTS = {
     "featureAngle": 30.0,
     "featureLevel": None,       # None -> max surface level
     "snapTolerance": 0.3,       # snap vertices within this fraction of h onto surfaces
+    "featureSnapTolerance": 0.5,  # snap vertices within this fraction of h onto feature edges
+    "featureSnapMax": 0.5,      # experimental: up to this fraction where the octree cells stay valid
     "mergeRatio": 0.25,         # merge cut cells smaller than this fraction of their hex
     "patchTypes": {},
     "rotatingZones": [],
@@ -78,19 +80,189 @@ def build_zones(cfg):
     return zones
 
 
-def make_feature_hook(feat, h_of_cell, min_bend=0.03, reach=0.75):
-    """Cap refinement: if a sharp feature runs through the cut cell, insert the
-    feature point into the cap and fan-triangulate, so the corner is not chamfered."""
+def _newell(P):
+    return np.cross(P, np.roll(P, -1, 0)).sum(0)
+
+
+def make_chord_hook(feat):
+    """Face refinement: where a sharp feature pierces a face that the level set
+    splits, return the piercing point so the face's cut chord bends through it.
+    Only convex corners of the kept (phi < 0) side: bending the chord into the kept
+    side would make the cell non-convex."""
     if feat is None or feat._kd is None:
         return None
-    state = {"cell": 0, "n": 0}
+
+    def chord(ctx, poly, a, b):
+        pos = ctx.pos
+        V = np.array([pos[v] for v in poly])
+        A = np.array(pos[a]); B = np.array(pos[b])
+        mid = 0.5 * (A + B)
+        diam = float(np.ptp(V, 0).max())
+        idx = feat._kd.query_ball_point(mid, diam + feat._half)
+        if not idx:
+            return None
+        n = _newell(V)
+        nn = np.linalg.norm(n)
+        if nn == 0:
+            return None
+        n /= nn
+        c0 = V.mean(0)
+        S = feat.seg[idx]
+        sA = (S[:, 0] - c0) @ n
+        sB = (S[:, 1] - c0) @ n
+        ok = (sA * sB <= 0) & (sA != sB)
+        if not ok.any():
+            return None
+        t = sA[ok] / (sA[ok] - sB[ok])
+        X = S[ok, 0] + t[:, None] * (S[ok, 1] - S[ok, 0])
+        X -= ((X - c0) @ n)[:, None] * n
+        E = np.roll(V, -1, 0) - V
+        side = np.einsum("kj,j->k", np.cross(E[None], X[:, None] - V[None]).reshape(-1, 3), n).reshape(len(X), -1)
+        inside = (side >= -1e-9 * diam * diam).all(1)
+        u = B - A
+        L = float(np.linalg.norm(u))
+        if L == 0:
+            return None
+        dl = np.linalg.norm(np.cross(X - A, u), axis=1) / L
+        good = inside & (dl > 1e-3 * diam) & (dl < L)
+        if not good.any():
+            return None
+        X = X[good]
+        # side of the chord: the kept vertices on one side, a convex corner on the other
+        neg = [k for k, v in enumerate(poly) if ctx.phi[v] < 0]
+        sn = np.cross(u, V[neg] - A) @ n
+        sx = np.cross(u, X - A) @ n
+        X = X[(sx * sn.mean() < 0)]
+        if not len(X):
+            return None
+        return X[np.argmin(np.linalg.norm(X - mid, axis=1))].tolist()
+
+    return chord
+
+
+def _split_on_features(ctx, loop, feat, h, tol=0.05, reach=0.75, depth=4):
+    """Split a cap loop along the feature edges through the cell: from loop vertex to
+    loop vertex on the feature (entry/exit points), or spokes to a feature corner inside
+    the cell.  Curved features are followed by recursive midpoint projection.
+    Returns the list of polygons or None."""
+    m = len(loop)
+    pos = ctx.pos
+    P = np.array([pos[v] for v in loop])
+    _, dv = feat.closest(P)
+    F = [k for k, v in enumerate(loop) if v in ctx.onfeat or dv[k] < 1e-6 * h]
+    if len(F) < 2:
+        return None
+    amin = 1e-3 * h * h
+
+    def path(A, B, lev=0):
+        """points strictly between A and B along the feature, or None"""
+        M = 0.5 * (A + B)
+        cp, d = feat.closest(M[None])
+        if d[0] < tol * h:
+            return []
+        if lev >= depth or d[0] > 0.5 * np.linalg.norm(B - A):
+            return None
+        l = path(A, cp[0], lev + 1)
+        r = path(cp[0], B, lev + 1) if l is not None else None
+        if r is None:
+            return None
+        return l + [cp[0]] + r
+
+    def area_ok(polys):
+        """non-degenerate pieces that fold convexly (outward normals, kept side inside)"""
+        N, Cc = [], []
+        for Q in polys:
+            Q = np.asarray(Q)
+            nq = _newell(Q - Q.mean(0))
+            if len(Q) < 3 or np.linalg.norm(nq) < 2 * amin:
+                return False
+            N.append(nq / np.linalg.norm(nq)); Cc.append(Q.mean(0))
+        for i in range(len(polys)):
+            for j in range(len(polys)):
+                if i != j and np.dot(Cc[j] - Cc[i], N[i]) > 1e-3 * h:
+                    return False
+        return True
+
+    def add(X):
+        vid = len(pos)
+        pos.append(list(X)); ctx.phi.append(0.0)
+        ctx.new_vertices.append(vid); ctx.new_parents.append((-1, -1))
+        ctx.onfeat.add(vid)
+        return vid
+
+    # feature corner inside the cell: spokes from the corner to the entry points
+    if len(F) >= 3 and len(feat.corners):
+        dc = np.linalg.norm(feat.corners - P.mean(0), axis=1)
+        j = int(np.argmin(dc))
+        X = feat.corners[j]
+        if dc[j] < reach * h and np.min(np.linalg.norm(P - X, axis=1)) > 1e-6 * h:
+            spk, sp = [], {}
+            for k in F:
+                t = path(P[k], X)
+                if t is not None:
+                    spk.append(k); sp[k] = t
+            if len(spk) >= 2:
+                sect = []
+                for i in range(len(spk)):
+                    s0, s1 = spk[i], spk[(i + 1) % len(spk)]
+                    q = [(s0 + k) % m for k in range(((s1 - s0) % m or m) + 1)]
+                    sect.append((q, sp[s1], sp[s0]))
+                geo = [[P[k] for k in q] + t1 + [X] + t0[::-1] for q, t1, t0 in sect]
+                if area_ok(geo):
+                    vx = add(X)
+                    ids = {k: [add(x) for x in sp[k]] for k in spk}
+                    return [[loop[k] for k in q] + ids[s1] + [vx] + ids[s0][::-1]
+                            for (q, _, _), s0, s1 in zip(sect, spk, spk[1:] + spk[:1])]
+    # entry point -> exit point along the feature; accept non-crossing splits
+    polys = [list(loop)]
+    used = 0
+    lpos = {v: P[k] for k, v in enumerate(loop)}
+    for a_ in range(len(F)):
+        for b_ in range(a_ + 1, len(F)):
+            vi, vj = loop[F[a_]], loop[F[b_]]
+            for pi, q in enumerate(polys):
+                if vi not in q or vj not in q:
+                    continue
+                i, j = sorted((q.index(vi), q.index(vj)))
+                if j - i == 1 or (i == 0 and j == len(q) - 1):
+                    break
+                t = path(lpos[vi], lpos[vj])
+                if t is None:
+                    break
+                g = lambda ids: [lpos[v] if v in lpos else np.asarray(pos[v]) for v in ids]
+                g1 = g(q[i:j + 1]) + t[::-1]
+                g2 = g(q[j:] + q[:i + 1]) + t
+                if area_ok([g1, g2]):
+                    tid = [add(x) for x in t]
+                    polys[pi:pi + 1] = [q[i:j + 1] + tid[::-1], q[j:] + q[:i + 1] + tid]
+                    used += 1
+                break
+    if not used:
+        return None
+    return polys
+
+
+def make_feature_hook(feat, h_of_cell, min_bend=0.03, reach=0.75):
+    """Cap refinement: split the cap along the sharp feature edges running through the
+    cut cell (entry/exit points come from the face chords).  Otherwise, if a feature
+    runs through the cell, insert the feature point into the cap and fan-triangulate,
+    so the corner is not chamfered."""
+    if feat is None or feat._kd is None:
+        return None
+    state = {"cell": 0, "n": 0, "split": 0}
 
     def hook(ctx, loop):
         if len(loop) < 3:
             return [loop]
+        h = h_of_cell[state["cell"]]
+        if state.get("forbid"):
+            return [loop]
+        sp = _split_on_features(ctx, loop, feat, h)
+        if sp is not None:
+            state["did"] = True
+            return sp
         P = np.array([ctx.pos[v] for v in loop])
         c = P.mean(0)
-        h = h_of_cell[state["cell"]]
         fp, d = feat.closest(c[None])
         fp = fp[0]
         if d[0] > reach * h:
@@ -112,10 +284,97 @@ def make_feature_hook(feat, h_of_cell, min_bend=0.03, reach=0.75):
         ctx.pos.append(fp.tolist()); ctx.phi.append(0.0)
         ctx.new_vertices.append(vid); ctx.new_parents.append((-1, -1))
         state["n"] += 1
+        state["did"] = True
         m = len(loop)
         return [[loop[i], loop[(i + 1) % m], vid] for i in range(m)]
 
     return hook, state
+
+
+def _leaf_bad(P, leaves, fptr, fverts, cptr, csize):
+    """octree leaves (with moved vertices) where some face does not clearly see the
+    cell centre - non-convex or inverted"""
+    occs = np.concatenate([np.arange(cptr[c], cptr[c + 1]) for c in leaves.tolist()])
+    lens = cptr[leaves + 1] - cptr[leaves]
+    owner_ = np.repeat(np.arange(len(leaves)), lens)
+    nn_ = fptr[occs + 1] - fptr[occs]
+    off = np.repeat(fptr[occs] - np.concatenate([[0], np.cumsum(nn_)[:-1]]), nn_)
+    ffl = quality.FlatFaces((nn_, fverts[np.arange(int(nn_.sum())) + off]))
+    cf_, sf_ = quality.face_geometry(P, ffl)
+    est = np.zeros((len(leaves), 3)); np.add.at(est, owner_, cf_); est /= lens[:, None]
+    pv = np.einsum("ij,ij->i", sf_, cf_ - est[owner_])
+    vv = np.bincount(owner_, pv, len(leaves))
+    cc = np.zeros((len(leaves), 3)); np.add.at(cc, owner_, pv[:, None] * (0.75 * cf_ + 0.25 * est[owner_]))
+    cc /= np.where(np.abs(vv) > 0, vv, 1.0)[:, None]
+    sp = np.einsum("ij,ij->i", sf_, cf_ - cc[owner_])
+    hl = csize[leaves][owner_]
+    af = np.linalg.norm(sf_, axis=1)
+    badf = (sp < 0.05 * af * hl) | (af < 0.05 * hl * hl)    # collapsed edges give empty faces
+    return (np.bincount(owner_, badf.astype(int), len(leaves)) > 0) | (vv <= 0)
+
+
+def _piece_bad(pos, comp, h):
+    """some face does not clearly see the centroid (same test as the merging stage)"""
+    Cf, Sf = [], []
+    for _, p in comp:
+        Q = np.array([pos[v] for v in p])
+        c = Q.mean(0)
+        Cf.append(c); Sf.append(0.5 * np.cross(Q - c, np.roll(Q, -1, 0) - c).sum(0))
+    Cf = np.array(Cf); Sf = np.array(Sf)
+    est = Cf.mean(0)
+    pv = np.einsum("ij,ij->i", Sf, Cf - est)
+    if pv.sum() <= 0:
+        return True
+    cc = (pv[:, None] * (0.75 * Cf + 0.25 * est)).sum(0) / pv.sum()
+    return bool(np.any(np.einsum("ij,ij->i", Sf, Cf - cc) < 0.05 * np.linalg.norm(Sf, axis=1) * h))
+
+
+def cut_with_fallback(ctx, items, shared_cap, hk, csize, max_iter=4):
+    """Cut items [(faces, parent_leaf)].  Cells where the feature refinement (bent face
+    chords, split caps) produced a non-convex piece are re-cut without it, together
+    with the cells sharing those faces.  Returns ([(neg_comps, pos_comps)], n_sharp,
+    n_fallback)."""
+    hook = hk[0] if hk else None
+    st = hk[1] if hk else {}
+    res = [None] * len(items)
+    used = [None] * len(items)
+    forbid = set()
+    face_items = {}
+
+    def do(k):
+        faces, leaf = items[k]
+        st["cell"] = leaf; st["forbid"] = k in forbid; st["did"] = False
+        neg, pos, _ = ctx.cut(faces, shared_cap=shared_cap, cap_hook=hook)
+        res[k] = (split_components(neg), split_components(pos) if shared_cap else [])
+        used[k] = (list(ctx.used_chords), bool(st["did"]))
+
+    for k, (faces, _) in enumerate(items):
+        for fid, _ in faces:
+            face_items.setdefault(fid, []).append(k)
+        do(k)
+    nfb = 0
+    for _ in range(max_iter):
+        bad = []
+        for k in range(len(items)):
+            ch, did = used[k]
+            if not (ch or did):
+                continue
+            h = csize[items[k][1]]
+            if any(_piece_bad(ctx.pos, c, h) for c in res[k][0] + res[k][1]):
+                bad.append(k)
+        if not bad:
+            break
+        redo = set(bad)
+        for k in bad:
+            forbid.add(k)
+            for key in used[k][0]:
+                ctx.forbid_chord(key)
+                redo.update(face_items.get(key[0], ()))
+        nfb += len(bad)
+        for k in sorted(redo):
+            do(k)
+    nsharp = sum(1 for ch, did in used if ch or did)
+    return res, nsharp, nfb
 
 
 def generate(cfg, log=print):
@@ -220,123 +479,168 @@ def generate(cfg, log=print):
     phi_d = dom.sdf(pts, exact_mask=near, far_value=dom.L, exact_within=alpha * h0 + 2 * hmin)
     movable = ~hanging
     tol_v = alpha * vh_min
+    tol_f = float(cfg["featureSnapTolerance"]) * vh_min
+    tol_f2 = np.maximum(float(cfg["featureSnapMax"]) * vh_min, tol_f)
     snapped = np.zeros(len(pts), bool)
+    far_snap = np.zeros(len(pts), bool)    # snapped onto a feature from beyond tol_f
+    no_far = np.zeros(len(pts), bool)      # far snaps that broke a cell: not allowed
+    msgs = []
 
     def snap_features(feat, phi, label):
-        """corners first, then feature edges; moved vertices get phi = 0"""
+        """corners first, then feature edges; moved vertices get phi = 0.
+        Returns the ids of the vertices now lying on the feature edges."""
         nc = 0
         if feat is None or feat._kd is None:
-            return
+            return np.zeros(0, np.int64)
+        on = []
+        lim = np.where(no_far, tol_f, tol_f2)
         if len(feat.corners):
             kd = cKDTree(pts)
             d, j = kd.query(feat.corners)
             del kd
             for ci_, (dd, jj) in enumerate(zip(d.tolist(), j.tolist())):
-                if movable[jj] and not snapped[jj] and dd < tol_v[jj]:
+                if movable[jj] and not snapped[jj] and dd < lim[jj]:
+                    far_snap[jj] = dd >= tol_f[jj]
                     pts[jj] = feat.corners[ci_]; phi[jj] = 0.0; snapped[jj] = True; nc += 1
-        sel = np.nonzero(movable & ~snapped & (np.abs(phi) < 2 * tol_v + hmin))[0]
+                    on.append(jj)
+        sel = np.nonzero(movable & ~snapped & (np.abs(phi) < 2 * tol_f2 + hmin))[0]
         cp, d = feat.closest(pts[sel])
-        ok = d < tol_v[sel]
-        pts[sel[ok]] = cp[ok]; phi[sel[ok]] = 0.0; snapped[sel[ok]] = True
-        log(f"snapped {nc} vertices to {label} corners, {int(ok.sum())} to {label} feature edges")
+        ok = d < lim[sel]
+        sel, cp, d = sel[ok], cp[ok], d[ok]
+        far_snap[sel] = d >= tol_f[sel]
+        pts[sel] = cp; phi[sel] = 0.0; snapped[sel] = True
+        msgs.append(f"snapped {nc} vertices to {label} corners, {len(sel)} to {label} feature edges")
+        return np.concatenate([np.array(on, np.int64), sel])
 
-    # ---- 1) regular (non-hanging) vertices: features, then surfaces
-    snap_features(dom_feat, phi_d, "STL")
-    snap = movable & ~snapped & (np.abs(phi_d) < tol_v) & (phi_d != 0)
-    cp, _, _ = dom.closest(pts[snap])
-    pts[snap] = cp
-    phi_d[snap] = 0.0
-    snapped |= snap
-    log(f"snapped {int(snap.sum())} vertices onto the domain surface")
-    phi_z = []
-    zone_feats = []
-    for z in zones:
-        g = z["geom"]
-        if isinstance(g, SurfaceZone):
-            nearz = g.s.approx_distance(pts, upper=float(np.sqrt(3) * vh_max.max() + g.s._rmax + hmin)) \
-                < np.sqrt(3) * vh_max + g.s._rmax + hmin
-            pz = g.sdf(pts, exact_mask=nearz, far_value=g.L)
-        else:
-            pz = g.sdf(pts)
-        if isinstance(g, Cylinder):
-            zf = FeatureSet(cylinder_features(g, hmin / 4), L=g.L)
-        else:
-            zf = FeatureSet(g.s.feature_edges(cfg["featureAngle"]), L=g.L)
-        zone_feats.append(zf)
-        before = snapped.copy()           # vertices already on the STL are not moved
-        snap_features(zf, pz, f"zone '{z['name']}'")
-        sz = movable & ~snapped & (np.abs(pz) < tol_v) & (pz != 0)
-        cp, _, _ = g.closest(pts[sz])
-        pts[sz] = cp
-        pz[sz] = 0.0
-        snapped |= sz
-        moved = snapped & ~before
-        if moved.any():   # re-evaluate the domain level set where vertices moved
-            phi_d[moved] = dom.sdf(pts[moved])
-        log(f"snapped {int(sz.sum())} vertices onto zone '{z['name']}'")
-        phi_z.append(pz)
+    # Far feature snaps (tol_f .. tol_f2) are kept only where the octree cells stay
+    # valid after all vertices (including the hanging ones) have moved; otherwise they
+    # are forbidden for the vertices of the broken cells and the stage is repeated.
+    pts0 = pts.copy(); phi_d0 = phi_d.copy()
+    hp2 = np.where(hanging[:, None], hang_par, -1)
+    for attempt in range(5):
+        if attempt:
+            pts[:] = pts0; phi_d = phi_d0.copy()
+            snapped[:] = False; far_snap[:] = False; msgs.clear()
+        # ---- 1) regular (non-hanging) vertices: features, then surfaces
+        on_feat_d = snap_features(dom_feat, phi_d, "STL")
+        snap = movable & ~snapped & (np.abs(phi_d) < tol_v) & (phi_d != 0)
+        cp, _, _ = dom.closest(pts[snap])
+        pts[snap] = cp
+        phi_d[snap] = 0.0
+        snapped |= snap
+        msgs.append(f"snapped {int(snap.sum())} vertices onto the domain surface")
+        phi_z = []
+        zone_feats = []
+        on_feat_z = []
+        for z in zones:
+            g = z["geom"]
+            if isinstance(g, SurfaceZone):
+                nearz = g.s.approx_distance(pts, upper=float(np.sqrt(3) * vh_max.max() + g.s._rmax + hmin)) \
+                    < np.sqrt(3) * vh_max + g.s._rmax + hmin
+                pz = g.sdf(pts, exact_mask=nearz, far_value=g.L)
+            else:
+                pz = g.sdf(pts)
+            if isinstance(g, Cylinder):
+                zf = FeatureSet(cylinder_features(g, hmin / 4), L=g.L)
+            else:
+                zf = FeatureSet(g.s.feature_edges(cfg["featureAngle"]), L=g.L)
+            zone_feats.append(zf)
+            before = snapped.copy()           # vertices already on the STL are not moved
+            on_feat_z.append(snap_features(zf, pz, f"zone '{z['name']}'"))
+            sz = movable & ~snapped & (np.abs(pz) < tol_v) & (pz != 0)
+            cp, _, _ = g.closest(pts[sz])
+            pts[sz] = cp
+            pz[sz] = 0.0
+            snapped |= sz
+            moved = snapped & ~before
+            if moved.any():   # re-evaluate the domain level set where vertices moved
+                phi_d[moved] = dom.sdf(pts[moved])
+            msgs.append(f"snapped {int(sz.sum())} vertices onto zone '{z['name']}'")
+            phi_z.append(pz)
 
-    # ---- 2) hanging vertices, coarsest constraint first: follow the (moved) parents,
-    # then slide along the coarse edge / within the coarse face onto a surface.  If the
-    # constraint is nearly tangent to the surface, the node is treated as on-surface.
-    geoms = [(dom, phi_d, None)] + [(z["geom"], phi_z[i], i) for i, z in enumerate(zones)]
-    nslide = nvirt = 0
-    for hsz in sorted(set(hang_size[hanging].tolist()), reverse=True):
-        idx = np.nonzero(hanging & (hang_size == hsz))[0]
-        par = hang_par[idx]
-        isface = par[:, 2] != par[:, 0]
-        newx = np.where(isface[:, None], pts[par].mean(1), 0.5 * (pts[par[:, 0]] + pts[par[:, 1]]))
-        ch = np.linalg.norm(newx - pts[idx], axis=1) > 0
-        pts[idx] = newx
-        ci = idx[ch]
-        if len(ci):
-            phi_d[ci] = dom.sdf(pts[ci])
-            for i, z in enumerate(zones):
-                phi_z[i][ci] = z["geom"].sdf(pts[ci])
-        # constraint basis
-        A = pts[par[:, 1]] - pts[par[:, 0]]
-        B = np.where(isface[:, None], pts[par[:, 2]] - pts[par[:, 1]], 0.0)  # other direction
-        e1 = A / np.maximum(np.linalg.norm(A, axis=1), 1e-300)[:, None]
-        B = B - (B * e1).sum(1)[:, None] * e1
-        nb = np.linalg.norm(B, axis=1)
-        e2 = np.where((nb > 1e-12 * h0)[:, None], B / np.maximum(nb, 1e-300)[:, None], 0.0)
-        for geom, phi, zi in geoms:
-            excl = snapped[idx] | ((phi_d[idx] == 0) if zi is not None else False)
-            sel = np.nonzero(~excl & (np.abs(phi[idx]) < tol_v[idx]) & (phi[idx] != 0))[0]
-            if len(sel) == 0:
-                continue
-            j = idx[sel]
-            x = pts[j].copy(); ph = phi[j].copy()
-            E1, E2 = e1[sel], e2[sel]
-            ok = np.ones(len(j), bool)
-            for _ in range(4):
-                cp, d, _ = geom.closest(x)
-                g = (x - cp) / np.maximum(d, 1e-300)[:, None] * np.sign(ph)[:, None]
-                ph = np.sign(ph) * d
-                gf = (g * E1).sum(1)[:, None] * E1 + (g * E2).sum(1)[:, None] * E2
-                gn = (gf ** 2).sum(1)
-                ok &= gn > 0.25
-                x = np.where(ok[:, None], x - (ph / np.maximum(gn, 1e-300))[:, None] * gf, x)
-                ph = geom.sdf(x)
-            mv = np.linalg.norm(x - pts[j], axis=1)
-            ok &= (np.abs(ph) < 1e-6 * vh_min[j]) & (mv < 0.45 * vh_min[j])
-            pts[j[ok]] = x[ok]
-            phi[j] = 0.0
-            snapped[j[ok]] = True
-            if zi is not None and ok.any():
-                phi_d[j[ok]] = dom.sdf(pts[j[ok]])
-            if zi is None:
-                for i2, z in enumerate(zones):
-                    if ok.any():
-                        phi_z[i2][j[ok]] = z["geom"].sdf(pts[j[ok]])
-            nslide += int(ok.sum()); nvirt += int((~ok).sum())
-    log(f"hanging nodes: {nslide} slid onto a surface along their edge/face,"
-        f" {nvirt} treated as on-surface")
+        # ---- 2) hanging vertices, coarsest constraint first: follow the (moved) parents,
+        # then slide along the coarse edge / within the coarse face onto a surface.  If the
+        # constraint is nearly tangent to the surface, the node is treated as on-surface.
+        geoms = [(dom, phi_d, None)] + [(z["geom"], phi_z[i], i) for i, z in enumerate(zones)]
+        nslide = nvirt = 0
+        for hsz in sorted(set(hang_size[hanging].tolist()), reverse=True):
+            idx = np.nonzero(hanging & (hang_size == hsz))[0]
+            par = hang_par[idx]
+            isface = par[:, 2] != par[:, 0]
+            newx = np.where(isface[:, None], pts[par].mean(1), 0.5 * (pts[par[:, 0]] + pts[par[:, 1]]))
+            ch = np.linalg.norm(newx - pts[idx], axis=1) > 0
+            pts[idx] = newx
+            ci = idx[ch]
+            if len(ci):
+                phi_d[ci] = dom.sdf(pts[ci])
+                for i, z in enumerate(zones):
+                    phi_z[i][ci] = z["geom"].sdf(pts[ci])
+            # constraint basis
+            A = pts[par[:, 1]] - pts[par[:, 0]]
+            B = np.where(isface[:, None], pts[par[:, 2]] - pts[par[:, 1]], 0.0)  # other direction
+            e1 = A / np.maximum(np.linalg.norm(A, axis=1), 1e-300)[:, None]
+            B = B - (B * e1).sum(1)[:, None] * e1
+            nb = np.linalg.norm(B, axis=1)
+            e2 = np.where((nb > 1e-12 * h0)[:, None], B / np.maximum(nb, 1e-300)[:, None], 0.0)
+            for geom, phi, zi in geoms:
+                excl = snapped[idx] | ((phi_d[idx] == 0) if zi is not None else False)
+                sel = np.nonzero(~excl & (np.abs(phi[idx]) < tol_v[idx]) & (phi[idx] != 0))[0]
+                if len(sel) == 0:
+                    continue
+                j = idx[sel]
+                x = pts[j].copy(); ph = phi[j].copy()
+                E1, E2 = e1[sel], e2[sel]
+                ok = np.ones(len(j), bool)
+                for _ in range(4):
+                    cp, d, _ = geom.closest(x)
+                    g = (x - cp) / np.maximum(d, 1e-300)[:, None] * np.sign(ph)[:, None]
+                    ph = np.sign(ph) * d
+                    gf = (g * E1).sum(1)[:, None] * E1 + (g * E2).sum(1)[:, None] * E2
+                    gn = (gf ** 2).sum(1)
+                    ok &= gn > 0.25
+                    x = np.where(ok[:, None], x - (ph / np.maximum(gn, 1e-300))[:, None] * gf, x)
+                    ph = geom.sdf(x)
+                mv = np.linalg.norm(x - pts[j], axis=1)
+                ok &= (np.abs(ph) < 1e-6 * vh_min[j]) & (mv < 0.45 * vh_min[j])
+                pts[j[ok]] = x[ok]
+                phi[j] = 0.0
+                snapped[j[ok]] = True
+                if zi is not None and ok.any():
+                    phi_d[j[ok]] = dom.sdf(pts[j[ok]])
+                if zi is None:
+                    for i2, z in enumerate(zones):
+                        if ok.any():
+                            phi_z[i2][j[ok]] = z["geom"].sdf(pts[j[ok]])
+                nslide += int(ok.sum()); nvirt += int((~ok).sum())
+        msgs.append(f"hanging nodes: {nslide} slid onto a surface along their edge/face,"
+                    f" {nvirt} treated as on-surface")
+        if not far_snap.any():
+            break
+        mv_ = (pts != pts0).any(1)           # hanging vertices move with their parents too
+        touch = np.maximum.reduceat(mv_[fverts].astype(np.int8), fptr[:-1])
+        tl = np.nonzero(np.maximum.reduceat(touch, cptr[:-1]))[0]
+        badl = tl[_leaf_bad(pts, tl, fptr, fverts, cptr, csize)] if len(tl) else tl
+        if not len(badl):
+            break
+        fo = np.concatenate([np.arange(cptr[c], cptr[c + 1]) for c in badl.tolist()])
+        vb = np.concatenate([fverts[fptr[f]:fptr[f + 1]] for f in fo.tolist()])
+        for _ in range(3):          # hanging vertices move with their parents
+            p_ = hp2[vb].ravel()
+            vb = np.unique(np.concatenate([vb, p_[p_ >= 0]]))
+        resp = vb[far_snap[vb] & ~no_far[vb]]
+        if not len(resp):
+            break
+        no_far[resp] = True
+    for m_ in msgs:
+        log(m_)
+    if (tol_f2 > tol_f).any():
+        log(f"far feature snaps: {int(far_snap.sum())} kept, {int(no_far.sum())} not allowed (cells would break)")
     phi_d[(phi_d != 0) & (np.abs(phi_d) < 1e-9 * vh_min)] = 0.0
     for pz in phi_z:
         pz[(pz != 0) & (np.abs(pz) < 1e-9 * vh_min)] = 0.0
-    moved_any = snapped.copy()
-    del vh_min, vh_max, near, movable, tol_v
+    moved_any = snapped | (pts != pts0).any(1)
+    del pts0, phi_d0
+    del vh_min, vh_max, near, movable, tol_v, tol_f, tol_f2
     T("level sets and vertex snapping")
 
     # ------------------------------------------------------------ pass 1: domain cut
@@ -349,16 +653,20 @@ def generate(cfg, log=print):
     ctx = CutContext(positions, phi_d.tolist(), M_nkeys := int(f_key.max()) + 1)
     fc = cfg.get("featureCaps", "domain")
     hk = make_feature_hook(dom_feat, csize) if fc in ("both", "domain", True) else None
+    if hk:
+        ctx.chord_hook = make_chord_hook(dom_feat)
+        ctx.onfeat = set(on_feat_d.tolist())
     pieces = []        # [faces, parent_leaf, zone]
-    for ci in cut_leaves.tolist():
-        if hk:
-            hk[1]["cell"] = ci
-        neg, _, _ = ctx.cut(leaf_faces(ci), shared_cap=False, cap_hook=hk[0] if hk else None)
-        for comp in split_components(neg):
+    cl = cut_leaves.tolist()
+    res, nsh, nfb = cut_with_fallback(ctx, [(leaf_faces(ci), ci) for ci in cl], False, hk, csize)
+    for ci, (negc, _) in zip(cl, res):
+        for comp in negc:
             pieces.append([comp, ci, -1])
+    del res
     next_id = ctx.next_id
     log(f"domain cut: {len(cut_leaves)} cut cells, {int(bulk_alive.sum()) + len(pieces)} cells kept"
-        + (f", {hk[1]['n']} feature points inserted" if hk else ""))
+        + (f", {nsh} cells follow feature edges ({nfb} fell back to chamfers to stay convex)"
+           if hk else ""))
     newv = np.array(ctx.new_vertices, np.int64)
     P = np.array(positions)
     del positions, ctx
@@ -396,8 +704,11 @@ def generate(cfg, log=print):
         else:
             zfeat = FeatureSet(g.s.feature_edges(cfg["featureAngle"]), L=g.L)
         zh = make_feature_hook(zfeat, csize) if fc in ("both", "zone", True) else None
+        if zh:
+            ctx.chord_hook = make_chord_hook(zfeat)
+            ctx.onfeat = set(on_feat_z[zi].tolist())
         newp = []
-        nc = 0
+        tocut = []
         for pc in pieces:
             c = ctx.classify(pc[0])
             if c < 0:
@@ -406,14 +717,15 @@ def generate(cfg, log=print):
             elif c > 0:
                 newp.append(pc)
             else:
-                nc += 1
-                if zh:
-                    zh[1]["cell"] = pc[1]
-                neg, pos, _ = ctx.cut(pc[0], shared_cap=True, cap_hook=zh[0] if zh else None)
-                for comp in split_components(neg):
-                    newp.append([comp, pc[1], zi])
-                for comp in split_components(pos):
-                    newp.append([comp, pc[1], pc[2]])
+                tocut.append(pc)
+        nc = len(tocut)
+        res, zsh, zfb = cut_with_fallback(ctx, [(pc[0], pc[1]) for pc in tocut], True, zh, csize)
+        for pc, (negc, posc) in zip(tocut, res):
+            for comp in negc:
+                newp.append([comp, pc[1], zi])
+            for comp in posc:
+                newp.append([comp, pc[1], pc[2]])
+        del res, tocut
         pieces = newp
         next_id = ctx.next_id
         P = np.array(positions)
@@ -436,7 +748,8 @@ def generate(cfg, log=print):
                 c1, _, _ = dom.closest(P[cv]); P[cv] = c1
             on_dom = np.concatenate([on_dom, np.zeros(len(P) - len(on_dom), bool)])
             on_dom[cv] = True
-        log(f"zone '{z['name']}': {nc} cut cells, total {int(bulk_alive.sum()) + len(pieces)}")
+        log(f"zone '{z['name']}': {nc} cut cells, total {int(bulk_alive.sum()) + len(pieces)}"
+            + (f", {zsh} cells follow the rims ({zfb} fell back to chamfers)" if zh else ""))
         T(f"zone cut '{z['name']}'")
 
     # ------------------------------------------------------------ distorted uncut cells
@@ -447,26 +760,11 @@ def generate(cfg, log=print):
     tl = np.nonzero(touch)[0]
     nbad_bulk = 0
     if len(tl):
-        occs = np.concatenate([np.arange(cptr[c], cptr[c + 1]) for c in tl])
-        lens = cptr[tl + 1] - cptr[tl]
-        owner_ = np.repeat(np.arange(len(tl)), lens)
-        nn_ = fn[occs]
-        off = np.repeat(fptr[occs] - np.concatenate([[0], np.cumsum(nn_)[:-1]]), nn_)
-        ffl = quality.FlatFaces((nn_, fverts[np.arange(int(nn_.sum())) + off]))
-        cf_, sf_ = quality.face_geometry(P, ffl)
-        est = np.zeros((len(tl), 3)); np.add.at(est, owner_, cf_); est /= lens[:, None]
-        pv = np.einsum("ij,ij->i", sf_, cf_ - est[owner_])
-        vv = np.bincount(owner_, pv, len(tl))
-        cc = np.zeros((len(tl), 3)); np.add.at(cc, owner_, pv[:, None] * (0.75 * cf_ + 0.25 * est[owner_]))
-        cc /= np.where(np.abs(vv) > 0, vv, 1.0)[:, None]
-        sp = np.einsum("ij,ij->i", sf_, cf_ - cc[owner_])
-        badf = sp < 0.05 * np.linalg.norm(sf_, axis=1) * csize[tl][owner_]
-        badc = tl[np.bincount(owner_, badf.astype(int), len(tl)) > 0]
+        badc = tl[_leaf_bad(P, tl, fptr, fverts, cptr, csize)]
         for ci in badc.tolist():
             pieces.append([leaf_faces(ci), ci, int(bulk_zone[ci])])
         bulk_alive[badc] = False
         nbad_bulk = len(badc)
-        del occs, owner_, ffl, cf_, sf_, est, pv, cc, sp, badf
     if nbad_bulk:
         log(f"{nbad_bulk} snapped uncut cells are non-convex -> merge candidates")
 

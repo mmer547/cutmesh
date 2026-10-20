@@ -29,6 +29,10 @@ class CutContext:
         self.new_parents = []         # (lo, hi) edge each new vertex came from
         self.subids = {}
         self.next_id = next_face_id
+        self.chord_hook = None        # (ctx, poly, a, b) -> [x,y,z] feature point on chord a-b, or None
+        self.chord_cache = {}
+        self.onfeat = set()           # vertices lying on the feature edges of this pass
+        self.used_chords = []         # chord_cache keys with a feature point, used by cut()
 
     # ------------------------------------------------------------------
     def new_face_id(self):
@@ -66,6 +70,34 @@ class CutContext:
         self.cache[key] = c
         return c
 
+    def chord_point(self, fid, poly, a, b):
+        """Feature point where a sharp edge pierces the face, inserted into the chord
+        a-b.  Cached per (face, chord), so both cells sharing the face agree."""
+        if a == b:
+            return None
+        key = (fid, a, b) if a < b else (fid, b, a)
+        if key in self.chord_cache:
+            c = self.chord_cache[key]
+            if c is not None:
+                self.used_chords.append(key)
+            return c
+        x = self.chord_hook(self, poly, a, b)
+        c = None
+        if x is not None:
+            c = len(self.pos)
+            self.pos.append(list(x))
+            self.phi.append(0.0)
+            self.new_vertices.append(c)
+            self.new_parents.append((-1, -1))
+            self.onfeat.add(c)
+            self.used_chords.append(key)
+        self.chord_cache[key] = c
+        return c
+
+    def forbid_chord(self, key):
+        """fall back to the straight chord on this face (both cells must be re-cut)"""
+        self.chord_cache[key] = None
+
     # ------------------------------------------------------------------
     def classify(self, faces):
         """-1: entirely N side, +1: entirely P side, 0: needs cutting."""
@@ -97,6 +129,7 @@ class CutContext:
         """
         phi = self.phi
         neg, pos = [], []
+        self.used_chords = []
         for fid, poly in faces:
             hasN = hasP = False
             for v in poly:
@@ -130,7 +163,11 @@ class CutContext:
                     cur = [c]
                 elif (not cls[i]) and cls[j]:
                     c = self.cross(a, poly[j])
+                    f = self.chord_point(fid, poly, cur[0], c) if self.chord_hook else None
                     cur.append(c)
+                    if f is not None:          # chord c_out -> f -> c_in follows the edge
+                        cur.append(f)
+                        seqN.append(f)
                     ppieces.append(cur)
                     seqN.append(c)
                     cur = None
