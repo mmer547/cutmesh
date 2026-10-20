@@ -1140,6 +1140,10 @@ def run(config_path, case_dir=None, log=print, check=True):
     case_dir = case_dir or _rel(cfg, cfg.get("case", "."))
     R = generate(cfg, log)
     T = R["timer"]
+    if cfg.get("addLayers"):
+        from .layers import add_layers
+        R = add_layers(R, cfg["addLayers"], log=log)
+        T("boundary layers")
     write_polymesh(case_dir, R["points"], R["faces"], R["owner"], R["neighbour"], R["patches"],
                    R["cell_zones"], R["face_zones"])
     if cfg["writeMRFProperties"] and R["zones"]:
