@@ -329,6 +329,88 @@ def _piece_bad(pos, comp, h):
     return bool(np.any(np.einsum("ij,ij->i", Sf, Cf - cc) < 0.05 * np.linalg.norm(Sf, axis=1) * h))
 
 
+def surface_contact(dom, pts, phi, cells, faces_of, csize, push=0.2):
+    """Faces touching the surface along more than a vertex (vertices with phi == 0,
+    typically snapped onto a wall next to a concave edge).  Interpolating phi there
+    chamfers the concave edge by up to a cell size, differently at every cell, which
+    makes the wall bumpy along the edge.  The side of the surface is sampled just
+    inside the face (per face, so both cells agree) or just inside the cell:
+
+    - edges between two phi == 0 vertices (both really on the surface) of a face that is
+      cut: +1 if the face is in the solid there, -1 if in the fluid -> CutContext.zero_edge
+    - faces lying on the surface (all vertices with phi == 0, centre on the surface):
+      dropped from the cells whose side of the face is solid (the cell on the fluid
+      side keeps them as walls) -> {cell: {face id}}.  Sampled a little off the face
+      into the cell, at the centre and towards every vertex; all must be solid."""
+    ekeys, esamp, etol, eends = [], [], [], []
+    dcell, dfid, dctr, dsamp, dgrp, dtol = [], [], [], [], [], []
+    seen = set()
+    for ci in cells:
+        fl = faces_of(ci)
+        allv = [v for _, p in fl for v in p]
+        cc = pts[allv].mean(0)
+        h = csize[ci]
+        for fid, p in fl:
+            ph = phi[p]
+            z = ph == 0
+            if z.all():
+                Q = pts[p]
+                cf = Q.mean(0)
+                nrm = _newell(Q - cf)
+                nn_ = np.linalg.norm(nrm)
+                if nn_ == 0:
+                    continue
+                nrm /= nn_
+                if np.dot(cc - cf, nrm) < 0:
+                    nrm = -nrm
+                g = len(dcell)
+                dcell.append(ci); dfid.append(fid); dctr.append(cf); dtol.append(h)
+                off = 0.1 * h * nrm
+                for x in [cf] + list(0.5 * (Q + cf)):
+                    dsamp.append(x + off); dgrp.append(g)
+                continue
+            if z.sum() < 2 or not (ph < 0).any() or not (ph > 0).any():
+                continue
+            cf = None
+            m = len(p)
+            for k in range(m):
+                a, b = p[k], p[(k + 1) % m]
+                if not (z[k] and z[(k + 1) % m]):
+                    continue
+                key = (fid, a, b) if a < b else (fid, b, a)
+                if key in seen:
+                    continue
+                seen.add(key)
+                if cf is None:
+                    cf = pts[p].mean(0)
+                mid = 0.5 * (pts[a] + pts[b])
+                ekeys.append(key); esamp.append(mid + push * (cf - mid)); etol.append(h)
+                eends.append((a, b))
+    zero_edge, drop = {}, {}
+    nd, ns = len(dctr), len(dsamp)
+    if nd + len(esamp):
+        sd = dom.sdf(np.array(dctr + dsamp + esamp).reshape(-1, 3))
+        if nd:
+            ht = np.array(dtol)
+            on = np.abs(sd[:nd]) < 0.02 * ht
+            solid = np.ones(nd, bool)
+            np.logical_and.at(solid, np.array(dgrp), sd[nd:nd + ns] > 1e-3 * ht[np.array(dgrp)])
+            for k in np.nonzero(on & solid)[0].tolist():
+                drop.setdefault(dcell[k], set()).add(dfid[k])
+        se = sd[nd + ns:]
+        eps = 1e-3 * np.array(etol)
+        # only edges between vertices really on the surface (hanging vertices that could
+        # not reach the surface also carry phi == 0)
+        if eends:
+            ev, inv = np.unique(np.array(eends), return_inverse=True)
+            _, dv, _ = dom.closest(pts[ev])
+            real = (dv[inv.reshape(-1, 2)] < 1e-3 * np.array(etol)[:, None]).all(1)
+        for k, key in enumerate(ekeys):
+            if real[k] and abs(se[k]) > eps[k]:
+                zero_edge[key] = 1 if se[k] > 0 else -1
+    return zero_edge, drop
+
+
 def cut_with_fallback(ctx, items, shared_cap, hk, csize, max_iter=4):
     """Cut items [(faces, parent_leaf)].  Cells where the feature refinement (bent face
     chords, split caps) produced a non-convex piece are re-cut without it, together
@@ -658,7 +740,17 @@ def generate(cfg, log=print):
         ctx.onfeat = set(on_feat_d.tolist())
     pieces = []        # [faces, parent_leaf, zone]
     cl = cut_leaves.tolist()
-    res, nsh, nfb = cut_with_fallback(ctx, [(leaf_faces(ci), ci) for ci in cl], False, hk, csize)
+    ctx.zero_edge, drop = surface_contact(dom, pts, phi_d, cl, leaf_faces, csize)
+    log(f"surface contact: {sum(v == 1 for v in ctx.zero_edge.values())} face edges in the solid,"
+        f" {sum(len(s) for s in drop.values())} wall faces dropped from solid-side cells")
+    items = []
+    for ci in cl:
+        fl = leaf_faces(ci)
+        if ci in drop:
+            fl = [f for f in fl if f[0] not in drop[ci]]
+        items.append((fl, ci))
+    res, nsh, nfb = cut_with_fallback(ctx, items, False, hk, csize)
+    del items
     for ci, (negc, _) in zip(cl, res):
         for comp in negc:
             pieces.append([comp, ci, -1])

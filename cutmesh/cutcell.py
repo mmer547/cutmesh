@@ -33,6 +33,7 @@ class CutContext:
         self.chord_cache = {}
         self.onfeat = set()           # vertices lying on the feature edges of this pass
         self.used_chords = []         # chord_cache keys with a feature point, used by cut()
+        self.zero_edge = {}           # (face, lo, hi) -> +1 solid / -1 fluid for edges between phi == 0 vertices
 
     # ------------------------------------------------------------------
     def new_face_id(self):
@@ -94,6 +95,45 @@ class CutContext:
         self.chord_cache[key] = c
         return c
 
+    def _zero_runs(self, fid, poly, cls):
+        """Runs of phi == 0 vertices between an N and a P vertex (surface vertices at a
+        concave edge, e.g. on a wall plane next to a hole): the chord must end where
+        the face leaves the fluid, not at the last vertex of the run.  The edges of the
+        run are classified per face (self.zero_edge), so both cells agree."""
+        phi = self.phi
+        n = len(poly)
+        z = [phi[v] == 0.0 for v in poly]
+        for i in range(n):
+            if not z[i] or z[i - 1]:
+                continue
+            k = 0
+            while k < n and z[(i + k) % n]:
+                k += 1
+            if k < 2 or k == n:
+                continue
+            run = [(i + t) % n for t in range(k)]
+            pn = phi[poly[i - 1]] < 0.0
+            if pn == (phi[poly[(i + k) % n]] < 0.0):
+                continue
+            if not pn:
+                run = run[::-1]               # walk from the N side
+            for t in range(k - 1):
+                a, b = poly[run[t]], poly[run[t + 1]]
+                key = (fid, a, b) if a < b else (fid, b, a)
+                e = self.zero_edge.get(key)
+                if e == 1:
+                    for r in run[t + 1:]:
+                        cls[r] = False
+                if e != -1:
+                    break                     # solid found, or unknown: stop
+        return cls
+
+    def _xing(self, a, b, a_neg):
+        """crossing on edge a-b; between two surface vertices it is the N one"""
+        if self.phi[a] == 0.0 and self.phi[b] == 0.0:
+            return a if a_neg else b
+        return self.cross(a, b)
+
     def forbid_chord(self, key):
         """fall back to the straight chord on this face (both cells must be re-cut)"""
         self.chord_cache[key] = None
@@ -144,6 +184,8 @@ class CutContext:
                 pos.append((fid, poly)); continue
             n = len(poly)
             cls = [phi[v] <= 0.0 for v in poly]
+            if self.zero_edge:
+                cls = self._zero_runs(fid, poly, cls)
             s = 0
             for i in range(n):
                 if cls[i] and not cls[i - 1]:
@@ -158,11 +200,11 @@ class CutContext:
                 else:
                     cur.append(a)
                 if cls[i] and not cls[j]:
-                    c = self.cross(a, poly[j])
+                    c = self._xing(a, poly[j], True)
                     seqN.append(c)
                     cur = [c]
                 elif (not cls[i]) and cls[j]:
-                    c = self.cross(a, poly[j])
+                    c = self._xing(a, poly[j], False)
                     f = self.chord_point(fid, poly, cur[0], c) if self.chord_hook else None
                     cur.append(c)
                     if f is not None:          # chord c_out -> f -> c_in follows the edge
