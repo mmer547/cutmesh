@@ -1,0 +1,18 @@
+{
+  "domain": "tank.stl",
+  "baseCellSize": 0.0125,
+  "surfaceRefinement": { "default": 1, "impeller": 3, "shaft": 2 },
+  "featureLevel": 2,
+  "rotatingZones": [
+    {
+      "name": "rotor",
+      "stl": "rotor.stl",
+      "origin": [0, 0, 0.1],
+      "axis": [0, 0, 1],
+      "surfaceLevel": 2,
+      "volumeLevel": 2,
+      "omega": 31.416
+    }
+  ],
+  "case": "case_stlRotor"
+}
