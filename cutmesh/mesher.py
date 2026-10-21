@@ -23,6 +23,7 @@ DEFAULTS = {
     "featureSnapTolerance": 0.5,  # snap vertices within this fraction of h onto feature edges
     "featureSnapMax": 0.5,      # experimental: up to this fraction where the octree cells stay valid
     "mergeRatio": 0.25,         # merge cut cells smaller than this fraction of their hex
+    "hangingSnap": "free",      # hanging nodes that cannot slide onto a surface: "free" projection or "constrained" (treated as on-surface)
     "patchTypes": {},
     "rotatingZones": [],
     "writeMRFProperties": True,
@@ -313,6 +314,16 @@ def _leaf_bad(P, leaves, fptr, fverts, cptr, csize):
     return (np.bincount(owner_, badf.astype(int), len(leaves)) > 0) | (vv <= 0)
 
 
+def _tets_ok(P, faces, cf, cc, vmin):
+    """every (face centre, edge, cell centre) tet has a volume above vmin"""
+    for (_, p), c in zip(faces, cf):
+        Q = P[p]
+        t = np.cross(np.roll(Q, -1, 0) - Q, c - Q) @ (c - cc) / 6.0
+        if np.any(t <= vmin):
+            return False
+    return True
+
+
 def _piece_bad(pos, comp, h):
     """some face does not clearly see the centroid (same test as the merging stage)"""
     Cf, Sf = [], []
@@ -555,6 +566,7 @@ def generate(cfg, log=print):
 
     # ------------------------------------------------------------ level sets + snapping
     alpha = float(cfg["snapTolerance"])
+    free_hang = cfg.get("hangingSnap", "free") == "free"
     approx = dom.approx_distance(pts, upper=float(np.sqrt(3) * vh_max.max() + dom._rmax + hmin))
     near = approx < np.sqrt(3) * vh_max + dom._rmax + hmin
     del approx
@@ -566,6 +578,8 @@ def generate(cfg, log=print):
     snapped = np.zeros(len(pts), bool)
     far_snap = np.zeros(len(pts), bool)    # snapped onto a feature from beyond tol_f
     no_far = np.zeros(len(pts), bool)      # far snaps that broke a cell: not allowed
+    free_snap = np.zeros(len(pts), bool)   # hanging vertices projected freely onto a surface
+    no_free = np.zeros(len(pts), bool)     # free projections that broke a cell: not allowed
     msgs = []
 
     def snap_features(feat, phi, label):
@@ -594,15 +608,16 @@ def generate(cfg, log=print):
         msgs.append(f"snapped {nc} vertices to {label} corners, {len(sel)} to {label} feature edges")
         return np.concatenate([np.array(on, np.int64), sel])
 
-    # Far feature snaps (tol_f .. tol_f2) are kept only where the octree cells stay
-    # valid after all vertices (including the hanging ones) have moved; otherwise they
-    # are forbidden for the vertices of the broken cells and the stage is repeated.
+    # Far feature snaps (tol_f .. tol_f2) and free projections of hanging vertices are
+    # kept only where the octree cells stay valid after all vertices (including the
+    # hanging ones) have moved; otherwise they are forbidden for the vertices of the
+    # broken cells and the stage is repeated.
     pts0 = pts.copy(); phi_d0 = phi_d.copy()
     hp2 = np.where(hanging[:, None], hang_par, -1)
     for attempt in range(5):
         if attempt:
             pts[:] = pts0; phi_d = phi_d0.copy()
-            snapped[:] = False; far_snap[:] = False; msgs.clear()
+            snapped[:] = False; far_snap[:] = False; free_snap[:] = False; msgs.clear()
         # ---- 1) regular (non-hanging) vertices: features, then surfaces
         on_feat_d = snap_features(dom_feat, phi_d, "STL")
         snap = movable & ~snapped & (np.abs(phi_d) < tol_v) & (phi_d != 0)
@@ -642,9 +657,10 @@ def generate(cfg, log=print):
 
         # ---- 2) hanging vertices, coarsest constraint first: follow the (moved) parents,
         # then slide along the coarse edge / within the coarse face onto a surface.  If the
-        # constraint is nearly tangent to the surface, the node is treated as on-surface.
+        # constraint is nearly tangent to the surface, the node is projected freely
+        # (hangingSnap "free") or treated as on-surface ("constrained").
         geoms = [(dom, phi_d, None)] + [(z["geom"], phi_z[i], i) for i, z in enumerate(zones)]
-        nslide = nvirt = 0
+        nslide = nvirt = nfree = 0
         for hsz in sorted(set(hang_size[hanging].tolist()), reverse=True):
             idx = np.nonzero(hanging & (hang_size == hsz))[0]
             par = hang_par[idx]
@@ -684,6 +700,17 @@ def generate(cfg, log=print):
                     ph = geom.sdf(x)
                 mv = np.linalg.norm(x - pts[j], axis=1)
                 ok &= (np.abs(ph) < 1e-6 * vh_min[j]) & (mv < 0.45 * vh_min[j])
+                if free_hang and not ok.all():
+                    # the constraint cannot reach the surface (nearly tangent): project
+                    # freely, like a regular vertex (the coarse face gets slightly warped
+                    # instead of leaving a dent of up to snapTolerance x h in the wall)
+                    nf = np.nonzero(~ok & ~no_free[j])[0]
+                    cp, d, _ = geom.closest(pts[j[nf]])
+                    good = d < tol_v[j[nf]]
+                    x[nf[good]] = cp[good]
+                    ok[nf[good]] = True
+                    free_snap[j[nf[good]]] = True
+                    nfree += int(good.sum())
                 pts[j[ok]] = x[ok]
                 phi[j] = 0.0
                 snapped[j[ok]] = True
@@ -694,9 +721,9 @@ def generate(cfg, log=print):
                         if ok.any():
                             phi_z[i2][j[ok]] = z["geom"].sdf(pts[j[ok]])
                 nslide += int(ok.sum()); nvirt += int((~ok).sum())
-        msgs.append(f"hanging nodes: {nslide} slid onto a surface along their edge/face,"
-                    f" {nvirt} treated as on-surface")
-        if not far_snap.any():
+        msgs.append(f"hanging nodes: {nslide - nfree} slid onto a surface along their edge/face,"
+                    f" {nfree} projected freely, {nvirt} treated as on-surface")
+        if not (far_snap.any() or free_snap.any()):
             break
         mv_ = (pts != pts0).any(1)           # hanging vertices move with their parents too
         touch = np.maximum.reduceat(mv_[fverts].astype(np.int8), fptr[:-1])
@@ -710,9 +737,11 @@ def generate(cfg, log=print):
             p_ = hp2[vb].ravel()
             vb = np.unique(np.concatenate([vb, p_[p_ >= 0]]))
         resp = vb[far_snap[vb] & ~no_far[vb]]
-        if not len(resp):
+        respf = vb[free_snap[vb] & ~no_free[vb]]
+        if not (len(resp) or len(respf)):
             break
         no_far[resp] = True
+        no_free[respf] = True
     for m_ in msgs:
         log(m_)
     if (tol_f2 > tol_f).any():
@@ -1036,10 +1065,45 @@ def generate(cfg, log=print):
         f" {len(small) - nsmall} non-convex); {rejected} left as they are"
         f" (no merge partner keeps the cell valid)")
 
+    # ------------------------------------------------------------ invalid wall slivers
+    # Small cells left unmerged whose face triangles do not all see the centre (e.g. a
+    # lens between a curved wall and an octree face lying on it) fail checkMesh or its
+    # tet decomposition.  If they touch the wall they are removed: their faces become
+    # walls of the neighbours.
+    # A cell failing only the tet test is removed if the faces it exposes stay close to
+    # the STL (no dent in the wall).
+    removed = np.zeros(nP, bool)
+    tet_cand = []
+    for r in np.nonzero(proot == np.arange(nP))[0].tolist():
+        if gvol[r] >= beta * hexvol[r] and not bad_piece[r]:
+            continue
+        keep_, cf_, sf_, V_, cc_ = poly_geom(node_faces(r))
+        if V_ > 0 and _tets_ok(P, keep_, cf_, cc_, 1e-3 * V_):
+            continue
+        nb_ = [face_neighbour(fid, {r}) for fid, _ in keep_]
+        if min(nb_) >= 0:
+            continue
+        hc = csize[pieces[r][1]]
+        if V_ <= 0 or np.any(np.einsum("ij,ij->i", sf_, cf_ - cc_) <= 0.01 * np.linalg.norm(sf_, axis=1) * hc):
+            removed[r] = True
+        else:
+            exposed = {v for (_, p), b in zip(keep_, nb_) if b >= 0 for v in p}
+            tet_cand.append((r, sorted(exposed), hc))
+    if tet_cand:
+        ev = np.array(sorted({v for _, ex, _ in tet_cand for v in ex}), np.int64)
+        _, dv, _ = dom.closest(P[ev])
+        dmap = dict(zip(ev.tolist(), dv.tolist()))
+        for r, ex, hc in tet_cand:
+            if max(dmap[v] for v in ex) < 0.4 * hc:
+                removed[r] = True
+    if removed.any():
+        log(f"removed {int(removed.sum())} invalid wall slivers"
+            f" ({float(np.sum(np.maximum(gvol[removed], 0))) * 1e9:.3g} mm^3)")
+
     # ------------------------------------------------------------ final cell numbering
     # nodes: bulk leaves (alive) and root pieces; ordered by parent leaf
     alive = np.nonzero(bulk_alive)[0]
-    rp = np.nonzero(proot == np.arange(nP))[0]
+    rp = np.nonzero((proot == np.arange(nP)) & ~removed)[0]
     node_leaf = np.concatenate([alive, np.array([pieces[r][1] for r in rp], np.int64)])
     order = np.argsort(node_leaf, kind="stable")
     ids = np.empty(len(order), np.int64); ids[order] = np.arange(len(order))
@@ -1048,7 +1112,7 @@ def generate(cfg, log=print):
     piece_cid = np.full(nP, -1, np.int64); piece_cid[rp] = ids[len(alive):]
     to_bulk = proot >= nP
     piece_cid[to_bulk] = leaf_cid[proot[to_bulk] - nP]
-    piece_cid[~to_bulk] = piece_cid[proot[~to_bulk]]
+    piece_cid[~to_bulk] = piece_cid[proot[~to_bulk]]    # -1 for removed cells
     cell_zone = np.empty(nC, np.int64)
     cell_zone[leaf_cid[alive]] = bulk_zone[alive]
     cell_zone[piece_cid[rp]] = np.array([zone_of[r] for r in rp], np.int64)
@@ -1066,7 +1130,8 @@ def generate(cfg, log=print):
     o_cell = np.concatenate([leaf_cid[f_cell[bsel]], piece_cid[py_cell]])
     o_key = np.concatenate([f_key[bsel], py_key])
     del b_verts, p_verts
-    srt = np.argsort(o_key, kind="stable")
+    srt = np.nonzero(o_cell >= 0)[0]
+    srt = srt[np.argsort(o_key[srt], kind="stable")]
     uk, st, cnt = np.unique(o_key[srt], return_index=True, return_counts=True)
     if (cnt > 2).any():
         log(f"WARNING: {int((cnt > 2).sum())} faces shared by more than two cells")
