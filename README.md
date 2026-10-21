@@ -17,15 +17,16 @@ STL（水密な閉曲面）の**内部**に八分木ベースの多面体メッ�
 ## 使い方
 
 ```bash
+pip install -e .                      # 初回のみ（オフライン環境では --no-build-isolation、要 wheel）
 cd examples/stirred_tank
 python3 make_geometry.py              # サンプルSTL（攪拌槽＋4枚パドル翼＋シャフト）
-python3 -m cutmesh meshDict.json      # → case/constant/polyMesh, case/constant/MRFProperties
+cutmesh meshDict.json                 # → case/constant/polyMesh, case/constant/MRFProperties
 # 断面図も欲しい場合
 python3 run.py                        # → slice_z.png, slice_y.png
 ```
 
-`python3 -m cutmesh <meshDict.json> [-case DIR] [-noCheck]`（プロジェクト直下から実行するか
-`PYTHONPATH` に `cutmesh` の親ディレクトリを通してください）
+`cutmesh <meshDict.json> [-case DIR] [-noCheck]`（`python -m cutmesh` でも同じ）。インストールしない
+場合はプロジェクト直下から実行するか、`PYTHONPATH` に `cutmesh` の親ディレクトリを通してください。
 
 ### 高速化（Rust 拡張、任意）
 
@@ -53,6 +54,7 @@ python -m unittest discover -s tests  # Rust と Python の結果の一致を確
 | `baseCellSize` | レベル0セルの辺長 [m] | 必須 |
 | `surfaceRefinement` | solid名→細分化レベル。`default` で既定値 | `{}` |
 | `featureLevel` | 特徴線近傍の細分化レベル（`null`=表面最大レベル） | `null` |
+| `gapRefinement` | `{"thickness": t, "level": L}`: 流体の厚みが `t` 未満の所（スロットの鋭い先端、狭い流路）の壁を `L` まで細分化。セルより薄い部分が切り落とされるのを抑える | なし |
 | `featureAngle` | 特徴線抽出の角度 [deg] | 30 |
 | `bufferLayers` | レベル遷移ごとのバッファセル数 | 2 |
 | `snapTolerance` | 節点スナップ距離（セル辺長比）。スライバー防止 | 0.3 |
@@ -83,6 +85,7 @@ STLで与える場合は `"cylinder"` の代わりに `"stl": "rotor.stl", "orig
 部分だけを `level` まで細分化します。界面が壁から1セル未満しか離れていない（ローター外周すれすれに
 MRF円筒を置く）場合、隙間より細かいセルが必要ですが、`surfaceLevel` を上げるとゾーン面全体が細かく
 なってセル数が大きく増えます。`wallProximity` なら必要な所だけで済みます。
+`"bufferLayers": 1` を加えると、この細分化の遷移層だけを薄くしてさらにセル数を減らせます。
 
 ## アルゴリズム
 

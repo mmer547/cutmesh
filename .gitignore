@@ -1,6 +1,8 @@
 __pycache__/
 *.pyc
 .venv/
+*.egg-info/
+build/
 # generated meshes / OpenFOAM cases
 examples/*/case*/
 # Rust extension (built by tools/build_rust.py)

@@ -48,7 +48,7 @@ class Timer:
 
 
 def load_config(path):
-    with open(path) as f:
+    with open(path, encoding="utf-8-sig") as f:      # editors on Windows may add a BOM
         cfg = json.load(f)
     base = os.path.dirname(os.path.abspath(path))
     full = dict(DEFAULTS); full.update(cfg)
@@ -555,6 +555,7 @@ def generate(cfg, log=print):
         regions.append((Cylinder(c["point1"], c["point2"], c["radius"]), int(r["level"])))
     Lmax = int(max([region_level.max(), flevel] + [max(z["surfaceLevel"], z["volumeLevel"]) for z in zones]
                    + [int(z["wallProximity"]["level"]) for z in zones if z["wallProximity"]]
+                   + ([int(cfg["gapRefinement"]["level"])] if cfg.get("gapRefinement") else [])
                    + [lv for _, lv in regions]))
     hmin = h0 / 2 ** Lmax
     log(f"domain: {len(dom.tris)} triangles, regions {dom.names}")
@@ -571,6 +572,29 @@ def generate(cfg, log=print):
         if region_level[r] > 0:
             p, _ = dom.samples(h0 / 2 ** region_level[r] / 2, regions=[r])
             ssrc.append((cKDTree(p), int(region_level[r]), nbuf))
+    gr = cfg.get("gapRefinement")
+    if gr:
+        # fluid thinner than `thickness` (slot tips, narrow channels): refine its walls to `level`
+        lg = int(gr["level"])
+        tg = float(gr["thickness"])
+        p, ti = dom.samples(h0 / 2 ** lg)
+        T_ = dom.tris[ti]
+        nrm = np.cross(T_[:, 1] - T_[:, 0], T_[:, 2] - T_[:, 0])
+        nrm /= np.maximum(np.linalg.norm(nrm, axis=1), 1e-300)[:, None]
+        eps = 0.02 * h0 / 2 ** lg
+        into = np.where(dom.inside(p - eps * nrm)[:, None], -nrm, nrm)    # towards the fluid
+        thin = np.zeros(len(p), bool)
+        open_ = dom.inside(p + eps * into)
+        nst = 8
+        for k in range(1, nst + 1):
+            q = p + (k * tg / nst) * into
+            out = ~dom.inside(q)
+            thin |= open_ & out
+            open_ &= ~out
+        p = p[thin]
+        if len(p):
+            ssrc.append((cKDTree(p), lg, nbuf))
+        log(f"gap refinement: {len(p)} wall samples where the fluid is thinner than {tg:g} -> level {lg}")
     seg = dom.feature_edges(cfg["featureAngle"])
     dom_feat = FeatureSet(seg, L=dom.L)
     if flevel > 0:
@@ -591,7 +615,7 @@ def generate(cfg, log=print):
             _, d, _ = dom.closest(p)
             p = p[d < float(wp["distance"])]
             if len(p):
-                ssrc.append((cKDTree(p), lw, nbuf))
+                ssrc.append((cKDTree(p), lw, int(wp.get("bufferLayers", nbuf))))
             log(f"zone '{z['name']}': {len(p)} surface samples within {float(wp['distance']):g} of the STL"
                 f" -> level {lw}")
         if z["volumeLevel"] > 0:

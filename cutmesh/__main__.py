@@ -1,4 +1,5 @@
-"""python -m cutmesh meshDict.json [-case DIR] [-noCheck]"""
+"""cutmesh meshDict.json [-case DIR] [-noCheck]
+(or python -m cutmesh ...; `pip install -e .` once makes both work from any folder)"""
 import sys
 from .mesher import run
 
