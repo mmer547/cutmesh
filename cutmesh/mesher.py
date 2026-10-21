@@ -1389,9 +1389,23 @@ def run(config_path, case_dir=None, log=print, check=True):
     case_dir = case_dir or _rel(cfg, cfg.get("case", "."))
     R = generate(cfg, log)
     T = R["timer"]
-    if cfg.get("addLayers"):
+    if cfg.get("addLayers") is not None:             # {} = layers with the default settings
         from .layers import add_layers
-        R = add_layers(R, cfg["addLayers"], log=log)
+        # the interface of a non-conforming zone is a staircase between cells, not a
+        # surface: it must not constrain the layers; its faceZone is rebuilt afterwards
+        nc = [z["name"] for z in R["zones"] if not z["conforming"]]
+        fz = {k: v for k, v in R["face_zones"].items() if k[:-len("_interface")] not in nc}
+        R = add_layers(dict(R, face_zones=fz), cfg["addLayers"], log=log)
+        if nc:
+            nC = int(max(R["owner"].max(), R["neighbour"].max())) + 1
+            nI = len(R["neighbour"])
+            fz = dict(R["face_zones"])
+            for name in nc:
+                inz = np.zeros(nC, bool); inz[R["cell_zones"][name]] = True
+                zo, zn = inz[R["owner"][:nI]], inz[R["neighbour"]]
+                f = np.nonzero(zo != zn)[0]
+                fz[name + "_interface"] = (f, ~zo[f])        # flip: normal points into zone
+            R["face_zones"] = fz
         T("boundary layers")
     write_polymesh(case_dir, R["points"], R["faces"], R["owner"], R["neighbour"], R["patches"],
                    R["cell_zones"], R["face_zones"])
