@@ -422,6 +422,65 @@ def surface_contact(dom, pts, phi, cells, faces_of, csize, push=0.2):
     return zero_edge, drop
 
 
+def contact_splits(dom, pts, phi, cells, faces_of, csize):
+    """Faces partly in the fluid and partly lying on the wall: vertices with phi < 0 and
+    a contiguous run of >= 3 surface vertices (phi == 0), e.g. the face on the wall
+    plane at a hole rim, between the rim vertices and the wall.  Kept whole, the cell
+    below keeps a solid wedge (the rim is chamfered).  They are split along the chord
+    between the ends of the run (existing vertices, so both cells agree) into a fluid
+    part and a contact part.  Returns {face id: (poly, fluid part, contact part, h)}."""
+    cand = {}
+    for ci in cells:
+        for fid, p in faces_of(ci):
+            if fid in cand:
+                continue
+            ph = phi[p]
+            z = ph == 0
+            if (ph > 0).any() or not (ph < 0).any() or z.sum() < 3:
+                continue
+            m = len(p)
+            starts = [i for i in range(m) if z[i] and not z[i - 1]]
+            if len(starts) != 1:
+                continue
+            i0 = starts[0]
+            k = 0
+            while z[(i0 + k) % m]:
+                k += 1
+            run = [p[(i0 + t) % m] for t in range(k)]
+            rest = [p[(i0 + k - 1 + t) % m] for t in range(m - k + 2)]
+            cand[fid] = (list(p), rest, run, float(csize[ci]))
+    if not cand:
+        return {}
+    keys = list(cand)
+    h = np.array([cand[f][3] for f in keys])
+    ca = np.array([pts[cand[f][1]].mean(0) for f in keys])
+    cb = np.array([pts[cand[f][2]].mean(0) for f in keys])
+    ends = np.array([[cand[f][2][0], cand[f][2][-1]] for f in keys])
+    sd = dom.sdf(np.concatenate([ca, cb]))
+    _, de, _ = dom.closest(pts[ends.ravel()])
+    def width(q):
+        """2 x area / longest edge: small for a sliver along the edge"""
+        Q = pts[q]
+        a = np.linalg.norm(_newell(Q - Q.mean(0))) * 0.5
+        return 2.0 * a / max(np.linalg.norm(np.roll(Q, -1, 0) - Q, axis=1).max(), 1e-300)
+
+    wa = np.array([width(cand[f][1]) for f in keys])
+    wb = np.array([width(cand[f][2]) for f in keys])
+    ok = (sd[:len(keys)] < -1e-3 * h) & (np.abs(sd[len(keys):]) < 0.02 * h) \
+        & (de.reshape(-1, 2) < 1e-3 * h[:, None]).all(1) \
+        & (wa > 0.05 * h) & (wb > 0.1 * h)        # a real contact area, not a sliver along the edge
+    return {f: cand[f] for f, o in zip(keys, ok) if o}
+
+
+def _same_orientation(p, q):
+    """q is p (cyclically) in the same direction"""
+    m = len(p)
+    if len(q) != m or p[0] not in q:
+        return True
+    i = q.index(p[0])
+    return q[(i + 1) % m] == p[1]
+
+
 def cut_with_fallback(ctx, items, shared_cap, hk, csize, max_iter=4):
     """Cut items [(faces, parent_leaf)].  Cells where the feature refinement (bent face
     chords, split caps) produced a non-convex piece are re-cut without it, together
@@ -772,12 +831,61 @@ def generate(cfg, log=print):
     ctx.zero_edge, drop = surface_contact(dom, pts, phi_d, cl, leaf_faces, csize)
     log(f"surface contact: {sum(v == 1 for v in ctx.zero_edge.values())} face edges in the solid,"
         f" {sum(len(s) for s in drop.values())} wall faces dropped from solid-side cells")
+    # faces partly on the wall: split; the contact part is kept by the fluid-side cell
+    splits = contact_splits(dom, pts, phi_d, cl, leaf_faces, csize)
+    split_keep = {}
+    if splits:
+        sk = np.array(list(splits), np.int64)
+        occ_ = np.nonzero(np.isin(f_key, sk))[0]
+        sc, sf = f_cell[occ_], f_key[occ_]
+        live = (cls[sc] <= 0)
+        sc, sf = sc[live], sf[live]
+        samp, hh = [], []
+        for ci, fid in zip(sc.tolist(), sf.tolist()):
+            _, _, run, hf = splits[fid]
+            Q = pts[run]
+            c0 = Q.mean(0)
+            nrm = _newell(Q - c0)
+            nrm /= max(np.linalg.norm(nrm), 1e-300)
+            cc = pts[[v for _, p_ in leaf_faces(ci) for v in p_]].mean(0)
+            if np.dot(cc - c0, nrm) < 0:
+                nrm = -nrm
+            samp.append(c0 + 0.1 * hf * nrm); hh.append(hf)
+        sd = dom.sdf(np.array(samp))
+        for ci, fid, d_, hf in zip(sc.tolist(), sf.tolist(), sd.tolist(), hh):
+            # only cut cells can drop the contact part (their cut closes the cell)
+            split_keep[(ci, fid)] = bool(bulk_alive[ci]) or not (d_ > 1e-3 * hf)
+        split_ids = {fid: (ctx.new_face_id(), ctx.new_face_id()) for fid in splits}
+
+    def apply_splits(ci, fl):
+        out = []
+        for fid, poly in fl:
+            if fid not in splits:
+                out.append((fid, poly)); continue
+            p0, qa, qb, _ = splits[fid]
+            if not _same_orientation(p0, poly):
+                qa, qb = qa[::-1], qb[::-1]
+            ia, ib = split_ids[fid]
+            out.append((ia, qa))
+            if split_keep.get((ci, fid), True):
+                out.append((ib, qb))
+        return out
+
+    split_cells = set(ci for ci, _ in split_keep)
+    log(f"surface contact: {len(splits)} faces split into fluid and wall parts")
     items = []
     for ci in cl:
         fl = leaf_faces(ci)
         if ci in drop:
             fl = [f for f in fl if f[0] not in drop[ci]]
+        if ci in split_cells:
+            fl = apply_splits(ci, fl)
         items.append((fl, ci))
+    # uncut cells sharing a split face become pieces holding both parts
+    for ci in sorted(split_cells):
+        if bulk_alive[ci]:
+            pieces.append([apply_splits(ci, leaf_faces(ci)), ci, -1])
+            bulk_alive[ci] = False
     res, nsh, nfb = cut_with_fallback(ctx, items, False, hk, csize)
     del items
     for ci, (negc, _) in zip(cl, res):
