@@ -92,6 +92,13 @@ def make_chord_hook(feat):
     side would make the cell non-convex."""
     if feat is None or feat._kd is None:
         return None
+    if getattr(feat, "_rs", None) is not None:
+        def chord_rs(ctx, poly, a, b):
+            pos, phi = ctx.pos, ctx.phi
+            x = feat._rs.pierce([pos[v] for v in poly], pos[a], pos[b],
+                                [pos[v] for v in poly if phi[v] < 0])
+            return None if x is None else list(x)
+        return chord_rs
 
     def chord(ctx, poly, a, b):
         pos = ctx.pos

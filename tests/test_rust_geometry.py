@@ -63,6 +63,31 @@ class RustMatchesPython(unittest.TestCase):
 
 
 @unittest.skipUnless(G.rust_available(), "Rust extension not built (python tools/build_rust.py)")
+class RustChordHook(unittest.TestCase):
+    def test_pierce_matches_python(self):
+        from cutmesh import mesher
+        # unit square face in z = 0, cut along the chord from (1, 0.2) to (0.2, 1); the
+        # kept vertex is (0, 0); a feature edge crosses the face at (0.8, 0.8)
+        seg = np.array([[[0.8, 0.8, -1.0], [0.8, 0.8, 1.0]], [[5, 5, -1.0], [5, 5, 1.0]]])
+        fr = G.FeatureSet(seg, L=10.0)
+        fp = G.FeatureSet(seg, L=10.0)
+        fp._rs = None
+
+        class Ctx:
+            pos = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.2, 0.0], [0.2, 1.0, 0.0]]
+            phi = [-1.0, 1.0, 1.0, 1.0, 0.0, 0.0]
+        poly = [0, 1, 2, 3]
+        xr = mesher.make_chord_hook(fr)(Ctx, poly, 4, 5)
+        xp = mesher.make_chord_hook(fp)(Ctx, poly, 4, 5)
+        np.testing.assert_allclose(xr, [0.8, 0.8, 0.0], atol=1e-12)
+        np.testing.assert_allclose(xr, xp, atol=1e-12)
+        # the kept side bulging towards the feature point: no bend (non-convex)
+        Ctx.phi = [1.0, 1.0, -1.0, 1.0, 0.0, 0.0]
+        self.assertIsNone(mesher.make_chord_hook(fr)(Ctx, poly, 4, 5))
+        self.assertIsNone(mesher.make_chord_hook(fp)(Ctx, poly, 4, 5))
+
+
+@unittest.skipUnless(G.rust_available(), "Rust extension not built (python tools/build_rust.py)")
 class RustFaceCellGeometry(unittest.TestCase):
     def setUp(self):
         from cutmesh import quality
