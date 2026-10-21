@@ -78,7 +78,8 @@ def build_zones(cfg):
                           volumeLevel=z.get("volumeLevel", 0), origin=np.asarray(origin, float),
                           axis=np.asarray(axis, float), omega=z.get("omega", 0.0),
                           nonRotatingPatches=z.get("nonRotatingPatches", []),
-                          wallProximity=z.get("wallProximity")))
+                          wallProximity=z.get("wallProximity"),
+                          conforming=bool(z.get("conforming", True))))
     return zones
 
 
@@ -742,6 +743,9 @@ def generate(cfg, log=print):
                 pz = g.sdf(pts, exact_mask=nearz, far_value=g.L)
             else:
                 pz = g.sdf(pts)
+            if not z["conforming"]:           # cells are assigned by centre later: no snapping
+                zone_feats.append(None); on_feat_z.append(np.zeros(0, np.int64)); phi_z.append(pz)
+                continue
             if isinstance(g, Cylinder):
                 zf = FeatureSet(cylinder_features(g, hmin / 4), L=g.L)
             else:
@@ -764,7 +768,8 @@ def generate(cfg, log=print):
         # then slide along the coarse edge / within the coarse face onto a surface.  If the
         # constraint is nearly tangent to the surface, the node is projected freely
         # (hangingSnap "free") or treated as on-surface ("constrained").
-        geoms = [(dom, phi_d, None)] + [(z["geom"], phi_z[i], i) for i, z in enumerate(zones)]
+        geoms = [(dom, phi_d, None)] + [(z["geom"], phi_z[i], i) for i, z in enumerate(zones)
+                                         if z["conforming"]]
         nslide = nvirt = nfree = 0
         for hsz in sorted(set(hang_size[hanging].tolist()), reverse=True):
             idx = np.nonzero(hanging & (hang_size == hsz))[0]
@@ -957,6 +962,8 @@ def generate(cfg, log=print):
 
     # ------------------------------------------------------------ pass 2..: zone cuts
     for zi, z in enumerate(zones):
+        if not z["conforming"]:
+            continue
         g = z["geom"]
         pz = np.zeros(len(P))
         pz[:n_orig] = phi_z[zi]
@@ -1345,6 +1352,18 @@ def generate(cfg, log=print):
     del o_verts
 
     # ------------------------------------------------------------ zones
+    if any(not z["conforming"] for z in zones):
+        # non-conforming zones (MRF only needs the cellZone): cells whose centre is inside
+        ffa = quality.FlatFaces((nn_, vv))
+        Cf_, Sf_ = quality.face_geometry(P, ffa)
+        Cc, _ = quality.cell_geometry(nC, owner, neighbour, Cf_, Sf_)
+        del ffa, Cf_, Sf_
+        for zi, z in enumerate(zones):
+            if not z["conforming"]:
+                ins = (cell_zone < 0) & (z["geom"].sdf(Cc) < 0)
+                cell_zone[ins] = zi
+                log(f"zone '{z['name']}' (non-conforming): {int(ins.sum())} cells with the centre inside")
+        del Cc
     cell_zones, face_zones = {}, {}
     for zi, z in enumerate(zones):
         cell_zones[z["name"]] = np.nonzero(cell_zone == zi)[0]
