@@ -79,6 +79,11 @@ python -m unittest discover -s tests  # Rust と Python の結果の一致を確
 STLで与える場合は `"cylinder"` の代わりに `"stl": "rotor.stl", "origin": [...], "axis": [...]`
 （`examples/stirred_tank/meshDict_stlRotor.json`）。複数ゾーン可（重ならないこと）。
 
+`"wallProximity": { "distance": 0.001, "level": 4 }`（任意）: ゾーン面のうちSTLから `distance` 以内の
+部分だけを `level` まで細分化します。界面が壁から1セル未満しか離れていない（ローター外周すれすれに
+MRF円筒を置く）場合、隙間より細かいセルが必要ですが、`surfaceLevel` を上げるとゾーン面全体が細かく
+なってセル数が大きく増えます。`wallProximity` なら必要な所だけで済みます。
+
 ## アルゴリズム
 
 1. **八分木**: 根グリッド → 表面・特徴線・円筒面・円筒内部の距離基準で細分化 →

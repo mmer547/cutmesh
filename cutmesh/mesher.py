@@ -77,7 +77,8 @@ def build_zones(cfg):
         zones.append(dict(name=z["name"], geom=g, surfaceLevel=z.get("surfaceLevel", 0),
                           volumeLevel=z.get("volumeLevel", 0), origin=np.asarray(origin, float),
                           axis=np.asarray(axis, float), omega=z.get("omega", 0.0),
-                          nonRotatingPatches=z.get("nonRotatingPatches", [])))
+                          nonRotatingPatches=z.get("nonRotatingPatches", []),
+                          wallProximity=z.get("wallProximity")))
     return zones
 
 
@@ -553,6 +554,7 @@ def generate(cfg, log=print):
         c = r["cylinder"]
         regions.append((Cylinder(c["point1"], c["point2"], c["radius"]), int(r["level"])))
     Lmax = int(max([region_level.max(), flevel] + [max(z["surfaceLevel"], z["volumeLevel"]) for z in zones]
+                   + [int(z["wallProximity"]["level"]) for z in zones if z["wallProximity"]]
                    + [lv for _, lv in regions]))
     hmin = h0 / 2 ** Lmax
     log(f"domain: {len(dom.tris)} triangles, regions {dom.names}")
@@ -580,6 +582,18 @@ def generate(cfg, log=print):
         if z["surfaceLevel"] > 0:
             p, _ = z["geom"].samples(h0 / 2 ** z["surfaceLevel"] / 2)
             ssrc.append((cKDTree(p), z["surfaceLevel"], nbuf))
+        wp = z["wallProximity"]
+        if wp:
+            # the zone surface closer than `distance` to the STL: refine to `level` there only
+            # (an interface a fraction of a cell off a wall needs cells finer than the gap)
+            lw = int(wp["level"])
+            p, _ = z["geom"].samples(h0 / 2 ** lw / 2)
+            _, d, _ = dom.closest(p)
+            p = p[d < float(wp["distance"])]
+            if len(p):
+                ssrc.append((cKDTree(p), lw, nbuf))
+            log(f"zone '{z['name']}': {len(p)} surface samples within {float(wp['distance']):g} of the STL"
+                f" -> level {lw}")
         if z["volumeLevel"] > 0:
             vsrc.append((getattr(z["geom"], "refine_sdf", z["geom"].sdf), z["volumeLevel"], nbuf))
     for g, lv in regions:
