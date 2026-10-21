@@ -27,6 +27,23 @@ python3 run.py                        # → slice_z.png, slice_y.png
 `python3 -m cutmesh <meshDict.json> [-case DIR] [-noCheck]`（プロジェクト直下から実行するか
 `PYTHONPATH` に `cutmesh` の親ディレクトリを通してください）
 
+### 高速化（Rust 拡張、任意）
+
+最近点・内外判定・符号付き距離（STL と特徴線）を Rust（`rust/`、BVH + rayon による並列化）で
+計算します。Rust ツールチェーン（cargo）があれば次でビルドされ、`cutmesh/_core.pyd`（Linux/macOS は
+`.so`）が置かれます。無ければ従来の Python/NumPy の処理で動きます（結果は同じ）。
+
+```bash
+python tools/build_rust.py            # cargo build --release + パッケージへコピー
+CUTMESH_NO_RUST=1 python -m cutmesh meshDict.json   # Python の処理を強制（比較用）
+python -m unittest discover -s tests  # Rust と Python の結果の一致を確認
+```
+
+| 例題 | Python | Rust 拡張あり |
+|---|---|---|
+| examples/stirred_tank | 26 s | 9 s |
+| 社内ベンチマーク（55万セル） | 162 s | 76 s（節点スナップ 44→3 s、STL のカット 59→15 s） |
+
 ## meshDict.json
 
 | キー | 意味 | 既定値 |
@@ -175,14 +192,14 @@ python -m cutmesh.layers CASE [layerDict.json] [-out CASE2] [-noCheck]
 - レベル遷移が壁にかかる所のぶら下がり節点は表面へ投影するので壁の凹凸は出ないが、投影で
   八分木セルが壊れる所は取り消され、そこだけ最大0.3×最小セル程度のくぼみが残る
 - 統合相手が見つからない小セルはそのまま残る（最小体積が小さくなる）
-- Pure Pythonなので遅い。速度比較はC++版で行うべき（下記）
+- 幾何問い合わせ以外（カット、セル統合、組み立て）は Python のままで、残りの時間の大半を占める
 
 ## ロードマップ
 
 1. **境界層**: 自前実装の初版あり（上記）。今後: 層の被覆率の向上（狭い隙間や鋭いエッジでの
    厚さの割り当て）、法線の平滑化、層の品質指標（アスペクト比など）の出力
 2. **品質改善**: レベル遷移とカットが重なるセルの追加細分化、薄い（扁平）セルの統合基準
-3. **C++化**: 八分木・距離計算（BVH）・カットはセル単位で独立なのでOpenMPで並列化しやすい。
-   Pythonで時間の大半を占めるのはレベルセット（距離計算）と面生成
+3. **Rust 化**: 距離計算（BVH）は Rust 拡張に移行済み（上記「高速化」）。次はカット（セル単位で
+   独立なので並列化しやすい。交点を辺ごとに一括で求めてからセルごとに切る構造にする）、セル統合
 4. **AMI（スライディングメッシュ）への移行**: `<name>_interface` faceZone を `createBaffles` で
    切り離し、cyclicAMIにする手順はsnappyHexMeshのチュートリアルと同じ

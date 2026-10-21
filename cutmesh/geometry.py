@@ -2,9 +2,23 @@
 
 Sign convention everywhere: phi < 0 inside the closed surface, phi > 0 outside.
 """
+import os
 import struct
 import numpy as np
 from scipy.spatial import cKDTree
+
+# Rust extension (rust/, built by tools/build_rust.py): exact closest point, inside test
+# and signed distance on a BVH, in parallel.  CUTMESH_NO_RUST=1 forces the Python code.
+_core = None
+if not os.environ.get("CUTMESH_NO_RUST"):
+    try:
+        from . import _core
+    except ImportError:
+        _core = None
+
+
+def rust_available():
+    return _core is not None
 
 
 # ----------------------------------------------------------------------------
@@ -154,7 +168,10 @@ class Surface:
         self.L = float(np.linalg.norm(self.bbmax - self.bbmin))
         self._kd = None
         self._kd_spacing = None
-        self._build_ray_bins()
+        self._rs = _core.TriMesh(np.ascontiguousarray(self.tris)) if _core else None
+        self._nb = None
+        if self._rs is None:
+            self._build_ray_bins()
 
     @classmethod
     def from_file(cls, path):
@@ -193,6 +210,8 @@ class Surface:
         (elsewhere error <= sub-triangle radius, usually exact as well).
         Returns (cp, dist, original_triangle_id)."""
         p = np.atleast_2d(p)
+        if self._rs is not None:                 # exact everywhere
+            return self._rs.closest(np.ascontiguousarray(p, float))
         n = len(p)
         cp = np.zeros((n, 3)); d = np.zeros(n); sid = np.zeros(n, np.int64)
         if n == 0:
@@ -262,6 +281,10 @@ class Surface:
     def inside(self, p, chunk=100000):
         """Parity of +x ray crossings. True where p is inside the closed surface."""
         p = np.atleast_2d(p)
+        if self._rs is not None:                 # same ray, perturbation and hit test
+            return self._rs.inside(np.ascontiguousarray(p, float))
+        if self._nb is None:
+            self._build_ray_bins()
         res = np.zeros(len(p), bool)
         pert = self.L * np.array([0.0, 3.14159265e-7, 2.71828183e-7])
         for s in range(0, len(p), chunk):
@@ -296,6 +319,8 @@ class Surface:
     def sdf(self, p, exact_mask=None, far_value=None, exact_within=np.inf):
         """Signed distance. Magnitude from closest() where exact_mask (default: all)."""
         p = np.atleast_2d(p)
+        if self._rs is not None and exact_mask is None:
+            return self._rs.sdf(np.ascontiguousarray(p, float))
         sign = np.where(self.inside(p), -1.0, 1.0)
         if exact_mask is None:
             exact_mask = np.ones(len(p), bool)
@@ -499,23 +524,42 @@ class FeatureSet:
         mid = 0.5 * (self.seg[:, 0] + self.seg[:, 1])
         self._half = 0.5 * float(np.linalg.norm(self.seg[:, 1] - self.seg[:, 0], axis=1).max())
         self._kd = cKDTree(mid)
+        self._rs = _core.SegSet(np.ascontiguousarray(self.seg)) if _core else None
+
+    def _seg_closest(self, p, idx):
+        """closest points of p[i] on segments idx[i, :] -> (cp[n, k, 3], dist[n, k])"""
+        A = self.seg[idx, 0]; B = self.seg[idx, 1]
+        AB = B - A
+        t = np.clip(np.einsum("nkj,nkj->nk", p[:, None] - A, AB) /
+                    np.maximum(np.einsum("nkj,nkj->nk", AB, AB), 1e-300), 0, 1)
+        cp = A + t[..., None] * AB
+        return cp, np.linalg.norm(cp - p[:, None], axis=2)
 
     def closest(self, p):
         """Exact closest point on the segment set. Returns (cp, dist)."""
         p = np.atleast_2d(p)
         if self._kd is None or len(p) == 0:
             return np.zeros((len(p), 3)), np.full(len(p), np.inf)
+        if self._rs is not None:
+            return self._rs.closest(np.ascontiguousarray(p, float))
         k = min(8, len(self.seg))
         dk, idx = self._kd.query(p, k=k, workers=-1)
-        idx = idx.reshape(len(p), -1)
-        A = self.seg[idx, 0]; B = self.seg[idx, 1]
-        AB = B - A
-        t = np.clip(np.einsum("nkj,nkj->nk", p[:, None] - A, AB) /
-                    np.maximum(np.einsum("nkj,nkj->nk", AB, AB), 1e-300), 0, 1)
-        cp = A + t[..., None] * AB
-        d = np.linalg.norm(cp - p[:, None], axis=2)
+        idx = idx.reshape(len(p), -1); dk = dk.reshape(len(p), -1)
+        cp, d = self._seg_closest(p, idx)
         j = d.argmin(1); r = np.arange(len(p))
-        return cp[r, j], d[r, j]
+        cp, d = cp[r, j], d[r, j]
+        # a segment whose midpoint is farther than the k-th one can still be closer:
+        # check all midpoints within (best distance + half the longest segment)
+        if k < len(self.seg):
+            need = np.nonzero(dk[:, -1] <= d + self._half)[0]
+            if len(need):
+                lists = self._kd.query_ball_point(p[need], d[need] + self._half, workers=-1)
+                for i, l in zip(need.tolist(), lists):
+                    c2, d2 = self._seg_closest(p[i:i + 1], np.asarray(l, np.int64)[None])
+                    m = int(d2[0].argmin())
+                    if d2[0, m] < d[i]:
+                        cp[i], d[i] = c2[0, m], d2[0, m]
+        return cp, d
 
 
 def cylinder_features(cyl, spacing):

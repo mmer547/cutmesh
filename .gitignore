@@ -3,3 +3,7 @@ __pycache__/
 .venv/
 # generated meshes / OpenFOAM cases
 examples/*/case*/
+# Rust extension (built by tools/build_rust.py)
+rust/target/
+cutmesh/_core*.pyd
+cutmesh/_core*.so
