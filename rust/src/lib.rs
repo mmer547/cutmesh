@@ -132,6 +132,34 @@ impl Bvh {
     }
 }
 
+impl Bvh {
+    /// primitives whose centre (given by `centre`) lies within r of p, ascending
+    fn within<F: Fn(usize) -> V3>(&self, p: V3, r: f64, centre: F, out: &mut Vec<usize>) {
+        if self.nodes.is_empty() {
+            return;
+        }
+        let r2 = r * r;
+        let mut stack: Vec<u32> = vec![0];
+        while let Some(ni) = stack.pop() {
+            let n = &self.nodes[ni as usize];
+            if box_d2(n, p) > r2 {
+                continue;
+            }
+            if n.count > 0 {
+                for &q in &self.prims[n.start as usize..(n.start + n.count) as usize] {
+                    if dist2(centre(q as usize), p) <= r2 {
+                        out.push(q as usize);
+                    }
+                }
+            } else {
+                stack.push(n.start);
+                stack.push(n.right);
+            }
+        }
+        out.sort_unstable();
+    }
+}
+
 #[inline]
 fn box_d2(n: &Node, p: V3) -> f64 {
     let mut d = 0.0;
@@ -361,6 +389,8 @@ impl TriMesh {
 struct SegSet {
     s: Vec<[V3; 2]>,
     bvh: Bvh,
+    mid: Vec<V3>,
+    half: f64,
 }
 
 #[pymethods]
@@ -378,7 +408,9 @@ impl SegSet {
         let lo: Vec<V3> = s.iter().map(|e| [e[0][0].min(e[1][0]), e[0][1].min(e[1][1]), e[0][2].min(e[1][2])]).collect();
         let hi: Vec<V3> = s.iter().map(|e| [e[0][0].max(e[1][0]), e[0][1].max(e[1][1]), e[0][2].max(e[1][2])]).collect();
         let bvh = Bvh::build(&lo, &hi);
-        Ok(SegSet { s, bvh })
+        let mid: Vec<V3> = s.iter().map(|e| [0.5 * (e[0][0] + e[1][0]), 0.5 * (e[0][1] + e[1][1]), 0.5 * (e[0][2] + e[1][2])]).collect();
+        let half = s.iter().map(|e| 0.5 * dist2(e[0], e[1]).sqrt()).fold(0.0, f64::max);
+        Ok(SegSet { s, bvh, mid, half })
     }
 
     /// (closest points[n, 3], distances[n]) - exact
@@ -403,6 +435,84 @@ impl SegSet {
         let d: Vec<f64> = res.iter().map(|r| r.0.sqrt()).collect();
         let cp: Vec<V3> = res.into_iter().map(|r| r.1).collect();
         Ok((vec3_array(py, cp)?, d.into_pyarray(py)))
+    }
+
+    /// Where a feature edge pierces a face that is cut along the chord a-b: the point
+    /// to bend the chord through, or None (port of make_chord_hook in mesher.py).
+    /// face: polygon vertices; kept: the face vertices on the kept (phi < 0) side.
+    fn pierce(&self, face: Vec<V3>, a: V3, b: V3, kept: Vec<V3>) -> Option<V3> {
+        let m = face.len();
+        if m < 3 || self.s.is_empty() {
+            return None;
+        }
+        let mid = [0.5 * (a[0] + b[0]), 0.5 * (a[1] + b[1]), 0.5 * (a[2] + b[2])];
+        let mut lo = [f64::INFINITY; 3];
+        let mut hi = [f64::NEG_INFINITY; 3];
+        let mut c0 = [0.0; 3];
+        let mut nrm = [0.0; 3];
+        for i in 0..m {
+            let p = face[i];
+            let c = cross(p, face[(i + 1) % m]);
+            for k in 0..3 {
+                lo[k] = lo[k].min(p[k]);
+                hi[k] = hi[k].max(p[k]);
+                c0[k] += p[k];
+                nrm[k] += c[k];
+            }
+        }
+        for k in 0..3 {
+            c0[k] /= m as f64;
+        }
+        let diam = (hi[0] - lo[0]).max(hi[1] - lo[1]).max(hi[2] - lo[2]);
+        let mut idx = Vec::new();
+        self.bvh.within(mid, diam + self.half, |i| self.mid[i], &mut idx);
+        if idx.is_empty() {
+            return None;
+        }
+        let nn = dot(nrm, nrm).sqrt();
+        if nn == 0.0 {
+            return None;
+        }
+        let n = [nrm[0] / nn, nrm[1] / nn, nrm[2] / nn];
+        let u = sub(b, a);
+        let len = dot(u, u).sqrt();
+        if len == 0.0 {
+            return None;
+        }
+        // side of the chord the kept vertices are on (mean)
+        let sn = kept.iter().map(|&v| dot(cross(u, sub(v, a)), n)).sum::<f64>() / kept.len().max(1) as f64;
+        let tol = -1e-9 * diam * diam;
+        let mut best: Option<(f64, V3)> = None;
+        for &i in &idx {
+            let [s0, s1] = self.s[i];
+            let sa = dot(sub(s0, c0), n);
+            let sb = dot(sub(s1, c0), n);
+            if !(sa * sb <= 0.0 && sa != sb) {
+                continue;
+            }
+            let t = sa / (sa - sb);
+            let x0 = axpy(s0, t, sub(s1, s0));
+            let x = axpy(x0, -dot(sub(x0, c0), n), n);
+            // inside the face polygon
+            if (0..m).any(|k| dot(cross(sub(face[(k + 1) % m], face[k]), sub(x, face[k])), n) < tol) {
+                continue;
+            }
+            // off the chord, but not farther than its length
+            let w = cross(sub(x, a), u);
+            let dl = dot(w, w).sqrt() / len;
+            if !(dl > 1e-3 * diam && dl < len) {
+                continue;
+            }
+            // a convex corner: on the other side of the chord than the kept vertices
+            if !(dot(cross(u, sub(x, a)), n) * sn < 0.0) {
+                continue;
+            }
+            let dm = dist2(x, mid);
+            if best.is_none_or(|(d, _)| dm < d) {
+                best = Some((dm, x));
+            }
+        }
+        best.map(|(_, x)| x)
     }
 
     fn __len__(&self) -> usize {
