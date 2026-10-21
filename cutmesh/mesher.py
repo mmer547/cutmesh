@@ -333,6 +333,89 @@ def _tets_ok(P, faces, cf, cc, vmin):
     return True
 
 
+def merge_coplanar_wall_faces(P, nn, vv, owner, nI, patches, max_angle=5.0):
+    """Join the boundary faces of one cell that lie in one plane, belong to one patch and
+    share edges into a single face.  Cut cells can carry a flat wall split into several
+    faces; a piece off to the side of a thin cell has its centre far off the cell
+    centre's normal, which becomes a large non-orthogonality once layers are added on top.
+    Returns (nn, vv, owner, patches, n_joined)."""
+    ptr = np.concatenate([[0], np.cumsum(nn)])
+    cmin = np.cos(np.radians(max_angle))
+    out_n = [nn[:nI]]; out_v = [vv[:ptr[nI]]]; out_o = [owner[:nI]]
+    new_p, start, joined = [], nI, 0
+    for p in patches:
+        f0, nf = p["startFace"], p["nFaces"]
+        fl, ol = [], []
+        f = f0
+        while f < f0 + nf:
+            g = f
+            while g < f0 + nf and owner[g] == owner[f]:
+                g += 1
+            polys = [vv[ptr[k]:ptr[k + 1]].tolist() for k in range(f, g)]
+            if len(polys) > 1:
+                nrm = []
+                for q in polys:
+                    Q = P[q]
+                    s = np.cross(Q - Q.mean(0), np.roll(Q, -1, 0) - Q.mean(0)).sum(0)
+                    nrm.append(s / max(np.linalg.norm(s), 1e-300))
+                par = list(range(len(polys)))
+
+                def fnd(i):
+                    while par[i] != i:
+                        par[i] = par[par[i]]; i = par[i]
+                    return i
+                emap = {}
+                for i, q in enumerate(polys):
+                    for k in range(len(q)):
+                        emap[(q[k], q[(k + 1) % len(q)])] = i
+                for (a, b), i in emap.items():
+                    j = emap.get((b, a))
+                    if j is not None and j != i and float(np.dot(nrm[i], nrm[j])) > cmin:
+                        par[fnd(i)] = fnd(j)
+                groups = {}
+                for i in range(len(polys)):
+                    groups.setdefault(fnd(i), []).append(i)
+                res = []
+                for ids in groups.values():
+                    if len(ids) == 1:
+                        res.append(polys[ids[0]]); continue
+                    de = {}
+                    for i in ids:
+                        q = polys[i]
+                        for k in range(len(q)):
+                            e = (q[k], q[(k + 1) % len(q)])
+                            de[e] = de.get(e, 0) + 1
+                    segs = [e for e in de if (e[1], e[0]) not in de]
+                    nxt = {}
+                    ok = True
+                    for a, b in segs:
+                        if a in nxt:
+                            ok = False; break
+                        nxt[a] = b
+                    loop = []
+                    a = a0 = None
+                    if ok and segs:
+                        a0 = segs[0][0]; a = a0
+                        for _ in range(len(segs) + 1):
+                            loop.append(a); a = nxt.get(a)
+                            if a is None or a == a0:
+                                break
+                    if ok and a0 is not None and a == a0 and len(loop) == len(segs) and len(loop) >= 3:
+                        res.append(loop); joined += len(ids) - 1
+                    else:
+                        res.extend(polys[i] for i in ids)
+                polys = res
+            for q in polys:
+                fl.append(q); ol.append(owner[f])
+            f = g
+        out_n.append(np.array([len(q) for q in fl], np.int64))
+        out_v.append(np.array([v for q in fl for v in q], np.int64))
+        out_o.append(np.array(ol, np.int64))
+        new_p.append(dict(p, startFace=start, nFaces=len(fl)))
+        start += len(fl)
+    return (np.concatenate(out_n), np.concatenate(out_v), np.concatenate(out_o), new_p, joined)
+
+
 def _piece_bad(pos, comp, h):
     """some face does not clearly see the centroid (same test as the merging stage)"""
     Cf, Sf = [], []
@@ -1232,10 +1315,10 @@ def generate(cfg, log=print):
             merged += 1
         elif cands:
             rejected += 1
-    proot = np.array([find(i) for i in range(nP)], np.int64)
     log(f"merged {merged} cut cells ({nsmall} small < {beta:g} of hex volume,"
         f" {len(small) - nsmall} non-convex); {rejected} left as they are"
         f" (no merge partner keeps the cell valid)")
+    proot = np.array([find(i) for i in range(nP)], np.int64)
 
     # ------------------------------------------------------------ invalid wall slivers
     # Small cells left unmerged whose face triangles do not all see the centre (e.g. a
@@ -1350,6 +1433,9 @@ def generate(cfg, log=print):
     neighbour = i_nei
     nn_, vv = gather(all_occ)
     del o_verts
+    if cfg.get("mergeWallFaces", True):
+        nn_, vv, owner, patches, nj = merge_coplanar_wall_faces(P, nn_, vv, owner, len(neighbour), patches)
+        log(f"wall faces: {nj} coplanar pieces joined to their neighbour in the same cell")
 
     # ------------------------------------------------------------ zones
     if any(not z["conforming"] for z in zones):
