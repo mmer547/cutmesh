@@ -10,7 +10,9 @@ use numpy::{IntoPyArray, PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray1, P
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
-type V3 = [f64; 3];
+mod cut;
+
+pub(crate) type V3 = [f64; 3];
 
 #[inline]
 fn sub(a: V3, b: V3) -> V3 {
@@ -233,7 +235,7 @@ fn cr(u: V3, v: V3, w: V3) -> f64 {
 }
 
 // ------------------------------------------------------------------------- helpers
-fn points(p: &PyReadonlyArray2<f64>) -> PyResult<Vec<V3>> {
+pub(crate) fn points(p: &PyReadonlyArray2<f64>) -> PyResult<Vec<V3>> {
     let a = p.as_array();
     if a.ncols() != 3 {
         return Err(pyo3::exceptions::PyValueError::new_err("points must have shape (n, 3)"));
@@ -241,7 +243,7 @@ fn points(p: &PyReadonlyArray2<f64>) -> PyResult<Vec<V3>> {
     Ok(a.outer_iter().map(|r| [r[0], r[1], r[2]]).collect())
 }
 
-fn vec3_array<'py>(py: Python<'py>, v: Vec<V3>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+pub(crate) fn vec3_array<'py>(py: Python<'py>, v: Vec<V3>) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let n = v.len();
     let flat: Vec<f64> = v.into_iter().flatten().collect();
     flat.into_pyarray(py).reshape([n, 3])
@@ -711,5 +713,6 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(face_geometry, m)?)?;
     m.add_function(wrap_pyfunction!(cell_geometry, m)?)?;
     m.add_function(wrap_pyfunction!(poly_cell, m)?)?;
+    m.add_function(wrap_pyfunction!(cut::cut_batch, m)?)?;
     Ok(())
 }

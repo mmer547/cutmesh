@@ -7,7 +7,7 @@ import numpy as np
 from scipy.spatial import cKDTree
 
 from .geometry import (Surface, Cylinder, SurfaceZone, FeatureSet, read_stl,
-                       sample_segments, cylinder_features, _core)
+                       sample_segments, cylinder_features, paused_gc, _core)
 from .octree import Octree
 from .cutcell import CutContext, split_components
 from .polymesh import write_polymesh
@@ -536,6 +536,7 @@ def cut_with_fallback(ctx, items, shared_cap, hk, csize, max_iter=4):
     return res, nsharp, nfb
 
 
+@paused_gc
 def generate(cfg, log=print):
     T = Timer(log)
     dom = Surface(read_stl(_rel(cfg, cfg["domain"])))
@@ -933,13 +934,14 @@ def generate(cfg, log=print):
         bulk_alive[newcut] = False
         for ci in newcut.tolist():
             pieces.append([leaf_faces(ci), ci, -1])
-        positions = P.tolist()
-        ctx = CutContext(positions, pz.tolist(), next_id)
         if isinstance(g, Cylinder):
             zfeat = FeatureSet(cylinder_features(g, hmin / 4), L=g.L)
         else:
             zfeat = FeatureSet(g.s.feature_edges(cfg["featureAngle"]), L=g.L)
         zh = make_feature_hook(zfeat, csize) if fc in ("both", "zone", True) else None
+        rust_cut = _core is not None and not zh          # no hooks: whole batch in Rust
+        positions = None if rust_cut else P.tolist()
+        ctx = CutContext(positions, pz.tolist(), next_id)
         if zh:
             ctx.chord_hook = make_chord_hook(zfeat)
             ctx.onfeat = set(on_feat_z[zi].tolist())
@@ -955,7 +957,18 @@ def generate(cfg, log=print):
             else:
                 tocut.append(pc)
         nc = len(tocut)
-        res, zsh, zfb = cut_with_fallback(ctx, [(pc[0], pc[1]) for pc in tocut], True, zh, csize)
+        if rust_cut:
+            res, newpts, newpar, next_id = _core.cut_batch(P, pz, next_id, [pc[0] for pc in tocut], True, {})
+            zsh = zfb = 0
+            newv = np.arange(len(P), len(P) + len(newpts), dtype=np.int64)
+            P = np.concatenate([P, newpts])
+            par = np.array(newpar, np.int64).reshape(-1, 2)
+        else:
+            res, zsh, zfb = cut_with_fallback(ctx, [(pc[0], pc[1]) for pc in tocut], True, zh, csize)
+            next_id = ctx.next_id
+            P = np.array(positions)
+            newv = np.array(ctx.new_vertices, np.int64)
+            par = np.array(ctx.new_parents, np.int64).reshape(-1, 2)
         for pc, (negc, posc) in zip(tocut, res):
             for comp in negc:
                 newp.append([comp, pc[1], zi])
@@ -963,10 +976,6 @@ def generate(cfg, log=print):
                 newp.append([comp, pc[1], pc[2]])
         del res, tocut
         pieces = newp
-        next_id = ctx.next_id
-        P = np.array(positions)
-        newv = np.array(ctx.new_vertices, np.int64)
-        par = np.array(ctx.new_parents, np.int64).reshape(-1, 2)
         del positions, ctx
         if len(newv):
             isfeat = par[:, 0] < 0            # feature points: already exact

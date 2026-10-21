@@ -63,6 +63,45 @@ class RustMatchesPython(unittest.TestCase):
 
 
 @unittest.skipUnless(G.rust_available(), "Rust extension not built (python tools/build_rust.py)")
+class RustCutKernel(unittest.TestCase):
+    def test_cut_batch_matches_cutcontext(self):
+        from cutmesh.cutcell import CutContext, split_components
+        # two unit cubes side by side (x in [0, 1] and [1, 2]), cut by a slanted plane
+        xs, P = [0.0, 1.0, 2.0], []
+        for x in xs:
+            for y in (0.0, 1.0):
+                for z in (0.0, 1.0):
+                    P.append([x, y, z])
+        P = np.array(P)
+        vid = {tuple(p): i for i, p in enumerate(P.tolist())}
+        v = lambda x, y, z: vid[(float(x), float(y), float(z))]
+
+        def cube(x0, fid0):
+            x1 = x0 + 1
+            q = [[v(x0, 0, 0), v(x0, 0, 1), v(x0, 1, 1), v(x0, 1, 0)], [v(x1, 0, 0), v(x1, 1, 0), v(x1, 1, 1), v(x1, 0, 1)],
+                 [v(x0, 0, 0), v(x1, 0, 0), v(x1, 0, 1), v(x0, 0, 1)], [v(x0, 1, 0), v(x0, 1, 1), v(x1, 1, 1), v(x1, 1, 0)],
+                 [v(x0, 0, 0), v(x0, 1, 0), v(x1, 1, 0), v(x1, 0, 0)], [v(x0, 0, 1), v(x1, 0, 1), v(x1, 1, 1), v(x0, 1, 1)]]
+            return [(fid0 + k, f) for k, f in enumerate(q)]
+        c0 = cube(0, 0)
+        c1 = cube(1, 6)
+        c1[0] = (1, c0[1][1][::-1])        # shared face x = 1, same id, reversed
+        phi = P[:, 0] * 0.4 + P[:, 2] - 0.8
+        phi[v(1, 0, 0)] = 0.0              # a vertex on the surface
+        for shared in (True, False):
+            ctx = CutContext(P.tolist(), phi.tolist(), 100)
+            ref = []
+            for c in (c0, c1):
+                neg, pos, _ = ctx.cut(c, shared)
+                ref.append((split_components(neg), split_components(pos) if shared else []))
+            res, newp, par, nid = G._core.cut_batch(P, phi, 100, [c0, c1], shared, {})
+            norm = lambda r: [[[(int(f), list(map(int, p))) for f, p in comp] for comp in side] for side in r]
+            self.assertEqual([norm(r) for r in res], [norm(r) for r in ref])
+            np.testing.assert_allclose(newp, np.array(ctx.pos[len(P):]).reshape(-1, 3), atol=0)
+            self.assertEqual([tuple(x) for x in par], [tuple(x) for x in ctx.new_parents])
+            self.assertEqual(nid, ctx.next_id)
+
+
+@unittest.skipUnless(G.rust_available(), "Rust extension not built (python tools/build_rust.py)")
 class RustChordHook(unittest.TestCase):
     def test_pierce_matches_python(self):
         from cutmesh import mesher
