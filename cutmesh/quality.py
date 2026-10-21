@@ -2,6 +2,8 @@
 primitiveMeshTools where practical), vectorised over flattened face lists."""
 import numpy as np
 
+from .geometry import _core      # Rust extension or None
+
 
 class FlatFaces:
     """faces: list of vertex lists, or a (sizes, flat_vertices) tuple (CSR)."""
@@ -26,6 +28,8 @@ def face_geometry(points, ff):
     The triangles are weighted by their area projected on the face normal (signed, as in
     current OpenFOAM): for a non-convex face, triangles folding back over the fan have
     negative weight, so overlapping parts are not counted twice."""
+    if _core is not None:
+        return _core.face_geometry(np.ascontiguousarray(points, float), ff.n, ff.v)
     p = points[ff.v]
     est = np.add.reduceat(p, ff.ptr[:-1], axis=0) / ff.n[:, None]
     e = est[ff.fid]
@@ -44,6 +48,9 @@ def face_geometry(points, ff):
 
 
 def cell_geometry(nC, owner, neighbour, Cf, Sf):
+    if _core is not None:
+        return _core.cell_geometry(int(nC), np.asarray(owner, np.int64), np.asarray(neighbour, np.int64),
+                                   np.ascontiguousarray(Cf, float), np.ascontiguousarray(Sf, float))
     nI = len(neighbour)
     cnt = np.bincount(owner, minlength=nC) + np.bincount(neighbour, minlength=nC)
     est = np.zeros((nC, 3))
