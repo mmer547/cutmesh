@@ -62,5 +62,58 @@ class RustMatchesPython(unittest.TestCase):
         np.testing.assert_allclose(c2, c1, atol=1e-9)
 
 
+@unittest.skipUnless(G.rust_available(), "Rust extension not built (python tools/build_rust.py)")
+class RustFaceCellGeometry(unittest.TestCase):
+    def setUp(self):
+        from cutmesh import quality
+        self.q = quality
+        rng = np.random.default_rng(3)
+        self.P = rng.random((400, 3))
+        # random (also non-convex, non-planar) polygons of 3..9 vertices
+        self.faces = [list(rng.choice(400, rng.integers(3, 10), replace=False)) for _ in range(500)]
+
+    def python(self, fn, *a):
+        saved = self.q._core
+        self.q._core = None
+        try:
+            return fn(*a)
+        finally:
+            self.q._core = saved
+
+    def test_face_geometry(self):
+        ff = self.q.FlatFaces(self.faces)
+        c1, s1 = self.python(self.q.face_geometry, self.P, ff)
+        c2, s2 = self.q.face_geometry(self.P, ff)
+        np.testing.assert_allclose(c2, c1, atol=1e-12)
+        np.testing.assert_allclose(s2, s1, atol=1e-12)
+
+    def test_cell_geometry(self):
+        # a unit cube split into two cells by an internal face, as a polyMesh
+        P = np.array([[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1],
+                      [0.5, 0, 0], [0.5, 1, 0], [0.5, 1, 1], [0.5, 0, 1.0]])
+        faces = [[8, 9, 10, 11],                                  # internal, owner 0 -> 1
+                 [0, 4, 7, 3], [0, 8, 11, 4], [3, 7, 10, 9], [0, 3, 9, 8], [4, 11, 10, 7],
+                 [1, 2, 6, 5], [8, 1, 5, 11], [9, 10, 6, 2], [8, 9, 2, 1], [11, 5, 6, 10]]
+        own = np.array([0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1]); nei = np.array([1])
+        ff = self.q.FlatFaces(faces)
+        Cf, Sf = self.q.face_geometry(P, ff)
+        c1, v1 = self.python(self.q.cell_geometry, 2, own, nei, Cf, Sf)
+        c2, v2 = self.q.cell_geometry(2, own, nei, Cf, Sf)
+        np.testing.assert_allclose(v2, [0.5, 0.5], atol=1e-12)
+        np.testing.assert_allclose(c2, [[0.25, 0.5, 0.5], [0.75, 0.5, 0.5]], atol=1e-12)
+        np.testing.assert_allclose(v2, v1, atol=1e-14)
+        np.testing.assert_allclose(c2, c1, atol=1e-14)
+
+    def test_poly_cell(self):
+        P = np.array([[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1.0]])
+        cube = [[0, 3, 2, 1], [4, 5, 6, 7], [0, 1, 5, 4], [2, 3, 7, 6], [1, 2, 6, 5], [0, 4, 7, 3]]
+        cf, sf, V, cc = G._core.poly_cell(P, cube)
+        self.assertAlmostEqual(V, 1.0, places=12)
+        np.testing.assert_allclose(cc, [0.5, 0.5, 0.5], atol=1e-12)
+        c1, s1 = self.python(self.q.face_geometry, P, self.q.FlatFaces(cube))
+        np.testing.assert_allclose(cf, c1, atol=1e-12)
+        np.testing.assert_allclose(sf, s1, atol=1e-12)
+
+
 if __name__ == "__main__":
     unittest.main()

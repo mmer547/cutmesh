@@ -7,7 +7,7 @@ import numpy as np
 from scipy.spatial import cKDTree
 
 from .geometry import (Surface, Cylinder, SurfaceZone, FeatureSet, read_stl,
-                       sample_segments, cylinder_features)
+                       sample_segments, cylinder_features, _core)
 from .octree import Octree
 from .cutcell import CutContext, split_components
 from .polymesh import write_polymesh
@@ -1100,6 +1100,9 @@ def generate(cfg, log=print):
         for fid, _ in fl:
             cnt[fid] = cnt.get(fid, 0) + 1
         keep = [(fid, p) for fid, p in fl if cnt[fid] == 1]
+        if _core is not None:
+            cf, sf, V, cc = _core.poly_cell(P, [p for _, p in keep])
+            return keep, cf, sf, V, cc
         ffm = quality.FlatFaces([p for _, p in keep])
         cf, sf = quality.face_geometry(P, ffm)
         est = cf.mean(0)

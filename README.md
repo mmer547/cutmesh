@@ -29,8 +29,8 @@ python3 run.py                        # → slice_z.png, slice_y.png
 
 ### 高速化（Rust 拡張、任意）
 
-最近点・内外判定・符号付き距離（STL と特徴線）を Rust（`rust/`、BVH + rayon による並列化）で
-計算します。Rust ツールチェーン（cargo）があれば次でビルドされ、`cutmesh/_core.pyd`（Linux/macOS は
+最近点・内外判定・符号付き距離（STL と特徴線）と、面・セルの重心と体積（品質チェック、セル統合、
+境界層の判定で使う）を Rust（`rust/`、BVH + rayon による並列化）で計算します。Rust ツールチェーン（cargo）があれば次でビルドされ、`cutmesh/_core.pyd`（Linux/macOS は
 `.so`）が置かれます。無ければ従来の Python/NumPy の処理で動きます（結果は同じ）。
 
 ```bash
@@ -42,7 +42,8 @@ python -m unittest discover -s tests  # Rust と Python の結果の一致を確
 | 例題 | Python | Rust 拡張あり |
 |---|---|---|
 | examples/stirred_tank | 26 s | 9 s |
-| 社内ベンチマーク（55万セル） | 162 s | 76 s（節点スナップ 44→3 s、STL のカット 59→15 s） |
+| 社内ベンチマーク（55万セル） | 162 s | 63 s（節点スナップ 44→3 s、STL のカット 59→15 s、セル統合 29→13 s） |
+| 同、境界層の追加（3層） | 51 s | 27 s |
 
 ## meshDict.json
 

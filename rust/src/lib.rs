@@ -6,7 +6,7 @@
 //! - `inside` uses the same +x ray parity, perturbation and hit test (identical bits),
 //! - `closest` is exact (branch and bound on a BVH), the same closest point formula.
 
-use numpy::{IntoPyArray, PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray2, PyReadonlyArray3};
+use numpy::{IntoPyArray, PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3};
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -410,9 +410,196 @@ impl SegSet {
     }
 }
 
+
+// ------------------------------------------------------------------------- face / cell geometry
+#[inline]
+fn cross(a: V3, b: V3) -> V3 {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+
+/// centre and area vector of one face (quality.face_geometry: fan around the vertex
+/// average, triangles weighted by their area projected on the face normal)
+fn face_cs(pts: &[V3], f: &[usize]) -> (V3, V3) {
+    let n = f.len() as f64;
+    let mut e = [0.0; 3];
+    for &v in f {
+        for k in 0..3 {
+            e[k] += pts[v][k];
+        }
+    }
+    for k in 0..3 {
+        e[k] /= n;
+    }
+    let m = f.len();
+    let mut sum_n = [0.0; 3];
+    let mut tri: Vec<(V3, V3)> = Vec::with_capacity(m);
+    for i in 0..m {
+        let a = pts[f[i]];
+        let b = pts[f[(i + 1) % m]];
+        let nv = cross(sub(b, a), sub(e, a));
+        let c = [a[0] + b[0] + e[0], a[1] + b[1] + e[1], a[2] + b[2] + e[2]];
+        for k in 0..3 {
+            sum_n[k] += nv[k];
+        }
+        tri.push((nv, c));
+    }
+    let mag = dot(sum_n, sum_n).sqrt();
+    let nh = if mag > 1e-300 { [sum_n[0] / mag, sum_n[1] / mag, sum_n[2] / mag] } else { [0.0; 3] };
+    let mut sa = 0.0;
+    let mut sac = [0.0; 3];
+    for (nv, c) in &tri {
+        let w = dot(*nv, nh);
+        sa += w;
+        for k in 0..3 {
+            sac[k] += w * c[k];
+        }
+    }
+    let ctr = if mag > 1e-300 && sa > 1e-300 { [sac[0] / (3.0 * sa), sac[1] / (3.0 * sa), sac[2] / (3.0 * sa)] } else { e };
+    (ctr, [0.5 * sum_n[0], 0.5 * sum_n[1], 0.5 * sum_n[2]])
+}
+
+fn all_points(p: &PyReadonlyArray2<f64>) -> PyResult<Vec<V3>> {
+    points(p)
+}
+
+/// face_geometry(points[n, 3], sizes[F], verts[sum sizes]) -> (centres[F, 3], area vectors[F, 3])
+#[pyfunction]
+fn face_geometry<'py>(
+    py: Python<'py>,
+    points: PyReadonlyArray2<'py, f64>,
+    sizes: PyReadonlyArray1<'py, i64>,
+    verts: PyReadonlyArray1<'py, i64>,
+) -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>)> {
+    let pts = all_points(&points)?;
+    let n = sizes.as_array();
+    let v = verts.as_array();
+    let mut ptr = Vec::with_capacity(n.len() + 1);
+    ptr.push(0usize);
+    for &k in n.iter() {
+        ptr.push(ptr.last().unwrap() + k as usize);
+    }
+    let vv: Vec<usize> = v.iter().map(|&x| x as usize).collect();
+    if *ptr.last().unwrap() != vv.len() || vv.iter().any(|&x| x >= pts.len()) {
+        return Err(pyo3::exceptions::PyValueError::new_err("inconsistent face list"));
+    }
+    let res: Vec<(V3, V3)> = py.detach(|| (0..n.len()).into_par_iter().map(|i| face_cs(&pts, &vv[ptr[i]..ptr[i + 1]])).collect());
+    let (c, s): (Vec<V3>, Vec<V3>) = res.into_iter().unzip();
+    Ok((vec3_array(py, c)?, vec3_array(py, s)?))
+}
+
+/// cell_geometry(nC, owner[F], neighbour[nI], Cf[F, 3], Sf[F, 3]) -> (centres[nC, 3], volumes[nC])
+#[pyfunction]
+fn cell_geometry<'py>(
+    py: Python<'py>,
+    n_cells: usize,
+    owner: PyReadonlyArray1<'py, i64>,
+    neighbour: PyReadonlyArray1<'py, i64>,
+    cf: PyReadonlyArray2<'py, f64>,
+    sf: PyReadonlyArray2<'py, f64>,
+) -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<f64>>)> {
+    let own = owner.as_array();
+    let nei = neighbour.as_array();
+    let cf = points(&cf)?;
+    let sf = points(&sf)?;
+    let ni = nei.len();
+    let mut est = vec![[0.0; 3]; n_cells];
+    let mut cnt = vec![0usize; n_cells];
+    for f in 0..cf.len() {
+        let o = own[f] as usize;
+        for k in 0..3 {
+            est[o][k] += cf[f][k];
+        }
+        cnt[o] += 1;
+        if f < ni {
+            let q = nei[f] as usize;
+            for k in 0..3 {
+                est[q][k] += cf[f][k];
+            }
+            cnt[q] += 1;
+        }
+    }
+    for c in 0..n_cells {
+        let m = cnt[c].max(1) as f64;
+        for k in 0..3 {
+            est[c][k] /= m;
+        }
+    }
+    let mut vol = vec![0.0; n_cells];
+    let mut cc = vec![[0.0; 3]; n_cells];
+    for f in 0..cf.len() {
+        let o = own[f] as usize;
+        let po = dot(sf[f], sub(cf[f], est[o]));
+        vol[o] += po;
+        for k in 0..3 {
+            cc[o][k] += po * (0.75 * cf[f][k] + 0.25 * est[o][k]);
+        }
+        if f < ni {
+            let q = nei[f] as usize;
+            let pn = -dot(sf[f], sub(cf[f], est[q]));
+            vol[q] += pn;
+            for k in 0..3 {
+                cc[q][k] += pn * (0.75 * cf[f][k] + 0.25 * est[q][k]);
+            }
+        }
+    }
+    for c in 0..n_cells {
+        let d = if vol[c].abs() > 1e-300 { vol[c] } else { 1.0 };
+        for k in 0..3 {
+            cc[c][k] /= d;
+        }
+        vol[c] /= 3.0;
+    }
+    Ok((vec3_array(py, cc)?, vol.into_pyarray(py)))
+}
+
+/// poly_cell(points[n, 3], polys: list of vertex lists) -> (Cf[k, 3], Sf[k, 3], volume, centre[3])
+/// geometry of one cell given by its faces (outward), as poly_geom() in mesher.py
+#[pyfunction]
+fn poly_cell<'py>(
+    py: Python<'py>,
+    points: PyReadonlyArray2<'py, f64>,
+    polys: Vec<Vec<usize>>,
+) -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>, f64, Bound<'py, PyArray1<f64>>)> {
+    let a = points.as_array();
+    let np_ = a.nrows();
+    let get = |v: usize| [a[[v, 0]], a[[v, 1]], a[[v, 2]]];
+    let mut cs = Vec::with_capacity(polys.len());
+    for f in &polys {
+        if f.iter().any(|&v| v >= np_) {
+            return Err(pyo3::exceptions::PyValueError::new_err("vertex id out of range"));
+        }
+        let loc: Vec<V3> = f.iter().map(|&v| get(v)).collect();
+        let idx: Vec<usize> = (0..loc.len()).collect();
+        cs.push(face_cs(&loc, &idx));
+    }
+    let k = cs.len().max(1) as f64;
+    let mut est = [0.0; 3];
+    for (c, _) in &cs {
+        for j in 0..3 {
+            est[j] += c[j] / k;
+        }
+    }
+    let mut sv = 0.0;
+    let mut acc = [0.0; 3];
+    for (c, s) in &cs {
+        let pv = dot(*s, sub(*c, est));
+        sv += pv;
+        for j in 0..3 {
+            acc[j] += pv * (0.75 * c[j] + 0.25 * est[j]);
+        }
+    }
+    let vol = sv / 3.0;
+    let cc = if vol > 0.0 { [acc[0] / sv, acc[1] / sv, acc[2] / sv] } else { est };
+    let (c, s): (Vec<V3>, Vec<V3>) = cs.into_iter().unzip();
+    Ok((vec3_array(py, c)?, vec3_array(py, s)?, vol, cc.to_vec().into_pyarray(py)))
+}
+
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<TriMesh>()?;
     m.add_class::<SegSet>()?;
+    m.add_function(wrap_pyfunction!(face_geometry, m)?)?;
+    m.add_function(wrap_pyfunction!(cell_geometry, m)?)?;
+    m.add_function(wrap_pyfunction!(poly_cell, m)?)?;
     Ok(())
 }
