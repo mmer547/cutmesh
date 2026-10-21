@@ -21,6 +21,25 @@ def rust_available():
     return _core is not None
 
 
+def paused_gc(fn):
+    """Run fn with Python's cyclic garbage collector paused.  The mesher builds millions
+    of small lists (faces of cut cells) and hardly any reference cycles; each GC pass
+    rescans all of them, which took 20-80% of the time of some stages."""
+    import functools
+    import gc
+
+    @functools.wraps(fn)
+    def wrapper(*a, **k):
+        was = gc.isenabled()
+        gc.disable()
+        try:
+            return fn(*a, **k)
+        finally:
+            if was:
+                gc.enable()
+    return wrapper
+
+
 # ----------------------------------------------------------------------------
 # STL I/O
 # ----------------------------------------------------------------------------

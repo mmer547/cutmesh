@@ -28,6 +28,7 @@ import numpy as np
 from scipy import sparse
 
 from . import quality
+from .geometry import paused_gc
 
 DEFAULTS = {
     "patches": None,             # patch names with layers (default: all wall patches)
@@ -138,6 +139,7 @@ def _constraint_planes(pid, nrm):
     return {int(p): _plane_groups(list(nrm[a:b])) for p, a, b in zip(u, st, en)}
 
 
+@paused_gc
 def add_layers(mesh, spec=None, log=print):
     """mesh: dict(points, faces=(sizes, flat), owner, neighbour, patches,
     cell_zones={name: cells}, face_zones={name: (faces, flip)}).  Returns a new dict."""
