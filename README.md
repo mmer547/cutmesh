@@ -144,6 +144,8 @@ MRF円筒を置く）場合、隙間より細かいセルが必要ですが、`s
 ```bash
 # meshDict.json に "addLayers": {...} を書くと生成後に自動で追加
 python -m cutmesh meshDict.json
+# 例: examples/stirred_tank/meshDict_layers.json（3層、全壁）→ case_layers（約16万セル、壁節点の82%が目標厚さ）
+cutmesh examples/stirred_tank/meshDict_layers.json
 # 既存ケースに追加（ASCII polyMesh。cutmesh 以外のメッシュでも可）
 python -m cutmesh.layers CASE [layerDict.json] [-out CASE2] [-noCheck]
 ```
