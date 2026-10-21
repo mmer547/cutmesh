@@ -122,7 +122,8 @@ python -m cutmesh.layers CASE [layerDict.json] [-out CASE2] [-noCheck]
 | `relativeSizes` | 厚さを局所セル寸法（壁セルの最大寸法）に対する比で与える | true |
 | `minThickness` | 総厚がこれ未満の所は層を付けない | 0.05 |
 | `minNormalCos` | 節点法線と面法線の cos がこれ未満（鋭い凸エッジ）の所は層を付けない | 0.25 |
-| `maxNonOrtho` | 非直交角 [deg] がこれ（と元メッシュの最大値）を超えるセルは不正とみなす | 65 |
+| `maxNonOrtho` | 非直交角 [deg] がこれを超えるセルは不正とみなす（元からある内部面は元の値 + 2° まで許す） | 65 |
+| `wallNonOrthMargin` | 元の壁面（層の挿入後は内部面）に、境界面としての角度 + この値 [deg] まで許す。被覆率は上がるが 70° 超の面が出る | なし |
 | `maxThicknessSlope` | 壁に沿った単位長さあたりの総厚の変化の上限（層の端を徐々に細らせる） | 0.5 |
 | `cornerStretch` | 角の節点を T/cos 動かし、角でも層厚 T を保つ | true |
 | `nRings` / `nSmooth` | 内部節点を押し込む範囲（壁からの辺数）とラプラス平滑化の回数 | 6 / 60 |
@@ -142,6 +143,10 @@ python -m cutmesh.layers CASE [layerDict.json] [-out CASE2] [-noCheck]
    厚さは壁に沿って `maxThicknessSlope` で滑らかに変化させる。
 
 ログに、目標の厚さに達した壁節点・薄くなった節点・層なしの節点の割合が出ます。
+
+被覆率を制限しているのは主に、カットセルの重心が壁面の法線上からずれていることです（壁面の法線と
+「面中心 − セル重心」のなす角。元のメッシュでは境界面なので checkMesh の対象外）。層を挿入すると
+その面が内部面になり、角度がほぼそのまま非直交角になるため、`maxNonOrtho` を超える所で層が止まります。
 
 ## エッジ捕捉の計測
 

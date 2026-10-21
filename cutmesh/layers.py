@@ -42,7 +42,8 @@ DEFAULTS = {
     "nIter": 8,                  # validity iterations halving the thickness at bad cells
     "nCollapseIter": 60,         # then iterations collapsing the layers there
     "maxThicknessSlope": 0.5,    # thickness may change by this much per unit length along the wall
-    "maxNonOrtho": 65.0,         # [deg] cells at faces above this (and above the original mesh) are bad
+    "maxNonOrtho": 65.0,         # [deg] cells at faces above this (original faces: above their value + 2) are bad
+    "wallNonOrthMargin": None,   # [deg] wall faces may get this much worse than their value as boundary faces
     "cornerStretch": True,       # move corner points by T / cos so the layers keep thickness T
 }
 
@@ -61,7 +62,7 @@ def _nonorth(C, Cf, Sf, own, nei):
 
 def _cells_bad(P, nn, vv, own, nei, nC, max_no=None):
     """cells with non-positive volume or a non-positive face pyramid (checkMesh), or a
-    face more non-orthogonal than max_no"""
+    face more non-orthogonal than max_no (scalar or per internal face)"""
     ff = quality.FlatFaces((nn, vv))
     Cf, Sf = quality.face_geometry(P, ff)
     C, V = quality.cell_geometry(nC, own, nei, Cf, Sf)
@@ -278,7 +279,18 @@ def add_layers(mesh, spec=None, log=print):
         return Dall[band]
 
     C0, _ = quality.cell_geometry(nC, own, nei, Cf, Sf)
-    max_no = max(float(s["maxNonOrtho"]), float(_nonorth(C0, Cf, Sf, own, nei).max()) + 0.5) if nI else None
+    # non-orthogonality limit: maxNonOrtho, or for faces of the original mesh their own
+    # value + 2 deg (only what the layers make worse counts)
+    no0 = _nonorth(C0, Cf, Sf, own, nei) if nI else np.zeros(0)
+    lim0 = np.full(nF, float(s["maxNonOrtho"]))
+    lim0[:nI] = np.maximum(lim0[:nI], no0 + 2.0)
+    if s["wallNonOrthMargin"] is not None:
+        # wall faces become internal faces to the layers; their angle stays close to the
+        # angle between the face normal and (face centre - cell centre) of the cut cell
+        dw = Cf[Lf] - C0[own[Lf]]
+        cw = np.einsum("ij,ij->i", dw, nf_unit[Lf]) / np.maximum(np.linalg.norm(dw, axis=1), 1e-300)
+        lim0[Lf] = np.maximum(lim0[Lf], np.degrees(np.arccos(np.clip(cw, -1, 1)))
+                              + float(s["wallNonOrthMargin"]))
     del C0
 
     zone_names = list(cell_zones.keys())
@@ -426,6 +438,8 @@ def add_layers(mesh, spec=None, log=print):
         new_v = v_all[_gather_idx(fptr, order)]
         new_own = o_all[order]
         new_nei = ne_all[ii]
+        oi = old_all[ii]
+        max_no = np.where(oi >= 0, lim0[np.maximum(oi, 0)], float(s["maxNonOrtho"]))
         bad = _cells_bad(P, new_n, new_v, new_own, new_nei, nCn, max_no)
         nbad = int(bad.sum())
         log(f"  iteration {it}: {ne}/{nW} points extruded, {nA} faces with layers,"
