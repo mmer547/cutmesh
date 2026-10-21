@@ -274,9 +274,28 @@ def _chain_loops(segs):
                     break
                 v = nxt.pop()
                 guard += 1
-            if v == start and len(set(loop)) >= 3:
-                loops.append(loop)
+            if v == start:
+                loops.extend(_simple_loops(loop))
     return loops
+
+
+def _simple_loops(loop):
+    """Split a closed loop that passes a vertex more than once (two cap loops touching
+    at a vertex, chained into a figure eight) into simple loops; drop degenerate ones."""
+    out, stack, pos = [], [], {}
+    for v in loop:
+        i = pos.get(v)
+        if i is None:
+            pos[v] = len(stack)
+            stack.append(v)
+            continue
+        sub = stack[i:]                  # v ... back to v
+        out.append(sub)
+        for u in sub[1:]:
+            del pos[u]
+        del stack[i + 1:]
+    out.append(stack)
+    return [s for s in out if len(s) >= 3]
 
 
 def split_components(faces):

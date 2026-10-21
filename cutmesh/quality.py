@@ -22,17 +22,24 @@ class FlatFaces:
 
 
 def face_geometry(points, ff):
+    """Face centres and area vectors from a fan of triangles around the vertex average.
+    The triangles are weighted by their area projected on the face normal (signed, as in
+    current OpenFOAM): for a non-convex face, triangles folding back over the fan have
+    negative weight, so overlapping parts are not counted twice."""
     p = points[ff.v]
     est = np.add.reduceat(p, ff.ptr[:-1], axis=0) / ff.n[:, None]
     e = est[ff.fid]
     a, b = p, points[ff.v[ff.nxt]]
     c = a + b + e
     nvec = np.cross(b - a, e - a)
-    mag = np.linalg.norm(nvec, axis=1)
     sumN = np.add.reduceat(nvec, ff.ptr[:-1], axis=0)
-    sumA = np.add.reduceat(mag, ff.ptr[:-1])
-    sumAc = np.add.reduceat(mag[:, None] * c, ff.ptr[:-1], axis=0)
-    ctr = np.where(sumA[:, None] > 1e-300, sumAc / (3 * np.maximum(sumA, 1e-300)[:, None]), est)
+    magN = np.linalg.norm(sumN, axis=1)
+    nhat = sumN / np.maximum(magN, 1e-300)[:, None]
+    w = np.einsum("ij,ij->i", nvec, nhat[ff.fid])
+    sumA = np.add.reduceat(w, ff.ptr[:-1])
+    sumAc = np.add.reduceat(w[:, None] * c, ff.ptr[:-1], axis=0)
+    ok = (magN > 1e-300) & (sumA > 1e-300)
+    ctr = np.where(ok[:, None], sumAc / (3 * np.where(ok, sumA, 1.0)[:, None]), est)
     return ctr, 0.5 * sumN
 
 
