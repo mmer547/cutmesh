@@ -48,7 +48,7 @@ class Timer:
 
 
 def load_config(path):
-    with open(path) as f:
+    with open(path, encoding="utf-8-sig") as f:      # editors on Windows may add a BOM
         cfg = json.load(f)
     base = os.path.dirname(os.path.abspath(path))
     full = dict(DEFAULTS); full.update(cfg)
@@ -77,7 +77,9 @@ def build_zones(cfg):
         zones.append(dict(name=z["name"], geom=g, surfaceLevel=z.get("surfaceLevel", 0),
                           volumeLevel=z.get("volumeLevel", 0), origin=np.asarray(origin, float),
                           axis=np.asarray(axis, float), omega=z.get("omega", 0.0),
-                          nonRotatingPatches=z.get("nonRotatingPatches", [])))
+                          nonRotatingPatches=z.get("nonRotatingPatches", []),
+                          wallProximity=z.get("wallProximity"),
+                          conforming=bool(z.get("conforming", True))))
     return zones
 
 
@@ -331,6 +333,116 @@ def _tets_ok(P, faces, cf, cc, vmin):
     return True
 
 
+def _merged_face_ok(P, loop, parts, nrms, cmin, flat_tol=1e-3):
+    """the joined face keeps the geometry of its parts: every part normal is within the
+    angle of the joined normal (the pairwise test is transitive across a curved wall),
+    all part vertices lie in its plane, and the fan triangles from both the vertex mean
+    and the area-weighted centre are positive (a U-shaped loop has its centre in the notch)"""
+    Q = P[loop]
+    c0 = Q.mean(0)
+    tri = np.cross(Q - c0, np.roll(Q, -1, 0) - c0)
+    S = 0.5 * tri.sum(0)
+    a = float(np.linalg.norm(S))
+    if a <= 0:
+        return False
+    n = S / a
+    if any(float(np.dot(m, n)) <= cmin for m in nrms):
+        return False
+    vs = np.unique(np.concatenate([np.asarray(q, np.int64) for q in parts]))
+    if np.abs((P[vs] - c0) @ n).max() > flat_tol * np.sqrt(a):
+        return False
+    at = tri @ n
+    if np.any(at <= 1e-9 * a):
+        return False
+    cf = ((at[:, None]) * (Q + np.roll(Q, -1, 0) + c0)).sum(0) / (3.0 * at.sum())
+    at = np.cross(Q - cf, np.roll(Q, -1, 0) - cf) @ n
+    return bool(np.all(at > 1e-9 * a))
+
+
+def merge_coplanar_wall_faces(P, nn, vv, owner, nI, patches, max_angle=5.0):
+    """Join the boundary faces of one cell that lie in one plane, belong to one patch and
+    share edges into a single face.  Cut cells can carry a flat wall split into several
+    faces; a piece off to the side of a thin cell has its centre far off the cell
+    centre's normal, which becomes a large non-orthogonality once layers are added on top.
+    Returns (nn, vv, owner, patches, n_joined)."""
+    ptr = np.concatenate([[0], np.cumsum(nn)])
+    cmin = np.cos(np.radians(max_angle))
+    out_n = [nn[:nI]]; out_v = [vv[:ptr[nI]]]; out_o = [owner[:nI]]
+    new_p, start, joined = [], nI, 0
+    for p in patches:
+        f0, nf = p["startFace"], p["nFaces"]
+        fl, ol = [], []
+        f = f0
+        while f < f0 + nf:
+            g = f
+            while g < f0 + nf and owner[g] == owner[f]:
+                g += 1
+            polys = [vv[ptr[k]:ptr[k + 1]].tolist() for k in range(f, g)]
+            if len(polys) > 1:
+                nrm = []
+                for q in polys:
+                    Q = P[q]
+                    s = np.cross(Q - Q.mean(0), np.roll(Q, -1, 0) - Q.mean(0)).sum(0)
+                    nrm.append(s / max(np.linalg.norm(s), 1e-300))
+                par = list(range(len(polys)))
+
+                def fnd(i):
+                    while par[i] != i:
+                        par[i] = par[par[i]]; i = par[i]
+                    return i
+                emap = {}
+                for i, q in enumerate(polys):
+                    for k in range(len(q)):
+                        emap[(q[k], q[(k + 1) % len(q)])] = i
+                for (a, b), i in emap.items():
+                    j = emap.get((b, a))
+                    if j is not None and j != i and float(np.dot(nrm[i], nrm[j])) > cmin:
+                        par[fnd(i)] = fnd(j)
+                groups = {}
+                for i in range(len(polys)):
+                    groups.setdefault(fnd(i), []).append(i)
+                res = []
+                for ids in groups.values():
+                    if len(ids) == 1:
+                        res.append(polys[ids[0]]); continue
+                    de = {}
+                    for i in ids:
+                        q = polys[i]
+                        for k in range(len(q)):
+                            e = (q[k], q[(k + 1) % len(q)])
+                            de[e] = de.get(e, 0) + 1
+                    segs = [e for e in de if (e[1], e[0]) not in de]
+                    nxt = {}
+                    ok = True
+                    for a, b in segs:
+                        if a in nxt:
+                            ok = False; break
+                        nxt[a] = b
+                    loop = []
+                    a = a0 = None
+                    if ok and segs:
+                        a0 = segs[0][0]; a = a0
+                        for _ in range(len(segs) + 1):
+                            loop.append(a); a = nxt.get(a)
+                            if a is None or a == a0:
+                                break
+                    if (ok and a0 is not None and a == a0 and len(loop) == len(segs) and len(loop) >= 3
+                            and _merged_face_ok(P, loop, [polys[i] for i in ids], [nrm[i] for i in ids], cmin)):
+                        res.append(loop); joined += len(ids) - 1
+                    else:
+                        res.extend(polys[i] for i in ids)
+                polys = res
+            for q in polys:
+                fl.append(q); ol.append(owner[f])
+            f = g
+        out_n.append(np.array([len(q) for q in fl], np.int64))
+        out_v.append(np.array([v for q in fl for v in q], np.int64))
+        out_o.append(np.array(ol, np.int64))
+        new_p.append(dict(p, startFace=start, nFaces=len(fl)))
+        start += len(fl)
+    return (np.concatenate(out_n), np.concatenate(out_v), np.concatenate(out_o), new_p, joined)
+
+
 def _piece_bad(pos, comp, h):
     """some face does not clearly see the centroid (same test as the merging stage)"""
     Cf, Sf = [], []
@@ -536,6 +648,36 @@ def cut_with_fallback(ctx, items, shared_cap, hk, csize, max_iter=4):
     return res, nsharp, nfb
 
 
+def _thin_gap(dom, p, into, tg, eps, max_steps=512):
+    """wall samples p whose fluid along `into` ends (leaves the domain) within tg.
+    Marches by the distance to the STL - no wall can be closer, so none is skipped; a step
+    falls back to eps only where the walk grazes another wall, and there the inside test
+    still catches any wall thicker than eps.  Returns (mask, n_unresolved)."""
+    thin = np.zeros(len(p), bool)
+    t = np.full(len(p), eps)
+    act = np.nonzero(dom.inside(p + eps * into))[0]
+    for k in range(1, 9):
+        # cheap pass first: a fixed step that lands outside has found a wall for sure
+        out = ~dom.inside(p[act] + (k * tg / 8) * into[act])
+        thin[act[out]] = True
+        act = act[~out]
+    # one query settles most of the rest: no wall within the ball on the probe segment
+    r = 0.5 * (tg - eps)
+    _, d, _ = dom.closest(p[act] + (eps + r) * into[act])
+    act = act[d < r]
+    for _ in range(max_steps):
+        if not len(act):
+            break
+        q = p[act] + t[act, None] * into[act]
+        out = ~dom.inside(q)
+        thin[act[out]] = True
+        act = act[~out]; q = q[~out]
+        _, d, _ = dom.closest(q)
+        t[act] += np.maximum(d, eps)
+        act = act[t[act] < tg]
+    return thin, len(act)
+
+
 @paused_gc
 def generate(cfg, log=print):
     T = Timer(log)
@@ -553,6 +695,8 @@ def generate(cfg, log=print):
         c = r["cylinder"]
         regions.append((Cylinder(c["point1"], c["point2"], c["radius"]), int(r["level"])))
     Lmax = int(max([region_level.max(), flevel] + [max(z["surfaceLevel"], z["volumeLevel"]) for z in zones]
+                   + [int(z["wallProximity"]["level"]) for z in zones if z["wallProximity"]]
+                   + ([int(cfg["gapRefinement"]["level"])] if cfg.get("gapRefinement") else [])
                    + [lv for _, lv in regions]))
     hmin = h0 / 2 ** Lmax
     log(f"domain: {len(dom.tris)} triangles, regions {dom.names}")
@@ -569,6 +713,24 @@ def generate(cfg, log=print):
         if region_level[r] > 0:
             p, _ = dom.samples(h0 / 2 ** region_level[r] / 2, regions=[r])
             ssrc.append((cKDTree(p), int(region_level[r]), nbuf))
+    gr = cfg.get("gapRefinement")
+    if gr:
+        # fluid thinner than `thickness` (slot tips, narrow channels): refine its walls to `level`
+        lg = int(gr["level"])
+        tg = float(gr["thickness"])
+        p, ti = dom.samples(h0 / 2 ** lg)
+        T_ = dom.tris[ti]
+        nrm = np.cross(T_[:, 1] - T_[:, 0], T_[:, 2] - T_[:, 0])
+        nrm /= np.maximum(np.linalg.norm(nrm, axis=1), 1e-300)[:, None]
+        eps = 0.02 * h0 / 2 ** lg
+        into = np.where(dom.inside(p - eps * nrm)[:, None], -nrm, nrm)    # towards the fluid
+        thin, nun = _thin_gap(dom, p, into, tg, eps)
+        if nun:
+            log(f"gap refinement: {nun} wall samples not resolved (walk along a wall)")
+        p = p[thin]
+        if len(p):
+            ssrc.append((cKDTree(p), lg, nbuf))
+        log(f"gap refinement: {len(p)} wall samples where the fluid is thinner than {tg:g} -> level {lg}")
     seg = dom.feature_edges(cfg["featureAngle"])
     dom_feat = FeatureSet(seg, L=dom.L)
     if flevel > 0:
@@ -580,6 +742,18 @@ def generate(cfg, log=print):
         if z["surfaceLevel"] > 0:
             p, _ = z["geom"].samples(h0 / 2 ** z["surfaceLevel"] / 2)
             ssrc.append((cKDTree(p), z["surfaceLevel"], nbuf))
+        wp = z["wallProximity"]
+        if wp:
+            # the zone surface closer than `distance` to the STL: refine to `level` there only
+            # (an interface a fraction of a cell off a wall needs cells finer than the gap)
+            lw = int(wp["level"])
+            p, _ = z["geom"].samples(h0 / 2 ** lw / 2)
+            _, d, _ = dom.closest(p)
+            p = p[d < float(wp["distance"])]
+            if len(p):
+                ssrc.append((cKDTree(p), lw, int(wp.get("bufferLayers", nbuf))))
+            log(f"zone '{z['name']}': {len(p)} surface samples within {float(wp['distance']):g} of the STL"
+                f" -> level {lw}")
         if z["volumeLevel"] > 0:
             vsrc.append((getattr(z["geom"], "refine_sdf", z["geom"].sdf), z["volumeLevel"], nbuf))
     for g, lv in regions:
@@ -704,6 +878,9 @@ def generate(cfg, log=print):
                 pz = g.sdf(pts, exact_mask=nearz, far_value=g.L)
             else:
                 pz = g.sdf(pts)
+            if not z["conforming"]:           # cells are assigned by centre later: no snapping
+                zone_feats.append(None); on_feat_z.append(np.zeros(0, np.int64)); phi_z.append(pz)
+                continue
             if isinstance(g, Cylinder):
                 zf = FeatureSet(cylinder_features(g, hmin / 4), L=g.L)
             else:
@@ -726,7 +903,8 @@ def generate(cfg, log=print):
         # then slide along the coarse edge / within the coarse face onto a surface.  If the
         # constraint is nearly tangent to the surface, the node is projected freely
         # (hangingSnap "free") or treated as on-surface ("constrained").
-        geoms = [(dom, phi_d, None)] + [(z["geom"], phi_z[i], i) for i, z in enumerate(zones)]
+        geoms = [(dom, phi_d, None)] + [(z["geom"], phi_z[i], i) for i, z in enumerate(zones)
+                                         if z["conforming"]]
         nslide = nvirt = nfree = 0
         for hsz in sorted(set(hang_size[hanging].tolist()), reverse=True):
             idx = np.nonzero(hanging & (hang_size == hsz))[0]
@@ -919,6 +1097,8 @@ def generate(cfg, log=print):
 
     # ------------------------------------------------------------ pass 2..: zone cuts
     for zi, z in enumerate(zones):
+        if not z["conforming"]:
+            continue
         g = z["geom"]
         pz = np.zeros(len(P))
         pz[:n_orig] = phi_z[zi]
@@ -1187,10 +1367,10 @@ def generate(cfg, log=print):
             merged += 1
         elif cands:
             rejected += 1
-    proot = np.array([find(i) for i in range(nP)], np.int64)
     log(f"merged {merged} cut cells ({nsmall} small < {beta:g} of hex volume,"
         f" {len(small) - nsmall} non-convex); {rejected} left as they are"
         f" (no merge partner keeps the cell valid)")
+    proot = np.array([find(i) for i in range(nP)], np.int64)
 
     # ------------------------------------------------------------ invalid wall slivers
     # Small cells left unmerged whose face triangles do not all see the centre (e.g. a
@@ -1305,8 +1485,23 @@ def generate(cfg, log=print):
     neighbour = i_nei
     nn_, vv = gather(all_occ)
     del o_verts
+    if cfg.get("mergeWallFaces", True):
+        nn_, vv, owner, patches, nj = merge_coplanar_wall_faces(P, nn_, vv, owner, len(neighbour), patches)
+        log(f"wall faces: {nj} coplanar pieces joined to their neighbour in the same cell")
 
     # ------------------------------------------------------------ zones
+    if any(not z["conforming"] for z in zones):
+        # non-conforming zones (MRF only needs the cellZone): cells whose centre is inside
+        ffa = quality.FlatFaces((nn_, vv))
+        Cf_, Sf_ = quality.face_geometry(P, ffa)
+        Cc, _ = quality.cell_geometry(nC, owner, neighbour, Cf_, Sf_)
+        del ffa, Cf_, Sf_
+        for zi, z in enumerate(zones):
+            if not z["conforming"]:
+                ins = (cell_zone < 0) & (z["geom"].sdf(Cc) < 0)
+                cell_zone[ins] = zi
+                log(f"zone '{z['name']}' (non-conforming): {int(ins.sum())} cells with the centre inside")
+        del Cc
     cell_zones, face_zones = {}, {}
     for zi, z in enumerate(zones):
         cell_zones[z["name"]] = np.nonzero(cell_zone == zi)[0]
@@ -1332,9 +1527,23 @@ def run(config_path, case_dir=None, log=print, check=True):
     case_dir = case_dir or _rel(cfg, cfg.get("case", "."))
     R = generate(cfg, log)
     T = R["timer"]
-    if cfg.get("addLayers"):
+    if cfg.get("addLayers") is not None:             # {} = layers with the default settings
         from .layers import add_layers
-        R = add_layers(R, cfg["addLayers"], log=log)
+        # the interface of a non-conforming zone is a staircase between cells, not a
+        # surface: it must not constrain the layers; its faceZone is rebuilt afterwards
+        nc = [z["name"] for z in R["zones"] if not z["conforming"]]
+        fz = {k: v for k, v in R["face_zones"].items() if k[:-len("_interface")] not in nc}
+        R = add_layers(dict(R, face_zones=fz), cfg["addLayers"], log=log)
+        if nc:
+            nC = int(max(R["owner"].max(), R["neighbour"].max())) + 1
+            nI = len(R["neighbour"])
+            fz = dict(R["face_zones"])
+            for name in nc:
+                inz = np.zeros(nC, bool); inz[R["cell_zones"][name]] = True
+                zo, zn = inz[R["owner"][:nI]], inz[R["neighbour"]]
+                f = np.nonzero(zo != zn)[0]
+                fz[name + "_interface"] = (f, ~zo[f])        # flip: normal points into zone
+            R["face_zones"] = fz
         T("boundary layers")
     write_polymesh(case_dir, R["points"], R["faces"], R["owner"], R["neighbour"], R["patches"],
                    R["cell_zones"], R["face_zones"])

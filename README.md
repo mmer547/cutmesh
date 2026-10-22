@@ -17,15 +17,16 @@ STL（水密な閉曲面）の**内部**に八分木ベースの多面体メッ�
 ## 使い方
 
 ```bash
+pip install -e .                      # 初回のみ（オフライン環境では --no-build-isolation、要 wheel）
 cd examples/stirred_tank
 python3 make_geometry.py              # サンプルSTL（攪拌槽＋4枚パドル翼＋シャフト）
-python3 -m cutmesh meshDict.json      # → case/constant/polyMesh, case/constant/MRFProperties
+cutmesh meshDict.json                 # → case/constant/polyMesh, case/constant/MRFProperties
 # 断面図も欲しい場合
 python3 run.py                        # → slice_z.png, slice_y.png
 ```
 
-`python3 -m cutmesh <meshDict.json> [-case DIR] [-noCheck]`（プロジェクト直下から実行するか
-`PYTHONPATH` に `cutmesh` の親ディレクトリを通してください）
+`cutmesh <meshDict.json> [-case DIR] [-noCheck]`（`python -m cutmesh` でも同じ）。インストールしない
+場合はプロジェクト直下から実行するか、`PYTHONPATH` に `cutmesh` の親ディレクトリを通してください。
 
 ### 高速化（Rust 拡張、任意）
 
@@ -53,6 +54,7 @@ python -m unittest discover -s tests  # Rust と Python の結果の一致を確
 | `baseCellSize` | レベル0セルの辺長 [m] | 必須 |
 | `surfaceRefinement` | solid名→細分化レベル。`default` で既定値 | `{}` |
 | `featureLevel` | 特徴線近傍の細分化レベル（`null`=表面最大レベル） | `null` |
+| `gapRefinement` | `{"thickness": t, "level": L}`: 流体の厚みが `t` 未満の所（スロットの鋭い先端、狭い流路）の壁を `L` まで細分化。セルより薄い部分が切り落とされるのを抑える | なし |
 | `featureAngle` | 特徴線抽出の角度 [deg] | 30 |
 | `bufferLayers` | レベル遷移ごとのバッファセル数 | 2 |
 | `snapTolerance` | 節点スナップ距離（セル辺長比）。スライバー防止 | 0.3 |
@@ -78,6 +80,19 @@ python -m unittest discover -s tests  # Rust と Python の結果の一致を確
 
 STLで与える場合は `"cylinder"` の代わりに `"stl": "rotor.stl", "origin": [...], "axis": [...]`
 （`examples/stirred_tank/meshDict_stlRotor.json`）。複数ゾーン可（重ならないこと）。
+
+`"wallProximity": { "distance": 0.001, "level": 4 }`（任意）: ゾーン面のうちSTLから `distance` 以内の
+部分だけを `level` まで細分化します。界面が壁から1セル未満しか離れていない（ローター外周すれすれに
+MRF円筒を置く）場合、隙間より細かいセルが必要ですが、`surfaceLevel` を上げるとゾーン面全体が細かく
+なってセル数が大きく増えます。`wallProximity` なら必要な所だけで済みます。
+`"bufferLayers": 1` を加えると、この細分化の遷移層だけを薄くしてさらにセル数を減らせます。
+
+`"conforming": false`（任意）: 界面をメッシュに沿わせず、セル中心が円筒内にあるセルを cellZone にします
+（snappyHexMesh の MRF と同じ考え方。MRF は cellZone だけを使う）。界面が狭い隙間の中にあって円筒に沿った
+界面を作れない場合に使います。AMI（スライディングメッシュ）には使えません。この界面は境界層の拘束面に
+しません（層の追加後に cellZone から faceZone を作り直します）。`"addLayers": {}` は既定値で層を追加します。
+狭い隙間（壁間が壁セル寸法程度）がある形状では、既定の `finalLayerThickness` 0.3（総厚は壁セルの約0.76倍）
+だと層が薄められがちです。0.15（約0.38倍）程度にすると目標厚さに達する節点が大きく増えます。
 
 ## アルゴリズム
 
@@ -136,6 +151,8 @@ STLで与える場合は `"cylinder"` の代わりに `"stl": "rotor.stl", "orig
 ```bash
 # meshDict.json に "addLayers": {...} を書くと生成後に自動で追加
 python -m cutmesh meshDict.json
+# 例: examples/stirred_tank/meshDict_layers.json（3層、全壁）→ case_layers（約16万セル、壁節点の82%が目標厚さ）
+cutmesh examples/stirred_tank/meshDict_layers.json
 # 既存ケースに追加（ASCII polyMesh。cutmesh 以外のメッシュでも可）
 python -m cutmesh.layers CASE [layerDict.json] [-out CASE2] [-noCheck]
 ```
