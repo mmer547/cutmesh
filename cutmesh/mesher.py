@@ -333,6 +333,32 @@ def _tets_ok(P, faces, cf, cc, vmin):
     return True
 
 
+def _merged_face_ok(P, loop, parts, nrms, cmin, flat_tol=1e-3):
+    """the joined face keeps the geometry of its parts: every part normal is within the
+    angle of the joined normal (the pairwise test is transitive across a curved wall),
+    all part vertices lie in its plane, and the fan triangles from both the vertex mean
+    and the area-weighted centre are positive (a U-shaped loop has its centre in the notch)"""
+    Q = P[loop]
+    c0 = Q.mean(0)
+    tri = np.cross(Q - c0, np.roll(Q, -1, 0) - c0)
+    S = 0.5 * tri.sum(0)
+    a = float(np.linalg.norm(S))
+    if a <= 0:
+        return False
+    n = S / a
+    if any(float(np.dot(m, n)) <= cmin for m in nrms):
+        return False
+    vs = np.unique(np.concatenate([np.asarray(q, np.int64) for q in parts]))
+    if np.abs((P[vs] - c0) @ n).max() > flat_tol * np.sqrt(a):
+        return False
+    at = tri @ n
+    if np.any(at <= 1e-9 * a):
+        return False
+    cf = ((at[:, None]) * (Q + np.roll(Q, -1, 0) + c0)).sum(0) / (3.0 * at.sum())
+    at = np.cross(Q - cf, np.roll(Q, -1, 0) - cf) @ n
+    return bool(np.all(at > 1e-9 * a))
+
+
 def merge_coplanar_wall_faces(P, nn, vv, owner, nI, patches, max_angle=5.0):
     """Join the boundary faces of one cell that lie in one plane, belong to one patch and
     share edges into a single face.  Cut cells can carry a flat wall split into several
@@ -400,7 +426,8 @@ def merge_coplanar_wall_faces(P, nn, vv, owner, nI, patches, max_angle=5.0):
                             loop.append(a); a = nxt.get(a)
                             if a is None or a == a0:
                                 break
-                    if ok and a0 is not None and a == a0 and len(loop) == len(segs) and len(loop) >= 3:
+                    if (ok and a0 is not None and a == a0 and len(loop) == len(segs) and len(loop) >= 3
+                            and _merged_face_ok(P, loop, [polys[i] for i in ids], [nrm[i] for i in ids], cmin)):
                         res.append(loop); joined += len(ids) - 1
                     else:
                         res.extend(polys[i] for i in ids)
@@ -621,6 +648,36 @@ def cut_with_fallback(ctx, items, shared_cap, hk, csize, max_iter=4):
     return res, nsharp, nfb
 
 
+def _thin_gap(dom, p, into, tg, eps, max_steps=512):
+    """wall samples p whose fluid along `into` ends (leaves the domain) within tg.
+    Marches by the distance to the STL - no wall can be closer, so none is skipped; a step
+    falls back to eps only where the walk grazes another wall, and there the inside test
+    still catches any wall thicker than eps.  Returns (mask, n_unresolved)."""
+    thin = np.zeros(len(p), bool)
+    t = np.full(len(p), eps)
+    act = np.nonzero(dom.inside(p + eps * into))[0]
+    for k in range(1, 9):
+        # cheap pass first: a fixed step that lands outside has found a wall for sure
+        out = ~dom.inside(p[act] + (k * tg / 8) * into[act])
+        thin[act[out]] = True
+        act = act[~out]
+    # one query settles most of the rest: no wall within the ball on the probe segment
+    r = 0.5 * (tg - eps)
+    _, d, _ = dom.closest(p[act] + (eps + r) * into[act])
+    act = act[d < r]
+    for _ in range(max_steps):
+        if not len(act):
+            break
+        q = p[act] + t[act, None] * into[act]
+        out = ~dom.inside(q)
+        thin[act[out]] = True
+        act = act[~out]; q = q[~out]
+        _, d, _ = dom.closest(q)
+        t[act] += np.maximum(d, eps)
+        act = act[t[act] < tg]
+    return thin, len(act)
+
+
 @paused_gc
 def generate(cfg, log=print):
     T = Timer(log)
@@ -667,14 +724,9 @@ def generate(cfg, log=print):
         nrm /= np.maximum(np.linalg.norm(nrm, axis=1), 1e-300)[:, None]
         eps = 0.02 * h0 / 2 ** lg
         into = np.where(dom.inside(p - eps * nrm)[:, None], -nrm, nrm)    # towards the fluid
-        thin = np.zeros(len(p), bool)
-        open_ = dom.inside(p + eps * into)
-        nst = 8
-        for k in range(1, nst + 1):
-            q = p + (k * tg / nst) * into
-            out = ~dom.inside(q)
-            thin |= open_ & out
-            open_ &= ~out
+        thin, nun = _thin_gap(dom, p, into, tg, eps)
+        if nun:
+            log(f"gap refinement: {nun} wall samples not resolved (walk along a wall)")
         p = p[thin]
         if len(p):
             ssrc.append((cKDTree(p), lg, nbuf))
