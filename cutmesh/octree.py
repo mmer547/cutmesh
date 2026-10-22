@@ -1,5 +1,9 @@
 """Linear octree on a Cartesian root grid, 2:1 balanced (face/edge/vertex neighbours),
 converted to conformal polyhedral cells (hanging nodes become extra polygon vertices).
+
+The octree lives in integer index space.  Subclasses may map the index space to
+physical space differently (map_lattice) and make axes periodic (e.g. the angle of a
+cylindrical block); see cylbase.py.
 """
 import itertools
 import numpy as np
@@ -19,11 +23,12 @@ HEX_FACES = [
 
 
 class Octree:
-    def __init__(self, origin, h0, n, max_level):
+    def __init__(self, origin, h0, n, max_level, periodic=(False, False, False)):
         self.x0 = np.asarray(origin, float)
         self.h0 = float(h0)
         self.n = np.asarray(n, np.int64)
         self.Lmax = int(max_level)
+        self.periodic = np.asarray(periodic, bool)
         g = np.indices(self.n).reshape(3, -1).T
         self.ijk = g.astype(np.int64)
         self.lev = np.zeros(len(g), np.int64)
@@ -37,6 +42,27 @@ class Octree:
         ijk = self.ijk if idx is None else self.ijk[idx]
         hh = self.h0 / 2.0 ** lev
         return self.x0 + (ijk + 0.5) * hh[:, None]
+
+    def _wrap(self, l, q):
+        """indices of periodic axes taken modulo the grid size at level l"""
+        if not self.periodic.any():
+            return q
+        q = q.copy()
+        N = self.n * (1 << l)
+        for a in np.nonzero(self.periodic)[0]:
+            q[..., a] %= N[a]
+        return q
+
+    # --- mapping to physical space (Cartesian here; overridden by mapped blocks)
+    def map_lattice(self, lat):
+        """physical points of lattice coordinates in finest units (level Lmax)"""
+        return self.x0 + lat * (self.h0 / (1 << self.Lmax))
+
+    def leaf_sizes(self):
+        return self.h0 / 2.0 ** self.lev
+
+    def leaf_volumes(self):
+        return self.leaf_sizes() ** 3
 
     def _key(self, l, q):
         N = self.n * (1 << l)
@@ -66,6 +92,7 @@ class Octree:
         """Leaf of level <= l that contains the level-l cell q (or -1: out of box / finer)."""
         out = np.full(len(q), -1, np.int64)
         N = self.n * (1 << l)
+        q = self._wrap(l, q)
         inb = np.all((q >= 0) & (q < N), axis=1)
         todo = np.nonzero(inb)[0]
         for c in range(l, -1, -1):
@@ -154,13 +181,14 @@ class Octree:
         NV = self.n * (1 << Lmax) + 1
 
         def vkey(x):
+            x = self._wrap(Lmax, x)            # periodic axes: N is the same vertex as 0
             return (x[..., 0] * NV[1] + x[..., 1]) * NV[2] + x[..., 2]
 
         corners = base[:, None, :] + CHILD[None] * S[:, None, None]
         ck = vkey(corners).ravel()
         ukeys = np.unique(ck)
         pts_lat = np.stack([ukeys // (NV[1] * NV[2]), (ukeys // NV[2]) % NV[1], ukeys % NV[2]], 1)
-        points = self.x0 + pts_lat * (self.h0 / (1 << Lmax))
+        points = self.map_lattice(pts_lat)
 
         def vid_of(keys):
             p = np.clip(np.searchsorted(ukeys, keys), 0, len(ukeys) - 1)
@@ -211,7 +239,7 @@ class Octree:
                 if len(sel) == 0:
                     continue
                 N = self.n * (1 << l)
-                q = nb[sel]
+                q = self._wrap(l, nb[sel])
                 inb = np.all((q >= 0) & (q < N), axis=1)
                 Nl_in[sel] = inb
                 cov[sel] = self.find_covering(l, q)
@@ -266,6 +294,6 @@ class Octree:
         cptr = np.searchsorted(qc, np.arange(nleaf + 1))
         return dict(points=points, hanging=hanging, hang_par=hang_par, hang_size=hang_size, face_cell=qc, face_key=fkey,
                     fptr=fptr, fverts=fverts, cell_fptr=cptr,
-                    nface_keys=int(fkey.max()) + 1, cell_size=self.h0 / (1 << self.lev),
-                    cell_level=self.lev.copy(),
-                    corner_vid=vid_of(vkey(corners)))
+                    nface_keys=int(fkey.max()) + 1, cell_size=self.leaf_sizes(),
+                    cell_volume=self.leaf_volumes(), cell_level=self.lev.copy(),
+                    corner_vid=vid_of(vkey(corners)), points_lattice=pts_lat)
