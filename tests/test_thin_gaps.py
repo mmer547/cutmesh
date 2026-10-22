@@ -1,0 +1,100 @@
+"""Fluid gaps thinner than a cell must stay open (fillThinGaps, snap guard in mesher.py).
+
+Two chambers joined by a slot thinner than the cell size:
+- between: the slot lies between two vertex planes, so no cell corner is in the fluid
+  and the cells along the slot would be dropped (fixed by splitting them)
+- centred: a vertex plane runs through the middle of the slot, close enough to both
+  walls to be snapped, which would drop the cells too (fixed by the snap guard)
+
+python -m unittest discover -s tests
+"""
+import json
+import os
+import sys
+import tempfile
+import unittest
+
+import numpy as np
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+
+from cutmesh import quality                                   # noqa: E402
+from cutmesh.geometry import write_stl_ascii                  # noqa: E402
+from cutmesh.mesher import load_config, generate              # noqa: E402
+
+
+def voxel_stl(path, filled, v):
+    """outward boundary of the filled voxels as triangles"""
+    F = np.pad(filled, 1)
+    tris = []
+    for ax in range(3):
+        a, b = [d for d in range(3) if d != ax]
+        for sgn in (-1, 1):
+            face = F & ~np.roll(F, -sgn, axis=ax)
+            for i, j, k in np.argwhere(face[1:-1, 1:-1, 1:-1]):
+                p = np.array([i, j, k], float)
+                if sgn > 0:
+                    p[ax] += 1
+                q = [p.copy() for _ in range(4)]
+                q[1][a] += 1; q[2][a] += 1; q[2][b] += 1; q[3][b] += 1
+                if (sgn > 0) != ((a, b) in ((0, 1), (1, 2), (2, 0))):
+                    q = q[::-1]
+                Q = np.array(q) * v
+                tris += [[Q[0], Q[1], Q[2]], [Q[0], Q[2], Q[3]]]
+    write_stl_ascii(path, [("walls", np.array(tris))])
+
+
+def components(own, nei, nC):
+    """number of face-connected groups of cells"""
+    parent = np.arange(nC)
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+    for a, b in zip(own[:len(nei)].tolist(), nei.tolist()):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+    return len({find(i) for i in range(nC)})
+
+
+class ThinGaps(unittest.TestCase):
+    h = 0.01
+
+    def mesh(self, y_centre, thickness, fill):
+        h, v = self.h, self.h / 10
+        G = np.zeros((60, 60, 90), bool)
+        G[:, :, 0:30] = True                    # chamber z in [0, 3h]
+        G[:, :, 60:90] = True                   # chamber z in [6h, 9h]
+        y0, y1 = int(round((y_centre - thickness / 2) / v)), int(round((y_centre + thickness / 2) / v))
+        G[10:50, y0:y1, 30:60] = True           # slot
+        with tempfile.TemporaryDirectory() as d:
+            voxel_stl(os.path.join(d, "s.stl"), G, v)
+            json.dump({"domain": "s.stl", "baseCellSize": h, "surfaceRefinement": {"default": 0},
+                       "featureLevel": 0, "fillThinGaps": fill}, open(os.path.join(d, "m.json"), "w"))
+            R = generate(load_config(os.path.join(d, "m.json")), log=lambda s: None)
+        own, nei = R["owner"], R["neighbour"]
+        nC = int(max(own.max(), nei.max())) + 1
+        q = quality.check(R["points"], R["faces"], own, nei, log=lambda s: None)
+        self.assertEqual(q["nNegVol"], 0)
+        self.assertEqual(q["nBadPyramids"], 0)
+        self.assertEqual(q["openCellEdges"], 0)
+        return components(own, nei, nC), q["totalVol"] / (G.sum() * v ** 3)
+
+    def test_slot_between_vertex_planes(self):
+        ncomp, vr = self.mesh(2.5 * self.h, 0.4 * self.h, fill=2)
+        self.assertEqual(ncomp, 1)
+        self.assertAlmostEqual(vr, 1.0, delta=0.01)
+        ncomp, _ = self.mesh(2.5 * self.h, 0.4 * self.h, fill=0)
+        self.assertEqual(ncomp, 2)              # the slot is lost without the splitting
+
+    def test_slot_centred_on_vertex_plane(self):
+        ncomp, vr = self.mesh(3.0 * self.h, 0.5 * self.h, fill=0)
+        self.assertEqual(ncomp, 1)
+        self.assertAlmostEqual(vr, 1.0, delta=0.01)
+
+
+if __name__ == "__main__":
+    unittest.main()
