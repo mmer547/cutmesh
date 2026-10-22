@@ -9,6 +9,7 @@ from scipy.spatial import cKDTree
 from .geometry import (Surface, Cylinder, SurfaceZone, FeatureSet, read_stl,
                        sample_segments, cylinder_features, paused_gc, _core)
 from .octree import Octree
+from .cylbase import CylindricalBase
 from .cutcell import CutContext, split_components
 from .polymesh import write_polymesh
 from . import quality
@@ -701,6 +702,15 @@ def generate(cfg, log=print):
     hmin = h0 / 2 ** Lmax
     log(f"domain: {len(dom.tris)} triangles, regions {dom.names}")
     log(f"base cell {h0:g}, max level {Lmax} (smallest cell {hmin:g})")
+    bm = cfg.get("baseMesh") or {}
+    cyl = None
+    if bm.get("type", "cartesian") == "cylindrical":
+        cyl = CylindricalBase(bm, dom, h0, hmin, Lmax, log=log)
+        if cyl.min_base_size < hmin:
+            hmin = cyl.min_base_size
+            log(f"smallest cell of the cylindrical base {hmin:g}")
+    elif bm.get("type", "cartesian") != "cartesian":
+        raise ValueError(f"baseMesh type {bm.get('type')!r}: 'cartesian' or 'cylindrical'")
 
     # ------------------------------------------------------------ search structures
     dom.build_search(2 * hmin)
@@ -761,19 +771,23 @@ def generate(cfg, log=print):
     T("geometry / search structures")
 
     # ------------------------------------------------------------ octree
-    pad = int(cfg["padding"])
-    lo = dom.bbmin - pad * h0
-    n = np.ceil((dom.bbmax - dom.bbmin) / h0 + 2 * pad).astype(int)
-    oc = Octree(lo, h0, n, Lmax)
-    log(f"root grid {n.tolist()}")
     def keep_fn(c, hd):
         out = ~dom.inside(c)
-        far = dom.approx_distance(c, upper=hd + dom._rmax) > hd + dom._rmax
+        far = dom.approx_distance(c, upper=float(np.max(hd)) + dom._rmax) > hd + dom._rmax
         return ~(out & far)
-    oc.refine(ssrc, vsrc, log=lambda s: log(s), keep_fn=keep_fn)
+    if cyl is not None:
+        oc = cyl
+        oc.refine(ssrc, vsrc, log=lambda s: log(s), keep_fn=keep_fn)
+    else:
+        pad = int(cfg["padding"])
+        lo = dom.bbmin - pad * h0
+        n = np.ceil((dom.bbmax - dom.bbmin) / h0 + 2 * pad).astype(int)
+        oc = Octree(lo, h0, n, Lmax)
+        log(f"root grid {n.tolist()}")
+        oc.refine(ssrc, vsrc, log=lambda s: log(s), keep_fn=keep_fn)
     T(f"octree ({len(oc.lev)} leaves)")
     M = oc.build_cells()
-    nleaf = len(oc.lev)
+    nleaf = len(M["cell_size"])
     leaves_total = nleaf
     pts = M["points"]
     hanging = M["hanging"]
@@ -784,9 +798,16 @@ def generate(cfg, log=print):
     f_cell, f_key, fptr, fverts, cptr = (M["face_cell"], M["face_key"], M["fptr"],
                                          M["fverts"], M["cell_fptr"])
     fn = np.diff(fptr)
+    cvol = M["cell_volume"]
     vh_min = np.full(len(pts), np.inf); vh_max = np.zeros(len(pts))
     np.minimum.at(vh_min, cvid.ravel(), np.repeat(csize, 8))
     np.maximum.at(vh_max, cvid.ravel(), np.repeat(csize, 8))
+    lone = ~np.isfinite(vh_min)       # not a cell corner (vertices added at block interfaces)
+    if lone.any():
+        fc_ = np.repeat(csize[f_cell], fn)
+        m_ = lone[fverts]
+        np.minimum.at(vh_min, fverts[m_], fc_[m_])
+        np.maximum.at(vh_max, fverts[m_], fc_[m_])
     del cvid, M
     T(f"polyhedral cells ({len(pts)} points)")
 
@@ -1230,7 +1251,7 @@ def generate(cfg, log=print):
         del ffp, Cf, Sf, ref, est, pv, cc, selfpyr, badf
     else:
         bad_piece = np.zeros(0, bool)
-    hexvol = np.array([csize[pc[1]] ** 3 for pc in pieces])
+    hexvol = np.array([cvol[pc[1]] for pc in pieces])
     ratio = vol / np.maximum(hexvol, 1e-300)
     zone_of = [pc[2] for pc in pieces]
     parent = list(range(nP))           # piece index -> piece index, or nP + bulk leaf
