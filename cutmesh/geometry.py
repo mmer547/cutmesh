@@ -269,6 +269,22 @@ class Surface:
             cp[s0:s0 + chunk] = c1; d[s0:s0 + chunk] = d1; sid[s0:s0 + chunk] = s1
         return cp, d, self._sub_parent[sid]
 
+    def segment_hits(self, a, b, samples=64):
+        """Crossings of the segments a[i] -> b[i] with the surface, sorted along each:
+        (segment index, parameter t, triangle id).  Exact with the Rust extension; the
+        fallback samples the segments (crossings closer than 1/samples merge)."""
+        a = np.ascontiguousarray(np.atleast_2d(a), float)
+        b = np.ascontiguousarray(np.atleast_2d(b), float)
+        if self._rs is not None:
+            return self._rs.segment_hits(a, b)
+        ts = (np.arange(samples + 1)) / samples
+        Q = a[:, None, :] + ts[None, :, None] * (b - a)[:, None, :]
+        ins = self.inside(Q.reshape(-1, 3)).reshape(len(a), samples + 1)
+        sg, k = np.nonzero(ins[:, 1:] != ins[:, :-1])
+        mid = 0.5 * (Q[sg, k] + Q[sg, k + 1])
+        _, _, tid = self.closest(mid)
+        return sg.astype(np.int64), (k + 0.5) / samples, tid.astype(np.int64)
+
     def approx_distance(self, p, upper=np.inf):
         d, _ = self._kd.query(p, distance_upper_bound=upper, workers=-1)
         return d

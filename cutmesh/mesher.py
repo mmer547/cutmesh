@@ -14,6 +14,7 @@ from .cylbase import CylindricalBase
 from .cutcell import CutContext, split_components
 from .polymesh import write_polymesh
 from . import quality
+from . import diagnose
 
 
 DEFAULTS = {
@@ -27,6 +28,8 @@ DEFAULTS = {
     "mergeRatio": 0.25,         # merge cut cells smaller than this fraction of their hex
     "hangingSnap": "free",      # hanging nodes that cannot slide onto a surface: "free" projection or "constrained" (treated as on-surface)
     "fillThinGaps": 2,          # passes splitting cells with fluid inside but no fluid corner (Cartesian base; 0 = off)
+    "checkLeaks": True,         # check the final mesh for fluid joined through a solid wall
+    "fillThinWalls": 3,         # passes splitting cells with solid inside but no solid corner (Cartesian base; 0 = off)
     "patchTypes": {},
     "rotatingZones": [],
     "writeMRFProperties": True,
@@ -651,6 +654,40 @@ def cut_with_fallback(ctx, items, shared_cap, hk, csize, max_iter=4):
     return res, nsharp, nfb
 
 
+def _thin_wall_cells(dom, c, h):
+    """Cells (centres c, sizes h) with no corner in the solid that contain a solid wall:
+    on one of 13 lines through the cell the surface is entered and left again with
+    opposite normals (the two faces of a wall; a convex edge of the solid, poking into
+    the cell, has its face normals at 90 degrees or less and does not count)."""
+    D = np.array([d for d in itertools.product((-1, 0, 1), repeat=3)
+                  if any(d) and next(x for x in d if x) > 0], float)            # 13
+    corners = np.array(list(itertools.product((-1, 1), repeat=3)), float)
+    sd = dom.sdf((c[:, None, :] + 0.5 * h[:, None, None] * corners[None]).reshape(-1, 3))
+    no_solid = ~(sd.reshape(len(c), 8) > 1e-3 * h[:, None]).any(1)
+    idx = np.nonzero(no_solid)[0]
+    out = np.zeros(len(c), bool)
+    if not len(idx):
+        return out
+    A = (c[idx][:, None, :] - 0.5 * h[idx][:, None, None] * D[None]).reshape(-1, 3)
+    B = (c[idx][:, None, :] + 0.5 * h[idx][:, None, None] * D[None]).reshape(-1, 3)
+    T = dom.tris
+    tn = np.cross(T[:, 1] - T[:, 0], T[:, 2] - T[:, 0])
+    tn /= np.maximum(np.linalg.norm(tn, axis=1), 1e-300)[:, None]
+    seg, t, tri = dom.segment_hits(A, B)
+    if not len(seg):
+        return out
+    n = tn[tri]
+    enter = np.einsum("ij,ij->i", n, (B - A)[seg]) > 0       # outward normal along the line
+    # drop repeated crossings (a line through a shared edge or vertex hits two triangles)
+    keep = np.ones(len(seg), bool)
+    keep[1:] = ~((seg[1:] == seg[:-1]) & (np.abs(t[1:] - t[:-1]) < 1e-9) & (enter[1:] == enter[:-1]))
+    seg, n, enter = seg[keep], n[keep], enter[keep]
+    pair = (seg[1:] == seg[:-1]) & enter[:-1] & ~enter[1:] & (np.einsum("ij,ij->i", n[:-1], n[1:]) < -0.5)
+    hit = np.unique(seg[:-1][pair]) // len(D)
+    out[idx[hit]] = True
+    return out
+
+
 def _thin_gap(dom, p, into, tg, eps, max_steps=512):
     """wall samples p whose fluid along `into` ends (leaves the domain) within tg.
     Marches by the distance to the STL - no wall can be closer, so none is skipped; a step
@@ -784,32 +821,42 @@ def generate(cfg, log=print):
         pad = int(cfg["padding"])
         lo = dom.bbmin - pad * h0
         n = np.ceil((dom.bbmax - dom.bbmin) / h0 + 2 * pad).astype(int)
-        nfill = int(cfg["fillThinGaps"])
-        oc = Octree(lo, h0, n, Lmax + (1 if nfill else 0))
+        nfill_g = int(cfg["fillThinGaps"])
+        nfill_w = int(cfg["fillThinWalls"])
+        oc = Octree(lo, h0, n, Lmax + max(1 if nfill_g else 0, nfill_w))
         log(f"root grid {n.tolist()}")
         oc.refine(ssrc, vsrc, log=lambda s: log(s), keep_fn=keep_fn)
-        for _ in range(nfill):
-            # fluid thinner than the cell between its corners (a gap passing between the
-            # vertex planes): no corner is in the fluid, so the cut would drop the cell and
-            # the gap would be closed there.  Split such cells (one level beyond Lmax).
+        sgn = np.array(list(itertools.product((-1, 0, 1), repeat=3)), float)   # 27 points
+        corner = np.all(sgn != 0, axis=1)
+        for it in range(max(nfill_g, nfill_w)):
             c = oc.centers(); hl = oc.leaf_sizes()
-            cand = np.nonzero((oc.lev < oc.Lmax)
-                              & (dom.approx_distance(c, upper=float(hl.max()) + dom._rmax)
-                                 < 0.9 * hl + dom._rmax))[0]
-            if not len(cand):
+            near = (oc.lev < oc.Lmax) & (dom.approx_distance(c, upper=float(hl.max()) + dom._rmax)
+                                         < 0.9 * hl + dom._rmax)
+            mark = np.zeros(len(oc.lev), bool)
+            nh = nw = 0
+            if it < nfill_g:
+                # fluid thinner than the cell between its corners (a gap passing between
+                # the vertex planes): no corner is in the fluid, so the cut would drop the
+                # cell and close the gap there.  One level beyond Lmax.
+                cand = np.nonzero(near & (oc.lev <= Lmax))[0]
+                q = (c[cand][:, None, :] + 0.5 * hl[cand][:, None, None] * sgn[None]).reshape(-1, 3)
+                ins = dom.inside(q).reshape(len(cand), 27)
+                hole = ~ins[:, corner].any(1) & ins[:, ~corner].any(1)
+                mark[cand[hole]] = True
+                nh = int(hole.sum())
+            if it < nfill_w:
+                # a solid wall inside the cell with no corner in the solid vanishes: the
+                # fluid on both sides joins (a bypass).  Split until a corner lands in it.
+                cand = np.nonzero(near)[0]
+                wall = _thin_wall_cells(dom, c[cand], hl[cand])
+                mark[cand[wall]] = True
+                nw = int(wall.sum())
+            if not mark.any():
                 break
-            sgn = np.array(list(itertools.product((-1, 0, 1), repeat=3)), float)   # 27 points
-            corner = np.all(sgn != 0, axis=1)
-            cc_, hh_ = c[cand], hl[cand]
-            q = (cc_[:, None, :] + 0.5 * hh_[:, None, None] * sgn[None]).reshape(-1, 3)
-            ins = dom.inside(q).reshape(len(cand), 27)
-            hole = ~ins[:, corner].any(1) & ins[:, ~corner].any(1)
-            if not hole.any():
-                break
-            mark = np.zeros(len(oc.lev), bool); mark[cand[hole]] = True
             oc.split(mark)
             oc.balance(lambda s: None)
-            log(f"thin gaps: {int(hole.sum())} cells with fluid inside but no fluid corner split")
+            log(f"thin gaps / walls: split {nh} cells with fluid inside but no fluid corner,"
+                f" {nw} with a solid wall inside but no solid corner")
     T(f"octree ({len(oc.lev)} leaves)")
     M = oc.build_cells()
     nleaf = len(M["cell_size"])
@@ -908,36 +955,38 @@ def generate(cfg, log=print):
         # ---- 1) regular (non-hanging) vertices: features, then surfaces
         on_feat_d = snap_features(dom_feat, phi_d, "STL")
         snap = movable & ~snapped & (np.abs(phi_d) < tol_v) & (phi_d != 0)
-        # a cut cell must keep a vertex in the fluid: in a gap about one cell wide the
-        # fluid vertices of a cell can all lie near a wall; snapping them all onto it
-        # would leave the cell without fluid and close the gap there
-        neg = phi_d < 0
+        # A cut cell must keep a vertex on either side.  In a fluid gap (a solid wall)
+        # about one cell thick the cell's vertices on that side can all lie near the two
+        # walls; snapping them all would leave the cell without fluid (the gap closes) or
+        # without solid (the wall vanishes: a bypass).  There they go to the middle instead.
         occ_leaf = np.repeat(f_cell, fn)
-        nneg = np.bincount(occ_leaf, neg[fverts], nleaf)
-        nkeep = np.bincount(occ_leaf, (neg & ~snap)[fverts], nleaf)
-        npos = np.bincount(occ_leaf, (phi_d > 0)[fverts], nleaf)
-        lost = (nneg > 0) & (nkeep == 0) & (npos > 0)
-        if lost.any():
+        for side, label in ((-1.0, "fluid vertices to the middle of thin gaps"),
+                            (1.0, "solid vertices to the middle of thin walls")):
+            on = side * phi_d > 0
+            nside = np.bincount(occ_leaf, on[fverts], nleaf)
+            nkeep = np.bincount(occ_leaf, (on & ~snap)[fverts], nleaf)
+            nother = np.bincount(occ_leaf, (-side * phi_d > 0)[fverts], nleaf)
+            lost = (nside > 0) & (nkeep == 0) & (nother > 0)
+            if not lost.any():
+                continue
             occ = lost[occ_leaf]
-            kv = np.unique(fverts[occ][neg[fverts[occ]]])
-            # only in a thin gap (the opposite wall within 1.5 cells across the fluid);
-            # elsewhere the snap removes a sliver as intended
+            kv = np.unique(fverts[occ][on[fverts[occ]]])
             cpk, dk, _ = dom.closest(pts[kv])
-            # vertices already on the wall (phi a rounding error below 0) carry no fluid:
-            # dropping their cell is right, and they give no direction to probe along
+            # vertices already on the wall (phi a rounding error off zero) carry nothing:
+            # dropping that side of the cell is right, and they give no direction
             off = dk > 0.01 * vh_min[kv]
             kv, cpk, dk = kv[off], cpk[off], dk[off]
             dirk = (pts[kv] - cpk) / np.maximum(dk, 1e-300)[:, None]
-            # distance from the near wall (cpk) to the opposite wall along dirk
+            # thickness of this side from the near wall (cpk) to the opposite one, if
+            # within 1.5 cells; elsewhere the snap removes a sliver as intended
             width = np.full(len(kv), np.inf)
-            for s in np.linspace(0.05, 1.5, 30):
-                q = cpk + (s * vh_min[kv])[:, None] * dirk
-                hit = np.isinf(width) & ~dom.inside(q)
-                width[hit] = s * vh_min[kv][hit]
+            for t in np.linspace(0.05, 1.5, 30):
+                q = cpk + (t * vh_min[kv])[:, None] * dirk
+                hit = np.isinf(width) & (dom.inside(q) != (side < 0))
+                width[hit] = t * vh_min[kv][hit]
             thin = np.isfinite(width)
-            # move them to the middle of the gap instead: away from both walls, still in
-            # the fluid.  Vertices that would have to move too far are snapped as usual (left
-            # close to a wall unsnapped, they cut skewed slivers)
+            # vertices that would have to move too far are snapped as usual (left close to
+            # a wall unsnapped, they cut skewed slivers)
             mid = cpk + 0.5 * np.where(thin, width, 0.0)[:, None] * dirk
             mv = thin & (np.linalg.norm(mid - pts[kv], axis=1) < 0.4 * vh_min[kv])
             j = kv[mv]
@@ -945,8 +994,8 @@ def generate(cfg, log=print):
             pts[j] = mid[mv]
             phi_d[j] = dom.sdf(pts[j])
             snapped[j] = True
-            msgs.append(f"thin gaps: {int(mv.sum())} fluid vertices moved to the middle of the gap"
-                        f" (their cells would lose the last vertex in the fluid when snapped)")
+            msgs.append(f"thin gaps / walls: moved {int(mv.sum())} {label}"
+                        f" (their cells would lose the last vertex on that side when snapped)")
         cp, _, _ = dom.closest(pts[snap])
         pts[snap] = cp
         phi_d[snap] = 0.0
@@ -1602,6 +1651,17 @@ def generate(cfg, log=print):
     Pout = P[used]
     faces = (nn_, remap[vv])
     T("patches, zones, renumbering")
+    if cfg["checkLeaks"]:
+        # fluid joined through a solid wall (thinner than the cells there) breaks the
+        # simulation: report it loudly
+        nw, Xw = diagnose.through_wall(dom, Pout, faces, owner, neighbour)
+        if nw:
+            log(f"WARNING: leak check: {nw} cell-to-face lines cross a solid wall (fluid on both"
+                f" sides joined; refine there), e.g. at " + ", ".join(
+                    "(" + " ".join(f"{v:.6g}" for v in x) + ")" for x in Xw[:5]))
+        else:
+            log("leak check: no fluid connection through a solid wall")
+        T("leak check")
     return dict(points=Pout, faces=faces, owner=owner, neighbour=neighbour, patches=patches,
                 cell_zones=cell_zones, face_zones=face_zones, zones=zones, timer=T,
                 cell_zone=cell_zone, leaves=leaves_total)

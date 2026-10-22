@@ -2,6 +2,7 @@
 
 python -m unittest discover -s tests
 """
+import json
 import math
 import os
 import sys
@@ -33,20 +34,24 @@ def cylinder_stl(path, r, h, n=48):
     return 0.5 * n * r * r * math.sin(2 * math.pi / n) * h       # exact volume of the polygon prism
 
 
+def _write_json(path, obj):
+    with open(path, "w") as f:
+        json.dump(obj, f)
+
+
 class CylindricalBase(unittest.TestCase):
     def mesh(self, refine):
         with tempfile.TemporaryDirectory() as d:
             stl = os.path.join(d, "cyl.stl")
             vol = cylinder_stl(stl, 0.1, 0.1)
             cfg_path = os.path.join(d, "meshDict.json")
-            import json
             cfg = {"domain": "cyl.stl", "baseCellSize": 0.025,
                    "surfaceRefinement": {"default": 1 if refine else 0}, "featureLevel": 0,
                    "baseMesh": {"type": "cylindrical", "nz": 6,
                                 "core": {"halfWidth": 0.03, "n": 4},
                                 # 16 -> 40 around: not a multiple
                                 "blocks": [{"rOuter": 0.06, "nr": 2}, {"rOuter": 0.11, "nr": 3, "nTheta": 40}]}}
-            json.dump(cfg, open(cfg_path, "w"))
+            _write_json(cfg_path, cfg)
             R = generate(load_config(cfg_path), log=lambda s: None)
         q = quality.check(R["points"], R["faces"], R["owner"], R["neighbour"], log=lambda s: None)
         return q, vol

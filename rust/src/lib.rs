@@ -234,6 +234,61 @@ fn cr(u: V3, v: V3, w: V3) -> f64 {
     (v[1] - u[1]) * (w[2] - u[2]) - (v[2] - u[2]) * (w[1] - u[1])
 }
 
+
+/// parameter t in [0, 1] where segment p + t (q - p) crosses triangle abc (Moller-Trumbore)
+fn seg_tri(p: V3, d: V3, a: V3, b: V3, c: V3) -> Option<f64> {
+    let e1 = sub(b, a);
+    let e2 = sub(c, a);
+    let pv = cross(d, e2);
+    let det = dot(e1, pv);
+    if det.abs() < 1e-300 {
+        return None;
+    }
+    let inv = 1.0 / det;
+    let tv = sub(p, a);
+    // small tolerances: crossings through an edge or at a segment end (a wall on a
+    // vertex plane of the mesh) must not slip between triangles or off the segment;
+    // the caller merges repeated crossings
+    const TOL: f64 = 1e-9;
+    let u = dot(tv, pv) * inv;
+    if !(-TOL..=1.0 + TOL).contains(&u) {
+        return None;
+    }
+    let qv = cross(tv, e1);
+    let v = dot(d, qv) * inv;
+    if v < -TOL || u + v > 1.0 + TOL {
+        return None;
+    }
+    let t = dot(e2, qv) * inv;
+    if (-TOL..=1.0 + TOL).contains(&t) { Some(t.clamp(0.0, 1.0)) } else { None }
+}
+
+/// segment p -> p + d against a box grown by tol (slab test); the tolerance keeps
+/// segments running along a face of the box (a wall on a mesh plane) from slipping out
+fn seg_box(p: V3, d: V3, n: &Node, tol: f64) -> bool {
+    let (mut t0, mut t1) = (0.0f64, 1.0f64);
+    for k in 0..3 {
+        let (lo, hi) = (n.lo[k] - tol, n.hi[k] + tol);
+        if d[k].abs() < 1e-300 {
+            if p[k] < lo || p[k] > hi {
+                return false;
+            }
+        } else {
+            let inv = 1.0 / d[k];
+            let (mut a, mut b) = ((lo - p[k]) * inv, (hi - p[k]) * inv);
+            if a > b {
+                std::mem::swap(&mut a, &mut b);
+            }
+            t0 = t0.max(a);
+            t1 = t1.min(b);
+            if t0 > t1 {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 // ------------------------------------------------------------------------- helpers
 pub(crate) fn points(p: &PyReadonlyArray2<f64>) -> PyResult<Vec<V3>> {
     let a = p.as_array();
@@ -256,6 +311,7 @@ struct TriMesh {
     t: Vec<[V3; 3]>,
     bvh: Bvh,
     pert: V3,
+    tol: f64,
 }
 
 impl TriMesh {
@@ -342,7 +398,7 @@ impl TriMesh {
         let len = dot(d, d).sqrt();
         let pert = [len * 0.0, len * 3.14159265e-7, len * 2.71828183e-7];
         let bvh = Bvh::build(&lo, &hi);
-        Ok(TriMesh { t, bvh, pert })
+        Ok(TriMesh { t, bvh, pert, tol: 1e-9 * len })
     }
 
     /// (closest points[n, 3], distances[n], triangle ids[n])
@@ -364,6 +420,64 @@ impl TriMesh {
         let pts = points(&p)?;
         let r: Vec<bool> = py.detach(|| pts.par_iter().map(|&q| self.inside_one(q)).collect());
         Ok(r.into_pyarray(py))
+    }
+
+    /// Crossings of segments a[i] -> b[i] with the surface, sorted along each segment:
+    /// (segment index, parameter t in [0, 1], triangle id), flattened.
+    fn segment_hits<'py>(
+        &self,
+        py: Python<'py>,
+        a: PyReadonlyArray2<'py, f64>,
+        b: PyReadonlyArray2<'py, f64>,
+    ) -> PyResult<(Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<i64>>)> {
+        let pa = points(&a)?;
+        let pb = points(&b)?;
+        if pa.len() != pb.len() {
+            return Err(pyo3::exceptions::PyValueError::new_err("a and b differ in length"));
+        }
+        let per: Vec<Vec<(f64, i64)>> = py.detach(|| {
+            pa.par_iter()
+                .zip(pb.par_iter())
+                .map(|(&p, &q)| {
+                    let d = sub(q, p);
+                    let mut out: Vec<(f64, i64)> = Vec::new();
+                    if self.bvh.nodes.is_empty() {
+                        return out;
+                    }
+                    let mut stack: Vec<u32> = vec![0];
+                    while let Some(ni) = stack.pop() {
+                        let n = &self.bvh.nodes[ni as usize];
+                        if !seg_box(p, d, n, self.tol) {
+                            continue;
+                        }
+                        if n.count > 0 {
+                            for &i in &self.bvh.prims[n.start as usize..(n.start + n.count) as usize] {
+                                let [ta, tb, tc] = self.t[i as usize];
+                                if let Some(t) = seg_tri(p, d, ta, tb, tc) {
+                                    out.push((t, i as i64));
+                                }
+                            }
+                        } else {
+                            stack.push(n.start);
+                            stack.push(n.right);
+                        }
+                    }
+                    out.sort_by(|x, y| x.partial_cmp(y).unwrap());
+                    out
+                })
+                .collect()
+        });
+        let mut si = Vec::new();
+        let mut tt = Vec::new();
+        let mut tri = Vec::new();
+        for (k, v) in per.into_iter().enumerate() {
+            for (t, i) in v {
+                si.push(k as i64);
+                tt.push(t);
+                tri.push(i);
+            }
+        }
+        Ok((si.into_pyarray(py), tt.into_pyarray(py), tri.into_pyarray(py)))
     }
 
     /// signed distance (negative inside)
