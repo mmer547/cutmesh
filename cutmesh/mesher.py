@@ -1,5 +1,6 @@
 """cutmesh pipeline: STL interior -> octree -> cut cells (STL walls and rotating-zone
 walls are both represented exactly by mesh faces) -> OpenFOAM polyMesh."""
+import itertools
 import json
 import os
 import time
@@ -25,6 +26,7 @@ DEFAULTS = {
     "featureSnapMax": 0.5,      # experimental: up to this fraction where the octree cells stay valid
     "mergeRatio": 0.25,         # merge cut cells smaller than this fraction of their hex
     "hangingSnap": "free",      # hanging nodes that cannot slide onto a surface: "free" projection or "constrained" (treated as on-surface)
+    "fillThinGaps": 2,          # passes splitting cells with fluid inside but no fluid corner (Cartesian base; 0 = off)
     "patchTypes": {},
     "rotatingZones": [],
     "writeMRFProperties": True,
@@ -782,9 +784,32 @@ def generate(cfg, log=print):
         pad = int(cfg["padding"])
         lo = dom.bbmin - pad * h0
         n = np.ceil((dom.bbmax - dom.bbmin) / h0 + 2 * pad).astype(int)
-        oc = Octree(lo, h0, n, Lmax)
+        nfill = int(cfg["fillThinGaps"])
+        oc = Octree(lo, h0, n, Lmax + (1 if nfill else 0))
         log(f"root grid {n.tolist()}")
         oc.refine(ssrc, vsrc, log=lambda s: log(s), keep_fn=keep_fn)
+        for _ in range(nfill):
+            # fluid thinner than the cell between its corners (a gap passing between the
+            # vertex planes): no corner is in the fluid, so the cut would drop the cell and
+            # the gap would be closed there.  Split such cells (one level beyond Lmax).
+            c = oc.centers(); hl = oc.leaf_sizes()
+            cand = np.nonzero((oc.lev < oc.Lmax)
+                              & (dom.approx_distance(c, upper=float(hl.max()) + dom._rmax)
+                                 < 0.9 * hl + dom._rmax))[0]
+            if not len(cand):
+                break
+            sgn = np.array(list(itertools.product((-1, 0, 1), repeat=3)), float)   # 27 points
+            corner = np.all(sgn != 0, axis=1)
+            cc_, hh_ = c[cand], hl[cand]
+            q = (cc_[:, None, :] + 0.5 * hh_[:, None, None] * sgn[None]).reshape(-1, 3)
+            ins = dom.inside(q).reshape(len(cand), 27)
+            hole = ~ins[:, corner].any(1) & ins[:, ~corner].any(1)
+            if not hole.any():
+                break
+            mark = np.zeros(len(oc.lev), bool); mark[cand[hole]] = True
+            oc.split(mark)
+            oc.balance(lambda s: None)
+            log(f"thin gaps: {int(hole.sum())} cells with fluid inside but no fluid corner split")
     T(f"octree ({len(oc.lev)} leaves)")
     M = oc.build_cells()
     nleaf = len(M["cell_size"])
@@ -883,6 +908,45 @@ def generate(cfg, log=print):
         # ---- 1) regular (non-hanging) vertices: features, then surfaces
         on_feat_d = snap_features(dom_feat, phi_d, "STL")
         snap = movable & ~snapped & (np.abs(phi_d) < tol_v) & (phi_d != 0)
+        # a cut cell must keep a vertex in the fluid: in a gap about one cell wide the
+        # fluid vertices of a cell can all lie near a wall; snapping them all onto it
+        # would leave the cell without fluid and close the gap there
+        neg = phi_d < 0
+        occ_leaf = np.repeat(f_cell, fn)
+        nneg = np.bincount(occ_leaf, neg[fverts], nleaf)
+        nkeep = np.bincount(occ_leaf, (neg & ~snap)[fverts], nleaf)
+        npos = np.bincount(occ_leaf, (phi_d > 0)[fverts], nleaf)
+        lost = (nneg > 0) & (nkeep == 0) & (npos > 0)
+        if lost.any():
+            occ = lost[occ_leaf]
+            kv = np.unique(fverts[occ][neg[fverts[occ]]])
+            # only in a thin gap (the opposite wall within 1.5 cells across the fluid);
+            # elsewhere the snap removes a sliver as intended
+            cpk, dk, _ = dom.closest(pts[kv])
+            # vertices already on the wall (phi a rounding error below 0) carry no fluid:
+            # dropping their cell is right, and they give no direction to probe along
+            off = dk > 0.01 * vh_min[kv]
+            kv, cpk, dk = kv[off], cpk[off], dk[off]
+            dirk = (pts[kv] - cpk) / np.maximum(dk, 1e-300)[:, None]
+            # distance from the near wall (cpk) to the opposite wall along dirk
+            width = np.full(len(kv), np.inf)
+            for s in np.linspace(0.05, 1.5, 30):
+                q = cpk + (s * vh_min[kv])[:, None] * dirk
+                hit = np.isinf(width) & ~dom.inside(q)
+                width[hit] = s * vh_min[kv][hit]
+            thin = np.isfinite(width)
+            # move them to the middle of the gap instead: away from both walls, still in
+            # the fluid.  Vertices that would have to move too far are snapped as usual (left
+            # close to a wall unsnapped, they cut skewed slivers)
+            mid = cpk + 0.5 * np.where(thin, width, 0.0)[:, None] * dirk
+            mv = thin & (np.linalg.norm(mid - pts[kv], axis=1) < 0.4 * vh_min[kv])
+            j = kv[mv]
+            snap[j] = False
+            pts[j] = mid[mv]
+            phi_d[j] = dom.sdf(pts[j])
+            snapped[j] = True
+            msgs.append(f"thin gaps: {int(mv.sum())} fluid vertices moved to the middle of the gap"
+                        f" (their cells would lose the last vertex in the fluid when snapped)")
         cp, _, _ = dom.closest(pts[snap])
         pts[snap] = cp
         phi_d[snap] = 0.0
