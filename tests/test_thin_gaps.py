@@ -1,4 +1,5 @@
-"""Fluid gaps thinner than a cell must stay open (fillThinGaps, snap guard in mesher.py).
+"""Fluid gaps thinner than a cell must stay open, and solid walls thinner than a cell must
+not vanish (fillThinGaps / fillThinWalls, the snap guard in mesher.py, diagnose.py).
 
 Two chambers joined by a slot thinner than the cell size:
 - between: the slot lies between two vertex planes, so no cell corner is in the fluid
@@ -21,6 +22,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from cutmesh import quality                                   # noqa: E402
 from cutmesh.geometry import write_stl_ascii                  # noqa: E402
 from cutmesh.mesher import load_config, generate              # noqa: E402
+from cutmesh.geometry import Surface, read_stl                # noqa: E402
+from cutmesh.diagnose import through_wall                     # noqa: E402
 
 
 def voxel_stl(path, filled, v):
@@ -60,6 +63,11 @@ def components(own, nei, nC):
     return len({find(i) for i in range(nC)})
 
 
+def _write_json(path, obj):
+    with open(path, "w") as f:
+        json.dump(obj, f)
+
+
 class ThinGaps(unittest.TestCase):
     h = 0.01
 
@@ -72,8 +80,8 @@ class ThinGaps(unittest.TestCase):
         G[10:50, y0:y1, 30:60] = True           # slot
         with tempfile.TemporaryDirectory() as d:
             voxel_stl(os.path.join(d, "s.stl"), G, v)
-            json.dump({"domain": "s.stl", "baseCellSize": h, "surfaceRefinement": {"default": 0},
-                       "featureLevel": 0, "fillThinGaps": fill}, open(os.path.join(d, "m.json"), "w"))
+            _write_json(os.path.join(d, "m.json"), {"domain": "s.stl", "baseCellSize": h, "surfaceRefinement": {"default": 0},
+                       "featureLevel": 0, "fillThinGaps": fill})
             R = generate(load_config(os.path.join(d, "m.json")), log=lambda s: None)
         own, nei = R["owner"], R["neighbour"]
         nC = int(max(own.max(), nei.max())) + 1
@@ -94,6 +102,42 @@ class ThinGaps(unittest.TestCase):
         ncomp, vr = self.mesh(3.0 * self.h, 0.5 * self.h, fill=0)
         self.assertEqual(ncomp, 1)
         self.assertAlmostEqual(vr, 1.0, delta=0.01)
+
+
+class ThinWalls(unittest.TestCase):
+    """U-shaped channel around a solid plate thinner than a cell: without care the plate
+    vanishes and the fluid on both sides joins through it (a bypass)."""
+    h = 0.01
+
+    def mesh(self, thickness, y_centre, fill):
+        h, v = self.h, self.h / 20
+        G = np.ones((120, 120, 180), bool)                   # 6h x 6h x 9h of fluid
+        y0, y1 = int(round((y_centre - thickness / 2) / v)), int(round((y_centre + thickness / 2) / v))
+        G[:, y0:y1, 0:120] = False                           # plate, open above z = 6h
+        with tempfile.TemporaryDirectory() as d:
+            voxel_stl(os.path.join(d, "w.stl"), G, v)
+            _write_json(os.path.join(d, "m.json"), {"domain": "w.stl", "baseCellSize": h, "surfaceRefinement": {"default": 0},
+                       "featureLevel": 0, "fillThinWalls": fill, "checkLeaks": False})
+            R = generate(load_config(os.path.join(d, "m.json")), log=lambda s: None)
+            dom = Surface(read_stl(os.path.join(d, "w.stl")))
+        q = quality.check(R["points"], R["faces"], R["owner"], R["neighbour"], log=lambda s: None)
+        self.assertEqual(q["nNegVol"], 0)
+        self.assertEqual(q["nBadPyramids"], 0)
+        n, _ = through_wall(dom, R["points"], R["faces"], R["owner"], R["neighbour"])
+        return n, q["totalVol"] / (G.sum() * v ** 3)
+
+    def test_plate_off_the_vertex_planes(self):
+        n, vr = self.mesh(0.3 * self.h, 2.2 * self.h, fill=3)
+        self.assertEqual(n, 0)
+        self.assertAlmostEqual(vr, 1.0, delta=0.002)
+        n, vr = self.mesh(0.3 * self.h, 2.2 * self.h, fill=0)
+        self.assertGreater(n, 0)                              # the leak check sees the bypass
+        self.assertGreater(vr, 1.01)
+
+    def test_plate_thinner_than_the_samples(self):
+        n, vr = self.mesh(0.15 * self.h, 2.4 * self.h, fill=3)
+        self.assertEqual(n, 0)
+        self.assertAlmostEqual(vr, 1.0, delta=0.002)
 
 
 if __name__ == "__main__":
