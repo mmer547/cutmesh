@@ -12,6 +12,7 @@ import unittest
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from cutmesh import quality                                   # noqa: E402
 from cutmesh.mesher import load_config, generate              # noqa: E402
