@@ -365,8 +365,10 @@ class Surface:
             d[exact_mask] = dd
         return sign * d
 
-    def feature_edges(self, angle_deg):
-        """Feature edges (dihedral angle > angle, open edges, region boundaries) as segments."""
+    def feature_edges(self, angle_deg, concave_only=False):
+        """Feature edges (dihedral angle > angle, open edges, region boundaries) as segments.
+        concave_only: only the sharp edges where the solid juts into the domain (the surface
+        is concave seen from inside: a re-entrant edge of the fluid)."""
         tol = 1e-9 * self.L
         v = self.tris.reshape(-1, 3)
         key = np.round(v / tol).astype(np.int64)
@@ -388,7 +390,12 @@ class Surface:
             if cnt[gi] != 2:
                 feat.append(e_s[s]); continue
             t1, t2 = et_s[s], et_s[s + 1]
-            if np.dot(n[t1], n[t2]) < cosang or self.region[t1] != self.region[t2]:
+            if concave_only:
+                # t2 lies on the outer side of t1's plane: the surface turns outwards
+                if np.dot(n[t1], n[t2]) < cosang and \
+                        np.dot(self.tris[t2].mean(0) - self.tris[t1].mean(0), n[t1]) > 0:
+                    feat.append(e_s[s])
+            elif np.dot(n[t1], n[t2]) < cosang or self.region[t1] != self.region[t2]:
                 feat.append(e_s[s])
         if not feat:
             return np.zeros((0, 2, 3))
