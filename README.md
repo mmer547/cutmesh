@@ -55,6 +55,7 @@ python -m unittest discover -s tests  # Rust と Python の結果の一致を確
 | `surfaceRefinement` | solid名→細分化レベル。`default` で既定値 | `{}` |
 | `featureLevel` | 特徴線近傍の細分化レベル（`null`=表面最大レベル） | `null` |
 | `gapRefinement` | `{"thickness": t, "level": L}`: 流体の厚みが `t` 未満の所（スロットの鋭い先端、狭い流路）の壁を `L` まで細分化。セルより薄い部分が切り落とされるのを抑える | なし |
+| `autoGapRefinement` | `{"cellsAcross": n, "maxLevel": L}`（`true` で既定値）: STL の各所で流体側の隙間の幅 w を測り（壁から法線方向に向かいの壁まで）、隙間に `n` 個のセルが入るレベル（`baseCellSize / 2^level ≤ w / n`、上限 `L`）まで壁を細分化する。溝・スリット・狭い隙間が閉じたりつぶれたりするのを、厚さを指定せずに防ぐ。その面の表面レベルですでに `n` 個入る所は対象外。上限でも足りない所の数をログに出す | なし（`n` = 3、`L` = 表面レベルの最大 + 2）|
 | `featureAngle` | 特徴線抽出の角度 [deg] | 30 |
 | `bufferLayers` | レベル遷移ごとのバッファセル数 | 2 |
 | `snapTolerance` | 節点スナップ距離（セル辺長比）。スライバー防止 | 0.3 |
@@ -66,6 +67,7 @@ python -m unittest discover -s tests  # Rust と Python の結果の一致を確
 | `fillThinGaps` | セルの中に流体があるのに角の頂点がどれも流体にない（格子の面の間を通る薄い隙間）セルを、最大レベルを1段超えて分割する回数。0 で無効。直交格子のベースのみ | 2 |
 | `fillThinWalls` | 中に固体の薄い壁（セルを貫く線上で、表と裏の面がセル内にある）があるのに、角の頂点がどれも固体にないセルを分割する回数（1回ごとに最大レベルを1段超える）。壁が消えて両側の流体がつながる（バイパス）のを防ぐ。0 で無効。直交格子のベースのみ | 3 |
 | `checkLeaks` | 生成したメッシュで、流体が固体の壁を越えてつながっていないかを検査し、見つかれば警告と場所をログに出す | true |
+| `minRegionVolume` | 流体の本体とつながっていない領域（鋭角の溝の先端がセルより細くなって切り離された断片など）のうち、体積が全体のこの割合未満のものを削除する。それ以上の領域は削除せず、警告を出す | 1e-3 |
 | `refinementRegions` | 体積細分化領域 `[{"cylinder": {...}, "level": n}]` | `[]` |
 | `featureCaps` | 凸の鋭角部でカット面を特徴線に沿わせる（`"domain"`/`"both"`/`false`。`"both"` は回転ゾーンにも適用） | `"domain"` |
 | `patchTypes` | パッチ名→タイプ（`wall`,`patch`,…） | 全て `wall` |

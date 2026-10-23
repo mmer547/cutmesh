@@ -71,7 +71,7 @@ def _write_json(path, obj):
 class ThinGaps(unittest.TestCase):
     h = 0.01
 
-    def mesh(self, y_centre, thickness, fill):
+    def mesh(self, y_centre, thickness, fill, extra=None):
         h, v = self.h, self.h / 10
         G = np.zeros((60, 60, 90), bool)
         G[:, :, 0:30] = True                    # chamber z in [0, 3h]
@@ -81,7 +81,7 @@ class ThinGaps(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             voxel_stl(os.path.join(d, "s.stl"), G, v)
             _write_json(os.path.join(d, "m.json"), {"domain": "s.stl", "baseCellSize": h, "surfaceRefinement": {"default": 0},
-                       "featureLevel": 0, "fillThinGaps": fill})
+                       "featureLevel": 0, "fillThinGaps": fill, **(extra or {})})
             R = generate(load_config(os.path.join(d, "m.json")), log=lambda s: None)
         own, nei = R["owner"], R["neighbour"]
         nC = int(max(own.max(), nei.max())) + 1
@@ -97,6 +97,34 @@ class ThinGaps(unittest.TestCase):
         self.assertAlmostEqual(vr, 1.0, delta=0.01)
         ncomp, _ = self.mesh(2.5 * self.h, 0.4 * self.h, fill=0)
         self.assertEqual(ncomp, 2)              # the slot is lost without the splitting
+
+    def test_auto_gap_refinement(self):
+        # a slot a quarter of a cell wide: closed without, three cells across with it
+        auto = {"autoGapRefinement": {"cellsAcross": 3, "maxLevel": 4}}
+        ncomp, vr = self.mesh(2.5 * self.h, 0.25 * self.h, fill=2, extra=auto)
+        self.assertEqual(ncomp, 1)
+        self.assertAlmostEqual(vr, 1.0, delta=0.002)
+        ncomp, _ = self.mesh(2.5 * self.h, 0.25 * self.h, fill=2)
+        self.assertEqual(ncomp, 2)
+
+    def test_isolated_region_removed(self):
+        # a small cube of fluid apart from the chamber: removed below minRegionVolume
+        h, v = self.h, self.h / 10
+        G = np.zeros((60, 60, 90), bool)
+        G[:, :, 0:30] = True
+        G[24:30, 24:30, 50:56] = True                         # 0.6h cube, 0.15 % of the volume
+        for frac, ncomp in ((1e-2, 1), (0, 2)):
+            with tempfile.TemporaryDirectory() as d:
+                voxel_stl(os.path.join(d, "s.stl"), G, v)
+                _write_json(os.path.join(d, "m.json"), {"domain": "s.stl", "baseCellSize": h, "featureLevel": 0,
+                           "surfaceRefinement": {"default": 0}, "minRegionVolume": frac})
+                R = generate(load_config(os.path.join(d, "m.json")), log=lambda s: None)
+            own, nei = R["owner"], R["neighbour"]
+            nC = int(max(own.max(), nei.max())) + 1
+            self.assertEqual(components(own, nei, nC), ncomp)
+            q = quality.check(R["points"], R["faces"], own, nei, log=lambda s: None)
+            self.assertEqual(q["openCellEdges"], 0)
+            self.assertEqual(q["nNegVol"], 0)
 
     def test_slot_centred_on_vertex_plane(self):
         ncomp, vr = self.mesh(3.0 * self.h, 0.5 * self.h, fill=0)
