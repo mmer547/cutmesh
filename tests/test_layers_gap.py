@@ -116,5 +116,32 @@ class LayersInGap(unittest.TestCase):
         self.assertGreaterEqual(kept[0.3], kept[0.0])
 
 
+    def test_skewness_limit(self):
+        # the validity iterations also thin the layers where faces get too skewed
+        R = self.slot_mesh()
+        L = add_layers(R, {"nLayers": 3, "maxSkewness": None}, log=lambda s: None)
+        q = quality.check(L["points"], L["faces"], L["owner"], L["neighbour"], log=lambda s: None)
+        self.assertGreater(q["maxSkewness"], 3.2)
+        L = add_layers(R, {"nLayers": 3, "maxSkewness": 3.0}, log=lambda s: None)
+        q = quality.check(L["points"], L["faces"], L["owner"], L["neighbour"], log=lambda s: None)
+        self.assertLessEqual(q["maxSkewness"], 3.0)
+        self.assertGreater((L["layer_thickness"]["T"] > 0).mean(), 0.9)
+
+    def test_face_skewness_subset(self):
+        L = add_layers(self.slot_mesh(), {"nLayers": 3}, log=lambda s: None)
+        P = np.asarray(L["points"])
+        own, nei = np.asarray(L["owner"]), np.asarray(L["neighbour"])
+        ff = quality.FlatFaces(L["faces"])
+        Cf, Sf = quality.face_geometry(P, ff)
+        C, _ = quality.cell_geometry(int(own.max()) + 1, own, nei, Cf, Sf)
+        sk = quality.face_skewness(P, ff, Cf, Sf, C, own, nei)
+        fs = np.arange(len(own))[::3]
+        np.testing.assert_allclose(quality.face_skewness(P, ff, Cf, Sf, C, own, nei, fs), sk[fs])
+        lim = 0.5
+        skl = quality.face_skewness(P, ff, Cf, Sf, C, own, nei, limit=lim)
+        np.testing.assert_array_equal(skl > lim, sk > lim)
+        np.testing.assert_allclose(skl[sk > lim], sk[sk > lim])
+
+
 if __name__ == "__main__":
     unittest.main()

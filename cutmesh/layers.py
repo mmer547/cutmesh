@@ -15,8 +15,8 @@ The mesh is shrunk away from the walls and the gap is filled with prism layers:
    inserted per wall face (geometric growth by expansionRatio towards the interior).
    The original wall face becomes the internal face to the first original cell.
 4. Where the point normal is undefined (sharp convex edges) or a cell becomes
-   invalid or too non-orthogonal, the thickness at the points involved is halved
-   (nIter times) and then set to zero until the mesh is valid.
+   invalid, too non-orthogonal or too skewed, the thickness at the points involved is
+   halved (nIter times) and then set to zero until the mesh is valid.
    At points with zero thickness the layer points collapse into one, so the layers
    terminate there with wedge cells (as in snappyHexMesh).
 
@@ -45,6 +45,7 @@ DEFAULTS = {
     "nCollapseIter": 60,         # then iterations collapsing the layers there
     "maxThicknessSlope": 0.5,    # thickness may change by this much per unit length along the wall
     "maxNonOrtho": 65.0,         # [deg] cells at faces above this (original faces: above their value + 2) are bad
+    "maxSkewness": 4.0,          # cells at faces more skewed than this (original faces: their value + 0.2) are bad
     "wallNonOrthMargin": None,   # [deg] wall faces may get this much worse than their value as boundary faces
     "cornerStretch": True,       # move corner points by T / cos so the layers keep thickness T
     "maxGapFraction": 0.3,       # total thickness at most this fraction of the distance to a facing wall
@@ -63,9 +64,10 @@ def _nonorth(C, Cf, Sf, own, nei):
     return np.degrees(np.arccos(np.clip(c, -1, 1)))
 
 
-def _cells_bad(P, nn, vv, own, nei, nC, max_no=None):
+def _cells_bad(P, nn, vv, own, nei, nC, max_no=None, max_sk=None):
     """cells with non-positive volume or a non-positive face pyramid (checkMesh), or a
-    face more non-orthogonal than max_no (scalar or per internal face)"""
+    face more non-orthogonal than max_no (scalar or per internal face) or more skewed
+    than allowed (max_sk = (face ids, limit per face))"""
     ff = quality.FlatFaces((nn, vv))
     Cf, Sf = quality.face_geometry(P, ff)
     C, V = quality.cell_geometry(nC, own, nei, Cf, Sf)
@@ -79,6 +81,11 @@ def _cells_bad(P, nn, vv, own, nei, nC, max_no=None):
         hi = _nonorth(C, Cf, Sf, own, nei) > max_no
         bad[own[:nI][hi]] = True
         bad[nei[hi]] = True
+    if max_sk is not None:
+        fs, lim = max_sk
+        hi = fs[quality.face_skewness(P, ff, Cf, Sf, C, own, nei, fs, lim) > lim]
+        bad[own[hi]] = True
+        bad[nei[hi[hi < nI]]] = True
     return bad
 
 
@@ -358,6 +365,12 @@ def add_layers(mesh, spec=None, log=print):
         cw = np.einsum("ij,ij->i", dw, nf_unit[Lf]) / np.maximum(np.linalg.norm(dw, axis=1), 1e-300)
         lim0[Lf] = np.maximum(lim0[Lf], np.degrees(np.arccos(np.clip(cw, -1, 1)))
                               + float(s["wallNonOrthMargin"]))
+    # skewness limit (checkMesh warns above 4): maxSkewness, or for faces of the original
+    # mesh their own value + 0.2
+    skmax = s["maxSkewness"]
+    if skmax is not None:
+        sk0 = np.maximum(float(skmax), quality.face_skewness(P0, ff, Cf, Sf, C0, own, nei) + 0.2)
+        moved0 = isw.copy(); moved0[band] = True
     del C0
 
     zone_names = list(cell_zones.keys())
@@ -507,7 +520,16 @@ def add_layers(mesh, spec=None, log=print):
         new_nei = ne_all[ii]
         oi = old_all[ii]
         max_no = np.where(oi >= 0, lim0[np.maximum(oi, 0)], float(s["maxNonOrtho"]))
-        bad = _cells_bad(P, new_n, new_v, new_own, new_nei, nCn, max_no)
+        max_sk = None
+        if skmax is not None:
+            # only the faces of cells with moved or new points can have changed
+            mv = np.concatenate([moved0, np.ones(len(P) - nP0, bool)])[new_v]
+            fm = np.logical_or.reduceat(mv, _ptr(new_n)[:-1])
+            cm = np.zeros(nCn, bool); cm[new_own[fm]] = True; cm[new_nei[fm[:len(ii)]]] = True
+            fs = np.nonzero(cm[new_own] | np.concatenate([cm[new_nei], np.zeros(len(bb), bool)]))[0]
+            oa = old_all[order][fs]
+            max_sk = (fs, np.where(oa >= 0, sk0[np.maximum(oa, 0)], float(skmax)))
+        bad = _cells_bad(P, new_n, new_v, new_own, new_nei, nCn, max_no, max_sk)
         nbad = int(bad.sum())
         log(f"  iteration {it}: {ne}/{nW} points extruded, {nA} faces with layers,"
             f" {nbad} invalid cells")

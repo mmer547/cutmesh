@@ -67,6 +67,42 @@ def cell_geometry(nC, owner, neighbour, Cf, Sf):
     return cc, vol / 3.0
 
 
+def face_skewness(points, ff, Cf, Sf, C, owner, neighbour, faces=None, limit=None):
+    """skewness per face as in checkMesh: distance of the face centre from the line
+    between the cell centres (boundary faces: from the normal through the owner centre),
+    divided by the extent of the face in that direction, at least 0.2 x the centre
+    distance (boundary faces: 0.4 x the distance owner centre - face).
+    faces: evaluate only these (face ids), returned in that order.
+    limit (scalar or per face): faces whose upper bound |sv| / (0.2 or 0.4 |d|) is at
+    most this get the bound instead of the exact value (enough to compare with limit)"""
+    nI = len(neighbour)
+    f = np.arange(len(Sf)) if faces is None else np.asarray(faces, np.int64)
+    if not len(f):
+        return np.zeros(0)
+    inner = f < nI
+    Cpf = Cf[f] - C[owner[f]]
+    d = np.empty((len(f), 3))
+    d[inner] = C[neighbour[f[inner]]] - C[owner[f[inner]]]
+    nb = Sf[f[~inner]] / np.maximum(np.linalg.norm(Sf[f[~inner]], axis=1), 1e-300)[:, None]
+    d[~inner] = nb * np.einsum("ij,ij->i", nb, Cpf[~inner])[:, None]
+    S = Sf[f]
+    sv = Cpf - (np.einsum("ij,ij->i", S, Cpf) / (np.einsum("ij,ij->i", S, d) + 1e-300))[:, None] * d
+    msv = np.linalg.norm(sv, axis=1)
+    fd = np.where(inner, 0.2, 0.4) * np.linalg.norm(d, axis=1)
+    sk = msv / (fd + 1e-300)
+    e = np.arange(len(f)) if limit is None else np.nonzero(sk > limit)[0]
+    if len(e):
+        # the extent of the face in the direction of sv
+        svh = sv[e] / (msv[e] + 1e-300)[:, None]
+        nv = ff.n[f[e]]
+        st = np.concatenate([[0], np.cumsum(nv)[:-1]])
+        k = np.repeat(np.arange(len(e)), nv)
+        vi = np.arange(int(nv.sum())) + np.repeat(ff.ptr[f[e]] - st, nv)
+        proj = np.abs(np.einsum("ij,ij->i", svh[k], points[ff.v[vi]] - Cf[f[e]][k]))
+        sk[e] = msv[e] / (np.maximum(fd[e], np.maximum.reduceat(proj, st)) + 1e-300)
+    return sk
+
+
 def check(points, faces, owner, neighbour, log=print):
     nI = len(neighbour)
     nC = int(max(owner.max(), neighbour.max() if len(neighbour) else 0)) + 1
@@ -104,31 +140,9 @@ def check(points, faces, owner, neighbour, log=print):
     d = C[neighbour] - C[owner[:nI]]
     cosang = np.einsum("ij,ij->i", d, Sf[:nI]) / np.maximum(np.linalg.norm(d, axis=1) * magSf[:nI], 1e-300)
     nonorth = np.degrees(np.arccos(np.clip(cosang, -1, 1)))
-    Cpf = Cf[:nI] - C[owner[:nI]]
-    sv = Cpf - (np.einsum("ij,ij->i", Sf[:nI], Cpf) /
-                (np.einsum("ij,ij->i", Sf[:nI], d) + 1e-300))[:, None] * d
-    svh = sv / (np.linalg.norm(sv, axis=1) + 1e-300)[:, None]
-    proj = np.abs(np.einsum("ij,ij->i", svh[ff.fid[ff.fid < nI]],
-                            points[ff.v[ff.fid < nI]] - Cf[ff.fid[ff.fid < nI]]))
-    fd = np.maximum(0.2 * np.linalg.norm(d, axis=1),
-                    np.maximum.reduceat(proj, ff.ptr[:nI]) if nI else np.zeros(0))
-    skew = np.linalg.norm(sv, axis=1) / (fd + 1e-300)
-    # boundary skewness
+    sk = face_skewness(points, ff, Cf, Sf, C, owner, neighbour)
+    skew, skew_b = sk[:nI], sk[nI:]
     nB = len(faces) - nI
-    Cpb = Cf[nI:] - C[owner[nI:]]
-    nb = Sf[nI:] / np.maximum(magSf[nI:], 1e-300)[:, None]
-    db = nb * np.einsum("ij,ij->i", nb, Cpb)[:, None]
-    svb = Cpb - (np.einsum("ij,ij->i", Sf[nI:], Cpb) /
-                 (np.einsum("ij,ij->i", Sf[nI:], db) + 1e-300))[:, None] * db
-    if nB:
-        svbh = svb / (np.linalg.norm(svb, axis=1) + 1e-300)[:, None]
-        bm = ff.fid >= nI
-        projb = np.abs(np.einsum("ij,ij->i", svbh[ff.fid[bm] - nI], points[ff.v[bm]] - Cf[ff.fid[bm]]))
-        fdb = np.maximum(0.2 * np.linalg.norm(db, axis=1),
-                         np.maximum.reduceat(projb, ff.ptr[nI:-1] - ff.ptr[nI]))
-        skew_b = np.linalg.norm(svb, axis=1) / (fdb + 1e-300)
-    else:
-        skew_b = np.zeros(0)
     # --- face pyramids (tets from face triangles to owner / neighbour centres)
     e = Cf[ff.fid]
     pa, pb = points[ff.v], points[ff.v[ff.nxt]]
