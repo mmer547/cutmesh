@@ -141,6 +141,24 @@ def closest_point_triangles(p, a, b, c):
     return res
 
 
+def _seg_tri(p, d, T, tol=1e-9):
+    """Moeller-Trumbore crossing of the segments p -> p + d with the triangles T, the
+    same test and tolerances as the Rust seg_tri: (t clamped to [0, 1], hit mask)."""
+    e1, e2 = T[:, 1] - T[:, 0], T[:, 2] - T[:, 0]
+    pv = np.cross(d, e2)
+    det = np.einsum("ij,ij->i", e1, pv)
+    ok = np.abs(det) >= 1e-300
+    inv = np.where(ok, 1.0 / np.where(ok, det, 1.0), 0.0)
+    tv = p - T[:, 0]
+    u = np.einsum("ij,ij->i", tv, pv) * inv
+    qv = np.cross(tv, e1)
+    v = np.einsum("ij,ij->i", d, qv) * inv
+    t = np.einsum("ij,ij->i", e2, qv) * inv
+    ok &= (u >= -tol) & (u <= 1 + tol) & (v >= -tol) & (u + v <= 1 + tol)
+    ok &= (t >= -tol) & (t <= 1 + tol)
+    return np.clip(t, 0.0, 1.0), ok
+
+
 def subdivide_triangles(tris, maxedge):
     """Longest-edge bisection until every edge <= maxedge. Returns (tris, parent)."""
     T = np.asarray(tris, float)
@@ -175,6 +193,9 @@ def _sample_triangles(tris, spacing):
 # ----------------------------------------------------------------------------
 # Triangulated closed surface
 # ----------------------------------------------------------------------------
+INSIDE_PERT = np.array([0.0, 3.14159265e-7, 2.71828183e-7])   # x L: ray origin shift of inside()
+
+
 class Surface:
     """Closed (watertight) triangulated surface, possibly with several solids/regions."""
 
@@ -185,6 +206,9 @@ class Surface:
         self.bbmin = self.tris.reshape(-1, 3).min(0)
         self.bbmax = self.tris.reshape(-1, 3).max(0)
         self.L = float(np.linalg.norm(self.bbmax - self.bbmin))
+        # inside() shifts every query point by this much (the ray origin perturbation, the
+        # same in Rust): a probe closer to the surface may be judged on the wrong side
+        self.inside_shift = float(self.L * np.linalg.norm(INSIDE_PERT))
         self._kd = None
         self._kd_spacing = None
         self._rs = _core.TriMesh(np.ascontiguousarray(self.tris)) if _core else None
@@ -269,31 +293,66 @@ class Surface:
             cp[s0:s0 + chunk] = c1; d[s0:s0 + chunk] = d1; sid[s0:s0 + chunk] = s1
         return cp, d, self._sub_parent[sid]
 
-    def segment_hits(self, a, b, samples=64, bisect=40):
+    def segment_hits(self, a, b, chunk=2_000_000):
         """Crossings of the segments a[i] -> b[i] with the surface, sorted along each:
-        (segment index, parameter t, triangle id).  Exact with the Rust extension; the
-        fallback samples the segments (crossings closer than 1/samples merge) and bisects
-        each change of side, returning t at the start side of the final bracket."""
+        (segment index, parameter t, triangle id).  Exact in both backends (the same
+        segment-triangle test); the fallback takes its candidates from the ray bins of
+        inside() and keeps those whose bounding box meets the segment's."""
         a = np.ascontiguousarray(np.atleast_2d(a), float)
         b = np.ascontiguousarray(np.atleast_2d(b), float)
         if self._rs is not None:
             return self._rs.segment_hits(a, b)
-        ts = (np.arange(samples + 1)) / samples
-        Q = a[:, None, :] + ts[None, :, None] * (b - a)[:, None, :]
-        ins = self.inside(Q.reshape(-1, 3)).reshape(len(a), samples + 1)
-        sg, k = np.nonzero(ins[:, 1:] != ins[:, :-1])
-        lo, hi = k / samples, (k + 1) / samples
-        s0 = ins[sg, k]
-        for _ in range(bisect):
-            t = 0.5 * (lo + hi)
-            same = self.inside(a[sg] + t[:, None] * (b - a)[sg]) == s0
-            lo = np.where(same, t, lo)
-            hi = np.where(same, hi, t)
-        mid = a[sg] + (0.5 * (lo + hi))[:, None] * (b - a)[sg]
-        if self._kd is None and len(mid):
-            self.build_search(self.L / 50)
-        _, _, tid = self.closest(mid)
-        return sg.astype(np.int64), lo, tid.astype(np.int64)
+        if self._nb is None:
+            self._build_ray_bins()
+        T = self.tris
+        tol = 1e-9 * self.L
+        tlo, thi = T.min(1) - tol, T.max(1) + tol
+        slo, shi = np.minimum(a, b), np.maximum(a, b)
+        # bins of the segment's box grown by tol: a triangle whose tol-grown box meets the
+        # segment's box shares at least one bin with it
+        bi = lambda v, k: np.clip(((v - self._blo[k]) / self._bsz[k]).astype(int), 0, self._nb - 1)
+        i0, i1 = bi(slo[:, 1] - tol, 0), bi(shi[:, 1] + tol, 0)
+        j0, j1 = bi(slo[:, 2] - tol, 1), bi(shi[:, 2] + tol, 1)
+        ni, nj = i1 - i0 + 1, j1 - j0 + 1
+        nsb = ni * nj
+        csb = np.cumsum(nsb)
+        S, Tt, I = [], [], []
+        s0 = 0
+        while s0 < len(a):
+            # segments in batches of <= chunk (segment, bin) pairs (at least one segment)
+            s1 = max(int(np.searchsorted(csb, (csb[s0 - 1] if s0 else 0) + chunk, side="right")), s0 + 1)
+            n = nsb[s0:s1]
+            # (segment, bin) pairs, then (segment, triangle) pairs; a triangle spanning
+            # several bins of one segment comes up more than once (np.unique, per chunk
+            # and at the end)
+            sb = np.repeat(np.arange(s0, s1), n)
+            r = np.arange(len(sb)) - np.repeat(np.cumsum(n) - n, n)
+            bins = (i0[sb] + r // nj[sb]) * self._nb + j0[sb] + r % nj[sb]
+            cnt = self._bstart[bins + 1] - self._bstart[bins]
+            cum = np.cumsum(cnt)
+            b0 = 0
+            while b0 < len(bins):
+                b1 = max(int(np.searchsorted(cum, (cum[b0 - 1] if b0 else 0) + chunk, side="right")), b0 + 1)
+                c = cnt[b0:b1]
+                sg = np.repeat(sb[b0:b1], c)
+                off = np.repeat(self._bstart[bins[b0:b1]] - (np.cumsum(c) - c), c)
+                ti = self._btri[off + np.arange(len(sg))]
+                ok = ((tlo[ti] <= shi[sg]) & (thi[ti] >= slo[sg])).all(1)
+                sg, ti = sg[ok], ti[ok]
+                if len(sg):
+                    key = np.unique(sg * len(T) + ti)
+                    sg, ti = key // len(T), key % len(T)
+                    t, hit = _seg_tri(a[sg], b[sg] - a[sg], T[ti])
+                    S.append(sg[hit]); Tt.append(t[hit]); I.append(ti[hit])
+                b0 = b1
+            s0 = s1
+        if not S:
+            return np.zeros(0, np.int64), np.zeros(0), np.zeros(0, np.int64)
+        S, Tt, I = np.concatenate(S), np.concatenate(Tt), np.concatenate(I)
+        _, u = np.unique(S * len(T) + I, return_index=True)
+        S, Tt, I = S[u], Tt[u], I[u]
+        o = np.lexsort((I, Tt, S))
+        return S[o].astype(np.int64), Tt[o], I[o].astype(np.int64)
 
     def approx_distance(self, p, upper=np.inf):
         d, _ = self._kd.query(p, distance_upper_bound=upper, workers=-1)
@@ -331,7 +390,7 @@ class Surface:
         if self._nb is None:
             self._build_ray_bins()
         res = np.zeros(len(p), bool)
-        pert = self.L * np.array([0.0, 3.14159265e-7, 2.71828183e-7])
+        pert = self.L * INSIDE_PERT
         for s in range(0, len(p), chunk):
             q = p[s:s + chunk] + pert
             ib = ((q[:, 1] - self._blo[0]) / self._bsz[0]).astype(int)
@@ -424,8 +483,8 @@ class Surface:
                 w /= np.maximum(np.linalg.norm(w, axis=1, keepdims=True), 1e-300)
                 # well inside the wedge: far beyond the ray perturbation of inside(), but
                 # short of any other wall (a nearby shell would decide the side instead).
-                # The search starts just off the edge, beyond the ray perturbation, where
-                # the side is defined (the sampled fallback reads it there).
+                # The search starts just off the edge, beyond the ray perturbation, so the
+                # probe never lands closer to the edge than that.
                 r = 0.25 * np.minimum(hgt[j1], hgt[j2])
                 s0 = np.minimum(1e-5 * self.L, 0.01 * r)
                 sg, tt, tid = self.segment_hits(m + s0[:, None] * w, m + r[:, None] * w)
