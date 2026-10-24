@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from cutmesh import quality                                   # noqa: E402
+from cutmesh.geometry import Surface                          # noqa: E402
 from cutmesh.mesher import load_config, generate              # noqa: E402
 from test_thin_gaps import voxel_stl, _write_json             # noqa: E402
 
@@ -55,6 +56,53 @@ class ConcaveEdge(unittest.TestCase):
         n, vr = self.mesh(2.5 * self.h, {})
         self.assertEqual(n, 0)
         self.assertAlmostEqual(vr, 1.0, delta=0.005)
+
+
+def _box(lo, hi):
+    """Outward-wound triangles of an axis-aligned box"""
+    x0, y0, z0 = lo; x1, y1, z1 = hi
+    P = np.array([[x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0],
+                  [x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]], float)
+    q = [(0, 3, 2, 1), (4, 5, 6, 7), (0, 1, 5, 4), (2, 3, 7, 6), (1, 2, 6, 5), (0, 4, 7, 3)]
+    return np.array([[P[a], P[b], P[c]] for a, b, c, d in q for a, b, c in ((a, b, c), (a, c, d))])
+
+
+class ConcaveFeatureEdges(unittest.TestCase):
+    def l_shape(self):
+        """L-shaped prism: unit square minus [0, 0.5]^2, extruded over z in [0, 1]"""
+        xy = [(0.5, 0), (1, 0), (1, 1), (0, 1), (0, 0.5), (0.5, 0.5)]
+        n = len(xy)
+        T = []
+        for i in range(n):
+            a, b = xy[i], xy[(i + 1) % n]
+            T += [[(*a, 0), (*b, 0), (*b, 1)], [(*a, 0), (*b, 1), (*a, 1)]]
+        for z, rev in ((0, True), (1, False)):   # caps: two convex quads
+            for quad in ([0, 1, 2, 5], [5, 2, 3, 4]):
+                p = [(*xy[k], z) for k in quad]
+                tri = [[p[0], p[1], p[2]], [p[0], p[2], p[3]]]
+                T += [t[::-1] for t in tri] if rev else tri
+        return np.array(T, float)
+
+    def test_winding_independent(self):
+        T = self.l_shape()
+        for tris in (T, T[:, ::-1]):
+            seg = Surface([("s", tris)]).feature_edges(30.0, concave_only=True)
+            self.assertEqual(len(seg), 1)        # only the re-entrant vertical edge
+            self.assertTrue(np.allclose(seg[0][:, :2], 0.5))
+            # all 18 sharp edges (6 vertical + 12 cap edges) either way
+            self.assertEqual(len(Surface([("s", tris)]).feature_edges(30.0)), 18)
+
+    def test_nested_shell(self):
+        # fluid between two boxes: the inner box's edges are re-entrant for the fluid
+        T = np.concatenate([_box((0, 0, 0), (3, 3, 3)), _box((1, 1, 1), (2, 2, 2))])
+        seg = Surface([("s", T)]).feature_edges(30.0, concave_only=True)
+        self.assertEqual(len(seg), 12)
+        self.assertTrue(((seg >= 1 - 1e-12) & (seg <= 2 + 1e-12)).all())
+
+    def test_open_edges_skipped(self):
+        tri = np.array([[[0, 0, 0], [1, 0, 0], [0, 1, 0]]], float)
+        self.assertEqual(len(Surface([("s", tri)]).feature_edges(30.0, concave_only=True)), 0)
+        self.assertEqual(len(Surface([("s", tri)]).feature_edges(30.0)), 3)
 
 
 if __name__ == "__main__":
