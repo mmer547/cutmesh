@@ -544,7 +544,10 @@ def surface_contact(dom, pts, phi, cells, faces_of, csize, push=0.2):
             on = np.abs(sd[:nd]) < 0.02 * ht
             solid = np.ones(nd, bool)
             np.logical_and.at(solid, np.array(dgrp), sd[nd:nd + ns] > 1e-3 * ht[np.array(dgrp)])
-            for k in np.nonzero(on & solid)[0].tolist():
+            # a face between surface vertices through the solid (the chord across a
+            # wedge at a concave edge) is dropped from every cell
+            inner = sd[:nd] > 0.02 * ht
+            for k in np.nonzero((on & solid) | inner)[0].tolist():
                 drop.setdefault(dcell[k], set()).add(dfid[k])
         se = sd[nd + ns:]
         eps = 1e-3 * np.array(etol)
@@ -604,7 +607,9 @@ def contact_splits(dom, pts, phi, cells, faces_of, csize):
 
     wa = np.array([width(cand[f][1]) for f in keys])
     wb = np.array([width(cand[f][2]) for f in keys])
-    ok = (sd[:len(keys)] < -1e-3 * h) & (np.abs(sd[len(keys):]) < 0.02 * h) \
+    # the contact part on the wall, or in the solid (the wedge at a concave edge, cut
+    # off by the chord through the vertex on the edge)
+    ok = (sd[:len(keys)] < -1e-3 * h) & ((np.abs(sd[len(keys):]) < 0.02 * h) | (sd[len(keys):] > 0.02 * h)) \
         & (de.reshape(-1, 2) < 1e-3 * h[:, None]).all(1) \
         & (wa > 0.05 * h) & (wb > 0.1 * h)        # a real contact area, not a sliver along the edge
     return {f: cand[f] for f, o in zip(keys, ok) if o}
@@ -1001,6 +1006,7 @@ def generate(cfg, log=print):
     snapped = np.zeros(len(pts), bool)
     far_snap = np.zeros(len(pts), bool)    # snapped onto a feature from beyond tol_f
     ccv_far = np.zeros(len(pts), bool)     # of those, onto a concave feature edge
+    slide_far = np.zeros(len(pts), bool)   # wall vertices slid onto a concave edge from beyond tol_f
     no_far = np.zeros(len(pts), bool)      # far snaps that broke a cell: not allowed
     free_snap = np.zeros(len(pts), bool)   # hanging vertices projected freely onto a surface
     no_free = np.zeros(len(pts), bool)     # free projections that broke a cell: not allowed
@@ -1114,7 +1120,8 @@ def generate(cfg, log=print):
     for attempt in range(5):
         if attempt:
             pts[:] = pts0; phi_d = phi_d0.copy()
-            snapped[:] = False; far_snap[:] = False; free_snap[:] = False; ccv_far[:] = False; msgs.clear()
+            snapped[:] = False; far_snap[:] = False; free_snap[:] = False; ccv_far[:] = False; slide_far[:] = False
+            msgs.clear()
         # ---- 1) regular (non-hanging) vertices: features, then surfaces
         on_feat_d = snap_features(dom_feat, phi_d, "STL", dom_ccv)
         snap = movable & ~snapped & (np.abs(phi_d) < tol_v) & (phi_d != 0)
@@ -1154,6 +1161,39 @@ def generate(cfg, log=print):
         phi_d[snap] = 0.0
         snapped |= snap
         msgs.append(f"snapped {int(snap.sum())} vertices onto the domain surface")
+        if dom_ccv is not None and dom_ccv._kd is not None:
+            # A concave edge with no solid vertex near it (e.g. at a level transition, where
+            # its wall vertices belong to finer cells) leaves the wedge of solid between
+            # them in a cell without a solid vertex: the cut keeps it, the edge is
+            # chamfered.  The nearest wall vertex slides along its wall onto the edge.
+            lim = np.where(no_far, tol_f, tol_cc)
+            onf = np.zeros(len(pts), bool)
+            onf[on_feat_d] = True
+            sel = np.nonzero(movable & (phi_d == 0) & ~onf)[0]
+            cp, d = dom_ccv.closest(pts[sel])
+            ok = (d < lim[sel]) & (d > 1e-6 * hmin)
+            sel, cp, d = sel[ok], cp[ok], d[ok]
+            if len(sel) and len(dom_ccv.corners):
+                # not onto an end or a corner of the edges: from a third wall (e.g. the one
+                # the edge ends at) a vertex there would twist the cells along the edge
+                dc, _ = cKDTree(dom_ccv.corners).query(cp)
+                ok = dc > 1e-6 * hmin
+                sel, cp, d = sel[ok], cp[ok], d[ok]
+            if len(sel):
+                # on a wall of the edge, not across a gap: the way there stays on the wall
+                ok = np.abs(dom.sdf(0.5 * (pts[sel] + cp))) < 0.02 * vh_min[sel]
+                sel, cp, d = sel[ok], cp[ok], d[ok]
+            if len(sel):
+                dn, _ = cKDTree(pts[sel]).query(cp)               # nearest candidate
+                d0, _ = cKDTree(pts).query(cp)                    # a vertex there already
+                ok = (d <= dn * (1 + 1e-9)) & (d0 > 1e-6 * hmin)
+                sel, cp, d = sel[ok], cp[ok], d[ok]
+                _, first = np.unique(np.round(cp / (1e-6 * hmin)).astype(np.int64), axis=0, return_index=True)
+                sel, cp, d = sel[first], cp[first], d[first]
+                far_snap[sel] = slide_far[sel] = d >= tol_f[sel]
+                pts[sel] = cp
+                on_feat_d = np.concatenate([on_feat_d, sel])
+            msgs.append(f"slid {len(sel)} wall vertices along their wall onto the concave STL feature edges")
         phi_z = []
         zone_feats = []
         on_feat_z = []
@@ -1266,6 +1306,14 @@ def generate(cfg, log=print):
             tc = np.maximum.reduceat(np.maximum.reduceat(ccv_far[fverts].astype(np.int8), fptr[:-1]), cptr[:-1])
             tc = np.nonzero(tc)[0]
             badl = np.union1d(badl, tc[_leaf_bad(pts, tc, fptr, fverts, cptr, csize, flat_at=ccv_far)])
+        if slide_far.any():
+            # a slid vertex often lands on the line of the wall vertices next to it (the
+            # cell becomes a wedge with a straight face corner, still convex and uncut):
+            # only a corner pushed clearly past straight breaks the cell
+            tc = np.maximum.reduceat(np.maximum.reduceat(slide_far[fverts].astype(np.int8), fptr[:-1]), cptr[:-1])
+            tc = np.nonzero(tc)[0]
+            badl = np.union1d(badl, tc[_leaf_bad(pts, tc, fptr, fverts, cptr, csize, flat_at=slide_far,
+                                                 flat_angle=-1.0)])
         if not len(badl):
             break
         fo = np.concatenate([np.arange(cptr[c], cptr[c + 1]) for c in badl.tolist()])
@@ -1306,11 +1354,28 @@ def generate(cfg, log=print):
         ctx.onfeat = set(on_feat_d.tolist())
     pieces = []        # [faces, parent_leaf, zone]
     cl = cut_leaves.tolist()
-    ctx.zero_edge, drop = surface_contact(dom, pts, phi_d, cl, leaf_faces, csize)
+    cb = []
+    if dom_ccv is not None and dom_ccv._kd is not None:
+        # Uncut cells at a concave edge: a vertex on the edge and the wall vertices next
+        # to it can enclose the wedge of solid (all phi <= 0).  Those faces are split
+        # along the chord through the edge vertex and the cell drops the wedge (below).
+        zf = (phi_d[fverts] == 0).astype(np.int64)
+        zc = np.add.reduceat(zf, fptr[:-1])
+        fz = (zc >= 3) | (zc == fn)
+        cz = np.maximum.reduceat(fz.astype(np.int8), cptr[:-1]) > 0
+        cand_b = np.nonzero(cz & bulk_alive)[0]
+        if len(cand_b):
+            occ_b = np.concatenate([np.arange(fptr[cptr[c]], fptr[cptr[c + 1]]) for c in cand_b.tolist()])
+            own_b = np.repeat(np.arange(len(cand_b)), fptr[cptr[cand_b + 1]] - fptr[cptr[cand_b]])
+            cen = np.zeros((len(cand_b), 3)); np.add.at(cen, own_b, pts[fverts[occ_b]])
+            cen /= np.bincount(own_b, minlength=len(cand_b))[:, None]
+            _, dce = dom_ccv.closest(cen)
+            cb = cand_b[dce < csize[cand_b]].tolist()
+    ctx.zero_edge, drop = surface_contact(dom, pts, phi_d, cl + cb, leaf_faces, csize)
     log(f"surface contact: {sum(v == 1 for v in ctx.zero_edge.values())} face edges in the solid,"
         f" {sum(len(s) for s in drop.values())} wall faces dropped from solid-side cells")
     # faces partly on the wall: split; the contact part is kept by the fluid-side cell
-    splits = contact_splits(dom, pts, phi_d, cl, leaf_faces, csize)
+    splits = contact_splits(dom, pts, phi_d, cl + cb, leaf_faces, csize)
     split_keep = {}
     if splits:
         sk = np.array(list(splits), np.int64)
@@ -1331,8 +1396,9 @@ def generate(cfg, log=print):
             samp.append(c0 + 0.1 * hf * nrm); hh.append(hf)
         sd = dom.sdf(np.array(samp))
         for ci, fid, d_, hf in zip(sc.tolist(), sf.tolist(), sd.tolist(), hh):
-            # only cut cells can drop the contact part (their cut closes the cell)
-            split_keep[(ci, fid)] = bool(bulk_alive[ci]) or not (d_ > 1e-3 * hf)
+            # the cell drops the contact part where it is on its solid side (an uncut
+            # cell is then cut too, the cut closes it)
+            split_keep[(ci, fid)] = not (d_ > 1e-3 * hf)
         split_ids = {fid: (ctx.new_face_id(), ctx.new_face_id()) for fid in splits}
 
     def apply_splits(ci, fl):
@@ -1351,6 +1417,14 @@ def generate(cfg, log=print):
 
     split_cells = set(ci for ci, _ in split_keep)
     log(f"surface contact: {len(splits)} faces split into fluid and wall parts")
+    # uncut cells dropping a face or a part of one are cut (closed by the cut)
+    opened = sorted(set(ci for ci in drop if bulk_alive[ci])
+                    | set(ci for (ci, _), k in split_keep.items() if not k and bulk_alive[ci]))
+    for ci in opened:
+        bulk_alive[ci] = False
+    cl = cl + opened
+    if opened:
+        log(f"surface contact: {len(opened)} uncut cells at concave edges drop a wedge of solid")
     items = []
     for ci in cl:
         fl = leaf_faces(ci)

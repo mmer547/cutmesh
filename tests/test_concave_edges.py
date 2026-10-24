@@ -1,6 +1,7 @@
 """Concave feature edges (the solid juts into the fluid) between the vertex lines: the
 vertex in the solid wedge is snapped onto the edge from up to concaveSnapMax x h, so the
-edge is kept instead of chamfered (mesher.snap_features).
+edge is kept instead of chamfered (mesher.snap_features).  At a level transition, the
+nearest wall vertex slides along its wall onto the edge instead.
 
 python -m unittest discover -s tests
 """
@@ -10,12 +11,13 @@ import tempfile
 import unittest
 
 import numpy as np
+from scipy.spatial import cKDTree
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from cutmesh import quality                                   # noqa: E402
-from cutmesh.geometry import Surface                          # noqa: E402
+from cutmesh.geometry import Surface, write_stl_ascii, sample_segments   # noqa: E402
 from cutmesh.mesher import load_config, generate              # noqa: E402
 from test_thin_gaps import voxel_stl, _write_json             # noqa: E402
 
@@ -137,6 +139,82 @@ class ConcaveFeatureEdges(unittest.TestCase):
         tri = np.array([[[0, 0, 0], [1, 0, 0], [0, 1, 0]]], float)
         self.assertEqual(len(Surface([("s", tri)]).feature_edges(30.0, concave_only=True)), 0)
         self.assertEqual(len(Surface([("s", tri)]).feature_edges(30.0)), 3)
+
+
+class SlotMouths(unittest.TestCase):
+    """Narrow rotor-stator gap with 8 slots in the stator (benchmark2): the slot mouths are
+    concave edges at the transition from the fine gap cells to the coarser slot cells.
+    Away from the grid axes the solid tip lies in a fine cell whose vertices are all fluid
+    or on the walls (no solid vertex to snap)."""
+    mm = 1e-3
+    Rr, Rb, w, depth, H = 29.92e-3, 30.62e-3, 4e-3, 6e-3, 2.5e-3
+
+    def stl(self, path):
+        slots = np.radians(np.arange(8) * 45.0)
+        da = np.arcsin(self.w / 2 / self.Rb)
+        ang = np.linspace(-np.pi, np.pi, 720, endpoint=False)
+        for s in slots:
+            ang = ang[np.abs(np.angle(np.exp(1j * (ang - s)))) > da + 1e-6]
+        ang = np.sort(np.mod(np.concatenate([ang, slots - da, slots + da]) + np.pi, 2 * np.pi) - np.pi)
+        inner = np.column_stack([self.Rr * np.cos(ang), self.Rr * np.sin(ang)])
+        outer = np.column_stack([self.Rb * np.cos(ang), self.Rb * np.sin(ang)])
+        mouth = {int(np.argmin(np.abs(np.angle(np.exp(1j * (ang - (s - da))))))): s for s in slots}
+        caps, rotor, wall = [], [], []
+        for i in range(len(ang)):
+            j = (i + 1) % len(ang)
+            caps.append([inner[i], inner[j], outer[j], outer[i]])
+            rotor.append((inner[j], inner[i]))
+            if i in mouth:
+                u = self.depth * np.array([np.cos(mouth[i]), np.sin(mouth[i])])
+                a, b = outer[i], outer[j]
+                caps.append([a, b, b + u, a + u])
+                wall += [(a, a + u), (a + u, b + u), (b + u, b)]
+            else:
+                wall.append((outer[i], outer[j]))
+        H = self.H
+
+        def sides(E):
+            return [t for a, b in E for t in ([[*a, 0], [*b, H], [*b, 0]], [[*a, 0], [*a, H], [*b, H]])]
+        tc = []
+        for q in caps:          # counter-clockwise in xy
+            for k in range(1, len(q) - 1):
+                a, b, c = q[0], q[k], q[k + 1]
+                tc += [[[*a, 0], [*c, 0], [*b, 0]], [[*a, H], [*b, H], [*c, H]]]
+        write_stl_ascii(path, [("rotor", np.array(sides(rotor))), ("wall", np.array(sides(wall) + tc))])
+        return np.array([[self.Rb * np.cos(s + g * da), self.Rb * np.sin(s + g * da)] for s in slots for g in (-1, 1)])
+
+    def mesh(self, extra):
+        with tempfile.TemporaryDirectory() as d:
+            E = self.stl(os.path.join(d, "s.stl"))
+            _write_json(os.path.join(d, "m.json"), {
+                "domain": "s.stl", "baseCellSize": 0.005, "surfaceRefinement": {"default": 1, "rotor": 2},
+                "featureLevel": 2, "gapRefinement": {"thickness": 0.001, "level": 3},
+                "rotatingZones": [{"name": "mrf", "cylinder": {"point1": [0, 0, -0.001], "point2": [0, 0, 0.0035],
+                                                              "radius": 0.0303625},
+                                   "surfaceLevel": 3, "volumeLevel": 2, "omega": 0,
+                                   "wallProximity": {"distance": 0.0005, "level": 4, "bufferLayers": 1}}],
+                **extra})
+            R = generate(load_config(os.path.join(d, "m.json")), log=lambda s: None)
+        P, (nn, vv), nI = R["points"], R["faces"], len(R["neighbour"])
+        q = quality.check(P, R["faces"], R["owner"], R["neighbour"], log=lambda s: None)
+        self.assertEqual(q["nNegVol"], 0)
+        self.assertEqual(q["nBadPyramids"], 0)
+        self.assertEqual(q["openCellEdges"], 0)
+        ptr = np.concatenate([[0], np.cumsum(nn)])
+        bf = [vv[ptr[f]:ptr[f + 1]] for f in range(nI, len(nn))]
+        e = np.concatenate([np.column_stack([p, np.roll(p, -1)]) for p in bf])
+        kd = cKDTree(sample_segments(P[e], 0.005 / 8 / 64))
+        zs = np.linspace(0.1, 0.9, 9) * self.H
+        # distance from the mouth edges to the nearest wall edge of the mesh, in level-3 cells
+        miss = [kd.query(np.column_stack([np.full(9, x), np.full(9, y), zs]))[0] / (0.005 / 8) for x, y in E]
+        return np.array(miss)
+
+    def test_mouths_kept(self):
+        miss = self.mesh({})
+        self.assertLess(miss.max(), 0.1)
+        # without the concave pass most of the diagonal mouths are chamfered
+        miss0 = self.mesh({"concaveSnapMax": 0.5})
+        self.assertGreater((miss0 > 0.2).any(1).sum(), 4)
 
 
 if __name__ == "__main__":
