@@ -434,8 +434,12 @@ class Surface:
             d[exact_mask] = dd
         return sign * d
 
-    def feature_edges(self, angle_deg):
-        """Feature edges (dihedral angle > angle, open edges, region boundaries) as segments."""
+    def feature_edges(self, angle_deg, concave_only=False):
+        """Feature edges (dihedral angle > angle, open edges, region boundaries) as segments.
+        concave_only: only the sharp manifold edges where the solid juts into the domain (the
+        surface is concave seen from inside: a re-entrant edge of the fluid).
+        Independent of the triangle winding: the angle is taken between the two triangles'
+        in-plane directions away from the edge, and the side of the solid by inside()."""
         tol = 1e-9 * self.L
         v = self.tris.reshape(-1, 3)
         key = np.round(v / tol).astype(np.int64)
@@ -443,28 +447,59 @@ class Surface:
         vid = vid.reshape(-1, 3)
         e = np.concatenate([vid[:, [0, 1]], vid[:, [1, 2]], vid[:, [2, 0]]])
         et = np.tile(np.arange(len(vid)), 3)
+        # unit direction in the triangle's plane from its edge towards its third vertex
+        T = self.tris
+        ea = np.concatenate([T[:, 0], T[:, 1], T[:, 2]])
+        eb = np.concatenate([T[:, 1], T[:, 2], T[:, 0]])
+        ec = np.concatenate([T[:, 2], T[:, 0], T[:, 1]])
+        t = eb - ea
+        t /= np.maximum(np.linalg.norm(t, axis=1, keepdims=True), 1e-300)
+        dv = ec - ea
+        dv -= (dv * t).sum(1)[:, None] * t
+        hgt = np.linalg.norm(dv, axis=1)
+        dv /= np.maximum(hgt, 1e-300)[:, None]
         es = np.sort(e, 1)
         _, inv, cnt = np.unique(es, axis=0, return_inverse=True, return_counts=True)
-        n = np.cross(self.tris[:, 1] - self.tris[:, 0], self.tris[:, 2] - self.tris[:, 0])
-        n /= np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-300)
         o = np.argsort(inv, kind="stable")
-        inv_s = inv[o]; et_s = et[o]; e_s = e[o]
-        starts = np.searchsorted(inv_s, np.arange(len(cnt)))
-        feat = []
-        cosang = np.cos(np.radians(angle_deg))
-        for gi in range(len(cnt)):
-            s = starts[gi]
-            if cnt[gi] != 2:
-                feat.append(e_s[s]); continue
-            t1, t2 = et_s[s], et_s[s + 1]
-            if np.dot(n[t1], n[t2]) < cosang or self.region[t1] != self.region[t2]:
-                feat.append(e_s[s])
-        if not feat:
+        starts = np.searchsorted(inv[o], np.arange(len(cnt)))
+        sel = o[starts]
+        feat = np.zeros(len(cnt), bool)
+        two = cnt == 2
+        if not concave_only:
+            feat[~two] = True                      # open / non-manifold edges
+        g = np.nonzero(two)[0]
+        i1, i2 = o[starts[g]], o[starts[g] + 1]
+        t1, t2 = et[i1], et[i2]
+        # wedge angle between the triangles < 180 - angle (normals of consistently wound
+        # triangles: dot(n1, n2) = -dot(d1, d2))
+        sharp = (dv[i1] * dv[i2]).sum(1) > np.cos(np.radians(180.0 - angle_deg))
+        if concave_only:
+            # the wedge (< 180 deg) is solid: probe a point just inside it
+            k = np.nonzero(sharp)[0]
+            if len(k):
+                j1, j2 = i1[k], i2[k]
+                m = 0.5 * (ea[j1] + eb[j1])
+                w = dv[j1] + dv[j2]
+                w /= np.maximum(np.linalg.norm(w, axis=1, keepdims=True), 1e-300)
+                # well inside the wedge: far beyond the ray perturbation of inside(), but
+                # short of any other wall (a nearby shell would decide the side instead).
+                # The search starts just off the edge, beyond the ray perturbation, so the
+                # probe never lands closer to the edge than that.
+                r = 0.25 * np.minimum(hgt[j1], hgt[j2])
+                s0 = np.minimum(1e-5 * self.L, 0.01 * r)
+                sg, tt, tid = self.segment_hits(m + s0[:, None] * w, m + r[:, None] * w)
+                far = (tt > 1e-9) & (tid != et[j1][sg]) & (tid != et[j2][sg])
+                tmin = np.ones(len(k))
+                np.minimum.at(tmin, sg[far], 0.5 * tt[far])
+                solid = ~self.inside(m + (s0 + tmin * (r - s0))[:, None] * w)
+                feat[g[k[solid]]] = True
+        else:
+            feat[g[sharp | (self.region[t1] != self.region[t2])]] = True
+        if not feat.any():
             return np.zeros((0, 2, 3))
         vpos = np.zeros((vid.max() + 1, 3))
         vpos[vid.ravel()] = v
-        feat = np.array(feat)
-        return vpos[feat]
+        return vpos[e[sel[feat]]]
 
 
 # ----------------------------------------------------------------------------
