@@ -269,10 +269,11 @@ class Surface:
             cp[s0:s0 + chunk] = c1; d[s0:s0 + chunk] = d1; sid[s0:s0 + chunk] = s1
         return cp, d, self._sub_parent[sid]
 
-    def segment_hits(self, a, b, samples=64):
+    def segment_hits(self, a, b, samples=64, bisect=40):
         """Crossings of the segments a[i] -> b[i] with the surface, sorted along each:
         (segment index, parameter t, triangle id).  Exact with the Rust extension; the
-        fallback samples the segments (crossings closer than 1/samples merge)."""
+        fallback samples the segments (crossings closer than 1/samples merge) and bisects
+        each change of side, returning t at the start side of the final bracket."""
         a = np.ascontiguousarray(np.atleast_2d(a), float)
         b = np.ascontiguousarray(np.atleast_2d(b), float)
         if self._rs is not None:
@@ -281,11 +282,18 @@ class Surface:
         Q = a[:, None, :] + ts[None, :, None] * (b - a)[:, None, :]
         ins = self.inside(Q.reshape(-1, 3)).reshape(len(a), samples + 1)
         sg, k = np.nonzero(ins[:, 1:] != ins[:, :-1])
-        mid = 0.5 * (Q[sg, k] + Q[sg, k + 1])
+        lo, hi = k / samples, (k + 1) / samples
+        s0 = ins[sg, k]
+        for _ in range(bisect):
+            t = 0.5 * (lo + hi)
+            same = self.inside(a[sg] + t[:, None] * (b - a)[sg]) == s0
+            lo = np.where(same, t, lo)
+            hi = np.where(same, hi, t)
+        mid = a[sg] + (0.5 * (lo + hi))[:, None] * (b - a)[sg]
         if self._kd is None and len(mid):
             self.build_search(self.L / 50)
         _, _, tid = self.closest(mid)
-        return sg.astype(np.int64), (k + 0.5) / samples, tid.astype(np.int64)
+        return sg.astype(np.int64), lo, tid.astype(np.int64)
 
     def approx_distance(self, p, upper=np.inf):
         d, _ = self._kd.query(p, distance_upper_bound=upper, workers=-1)
@@ -415,13 +423,16 @@ class Surface:
                 w = dv[j1] + dv[j2]
                 w /= np.maximum(np.linalg.norm(w, axis=1, keepdims=True), 1e-300)
                 # well inside the wedge: far beyond the ray perturbation of inside(), but
-                # short of any other wall (a nearby shell would decide the side instead)
+                # short of any other wall (a nearby shell would decide the side instead).
+                # The search starts just off the edge, beyond the ray perturbation, where
+                # the side is defined (the sampled fallback reads it there).
                 r = 0.25 * np.minimum(hgt[j1], hgt[j2])
-                sg, tt, tid = self.segment_hits(m, m + r[:, None] * w)
+                s0 = np.minimum(1e-5 * self.L, 0.01 * r)
+                sg, tt, tid = self.segment_hits(m + s0[:, None] * w, m + r[:, None] * w)
                 far = (tt > 1e-9) & (tid != et[j1][sg]) & (tid != et[j2][sg])
                 tmin = np.ones(len(k))
                 np.minimum.at(tmin, sg[far], 0.5 * tt[far])
-                solid = ~self.inside(m + (tmin * r)[:, None] * w)
+                solid = ~self.inside(m + (s0 + tmin * (r - s0))[:, None] * w)
                 feat[g[k[solid]]] = True
         else:
             feat[g[sharp | (self.region[t1] != self.region[t2])]] = True

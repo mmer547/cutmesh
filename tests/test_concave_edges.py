@@ -115,13 +115,23 @@ class ConcaveFeatureEdges(unittest.TestCase):
         self.assertTrue(((seg >= 1 - 1e-12) & (seg <= 2 + 1e-12)).all())
 
     def test_close_nested_shell(self):
-        # inner box 0.1 off the outer one: the probes at the outer (convex) edges would
-        # land in the inner solid without stopping at its wall
-        T = np.concatenate([_box((0, 0, 0), (3, 3, 3)), _box((0.1, 0.1, 0.1), (2.9, 2.9, 2.9))])
-        for tris in (T, T[:, ::-1]):
-            seg = Surface([("s", tris)]).feature_edges(30.0, concave_only=True)
-            self.assertEqual(len(seg), 12)
-            self.assertTrue(((seg >= 0.1 - 1e-12) & (seg <= 2.9 + 1e-12)).all())
+        # inner box close to the outer one: the probes at the outer (convex) edges would
+        # land in the inner solid without stopping at its wall.  With the Rust extension
+        # and with the sampled fallback of segment_hits (crossings within the first sample
+        # interval of 1/64)
+        for c in (0.1, 0.001):
+            T = np.concatenate([_box((0, 0, 0), (3, 3, 3)), _box((c, c, c), (3 - c, 3 - c, 3 - c))])
+            for tris in (T, T[:, ::-1]):
+                for rust in (True, False):
+                    s = Surface([("s", tris)])
+                    if not rust:
+                        if s._rs is None:
+                            continue
+                        s._rs = None
+                        s._build_ray_bins()
+                    seg = s.feature_edges(30.0, concave_only=True)
+                    self.assertEqual(len(seg), 12, (c, rust))
+                    self.assertTrue(((seg >= c - 1e-12) & (seg <= 3 - c + 1e-12)).all())
 
     def test_open_edges_skipped(self):
         tri = np.array([[[0, 0, 0], [1, 0, 0], [0, 1, 0]]], float)
