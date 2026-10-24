@@ -71,7 +71,7 @@ def _write_json(path, obj):
 class ThinGaps(unittest.TestCase):
     h = 0.01
 
-    def mesh(self, y_centre, thickness, fill):
+    def mesh(self, y_centre, thickness, fill, extra=None):
         h, v = self.h, self.h / 10
         G = np.zeros((60, 60, 90), bool)
         G[:, :, 0:30] = True                    # chamber z in [0, 3h]
@@ -81,7 +81,7 @@ class ThinGaps(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             voxel_stl(os.path.join(d, "s.stl"), G, v)
             _write_json(os.path.join(d, "m.json"), {"domain": "s.stl", "baseCellSize": h, "surfaceRefinement": {"default": 0},
-                       "featureLevel": 0, "fillThinGaps": fill})
+                       "featureLevel": 0, "fillThinGaps": fill, **(extra or {})})
             R = generate(load_config(os.path.join(d, "m.json")), log=lambda s: None)
         own, nei = R["owner"], R["neighbour"]
         nC = int(max(own.max(), nei.max())) + 1
@@ -97,6 +97,118 @@ class ThinGaps(unittest.TestCase):
         self.assertAlmostEqual(vr, 1.0, delta=0.01)
         ncomp, _ = self.mesh(2.5 * self.h, 0.4 * self.h, fill=0)
         self.assertEqual(ncomp, 2)              # the slot is lost without the splitting
+
+    def test_auto_gap_refinement(self):
+        # a slot a quarter of a cell wide: closed without, three cells across with it
+        auto = {"autoGapRefinement": {"cellsAcross": 3, "maxLevel": 4}}
+        ncomp, vr = self.mesh(2.5 * self.h, 0.25 * self.h, fill=2, extra=auto)
+        self.assertEqual(ncomp, 1)
+        self.assertAlmostEqual(vr, 1.0, delta=0.002)
+        ncomp, _ = self.mesh(2.5 * self.h, 0.25 * self.h, fill=2)
+        self.assertEqual(ncomp, 2)
+
+    def test_isolated_region_removed(self):
+        # a small cube of fluid apart from the chamber: removed below minRegionVolume
+        h, v = self.h, self.h / 10
+        G = np.zeros((60, 60, 90), bool)
+        G[:, :, 0:30] = True
+        G[24:30, 24:30, 50:56] = True                         # 0.6h cube, 0.15 % of the volume
+        for frac, ncomp in ((1e-2, 1), (0, 2)):
+            with tempfile.TemporaryDirectory() as d:
+                voxel_stl(os.path.join(d, "s.stl"), G, v)
+                _write_json(os.path.join(d, "m.json"), {"domain": "s.stl", "baseCellSize": h, "featureLevel": 0,
+                           "surfaceRefinement": {"default": 0}, "minRegionVolume": frac})
+                R = generate(load_config(os.path.join(d, "m.json")), log=lambda s: None)
+            own, nei = R["owner"], R["neighbour"]
+            nC = int(max(own.max(), nei.max())) + 1
+            self.assertEqual(components(own, nei, nC), ncomp)
+            q = quality.check(R["points"], R["faces"], own, nei, log=lambda s: None)
+            self.assertEqual(q["openCellEdges"], 0)
+            self.assertEqual(q["nNegVol"], 0)
+
+    def test_main_region_kept(self):
+        # two equal chambers and a threshold above both: the larger one must stay
+        h, v = self.h, self.h / 10
+        G = np.zeros((60, 60, 90), bool)
+        G[:, :, 0:30] = True
+        G[:, :, 60:90] = True
+        with tempfile.TemporaryDirectory() as d:
+            voxel_stl(os.path.join(d, "s.stl"), G, v)
+            _write_json(os.path.join(d, "m.json"), {"domain": "s.stl", "baseCellSize": h, "featureLevel": 0,
+                       "surfaceRefinement": {"default": 0}, "minRegionVolume": 0.6})
+            R = generate(load_config(os.path.join(d, "m.json")), log=lambda s: None)
+        own, nei = R["owner"], R["neighbour"]
+        nC = int(max(own.max(), nei.max())) + 1
+        self.assertEqual(components(own, nei, nC), 1)
+        q = quality.check(R["points"], R["faces"], own, nei, log=lambda s: None)
+        self.assertAlmostEqual(q["totalVol"] / (G.sum() * v ** 3), 0.5, delta=0.01)
+
+    def _box(self):
+        with tempfile.TemporaryDirectory() as d:
+            voxel_stl(os.path.join(d, "b.stl"), np.ones((1, 1, 1), bool), 1.0)
+            return Surface(read_stl(os.path.join(d, "b.stl")))
+
+    def test_segment_hits_fallback_exact(self):
+        # without Rust a crossing at 1/300 of a long segment is located exactly, not at
+        # the middle of a sample interval
+        S = self._box()
+        a, b = np.array([[0.3, 0.6, 0.99]]), np.array([[0.3, 0.6, 3.99]])
+        S._rs, S._nb = None, None
+        seg, t, _ = S.segment_hits(a, b)
+        self.assertEqual(len(seg), 1)
+        self.assertAlmostEqual(t[0], 0.01 / 3.0, delta=1e-12)
+
+    def test_segment_hits_fallback_thin_wall(self):
+        # a wall 1/128 of the segment thick, between two of the 64 samples the old fallback
+        # took of the inside test: it saw fluid at every sample and missed the wall
+        S = self._box()
+        a, b = np.array([[0.3, 0.6, -0.5]]), np.array([[0.3, 0.6, 127.5]])
+        S._rs, S._nb = None, None
+        seg, t, _ = S.segment_hits(a, b)
+        self.assertEqual(len(seg), 2)
+        self.assertTrue(np.allclose(t, [0.5 / 128, 1.5 / 128], atol=1e-12))
+
+    def test_segment_hits_fallback_bin_boundary(self):
+        # y extent [0, 2]: the middle ray-bin boundary is at y = 1, where the face x = 0 of
+        # the upper cube starts.  A segment within the tolerance below it crosses the face
+        # (as in Rust) although its own box lies in the bin below the face's.
+        filled = np.zeros((6, 2, 1), bool)
+        filled[0, 1, 0] = filled[5, 0, 0] = True
+        with tempfile.TemporaryDirectory() as d:
+            voxel_stl(os.path.join(d, "b.stl"), filled, 1.0)
+            S = Surface(read_stl(os.path.join(d, "b.stl")))
+        a, b = np.array([[-0.5, 1 - 5e-10, 0.3]]), np.array([[0.5, 1 - 5e-10, 0.3]])
+        S._rs, S._nb = None, None
+        seg, t, _ = S.segment_hits(a, b)
+        self.assertEqual(len(seg), 1)
+        self.assertAlmostEqual(t[0], 0.5, delta=1e-12)
+
+    def test_segment_hits_fallback_matches_rust(self):
+        from cutmesh.geometry import rust_available
+        if not rust_available():
+            self.skipTest("Rust extension not built")
+        S = self._box()
+        rng = np.random.default_rng(1)
+        a = rng.uniform(-0.5, 1.5, (2000, 3))
+        b = a + rng.normal(0.0, 0.6, (2000, 3))
+        a[:200, 1] = 1.0                                   # segments in the plane of a face
+        b[:200, 1] = 1.0
+        ref = S.segment_hits(a, b)
+        S._rs, S._nb = None, None
+        for chunk in (2_000_000, 7):                       # 7: segments split over chunks
+            got = S.segment_hits(a, b, chunk=chunk)
+            self.assertTrue(np.array_equal(ref[0], got[0]))
+            self.assertTrue(np.array_equal(ref[2], got[2]))
+            self.assertTrue(np.allclose(ref[1], got[1], atol=1e-12))
+
+    def test_fluid_side_beyond_inside_shift(self):
+        # a probe closer to the wall than inside()'s shift must not pick the solid side
+        from cutmesh.mesher import _fluid_side
+        S = self._box()
+        p = np.array([[0.5, 1.0, 0.5], [0.5, 0.0, 0.5], [0.5, 0.5, 1.0]])
+        n = np.array([[0.0, 1.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, 1.0]])     # outward
+        eps = 0.1 * S.inside_shift
+        self.assertTrue(np.allclose(_fluid_side(S, p, n, eps), -n))
 
     def test_slot_centred_on_vertex_plane(self):
         ncomp, vr = self.mesh(3.0 * self.h, 0.5 * self.h, fill=0)

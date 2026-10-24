@@ -29,6 +29,7 @@ DEFAULTS = {
     "hangingSnap": "free",      # hanging nodes that cannot slide onto a surface: "free" projection or "constrained" (treated as on-surface)
     "fillThinGaps": 2,          # passes splitting cells with fluid inside but no fluid corner (Cartesian base; 0 = off)
     "checkLeaks": True,         # check the final mesh for fluid joined through a solid wall
+    "minRegionVolume": 1e-3,    # remove fluid regions cut off from the rest below this volume fraction
     "fillThinWalls": 3,         # passes splitting cells with solid inside but no solid corner (Cartesian base; 0 = off)
     "patchTypes": {},
     "rotatingZones": [],
@@ -688,6 +689,62 @@ def _thin_wall_cells(dom, c, h):
     return out
 
 
+def _auto_gap_spec(cfg, sref):
+    """(cells across a gap, highest level) of autoGapRefinement (true = defaults)"""
+    ag = cfg["autoGapRefinement"]
+    ag = {} if ag is True else ag
+    lev = [int(v) for v in sref.values()] or [0]
+    return float(ag.get("cellsAcross", 3)), int(ag.get("maxLevel", max(lev) + 2))
+
+
+def _fluid_side(dom, p, nrm, eps):
+    """Unit normals at the surface points p turned towards the fluid.  inside() shifts its
+    query points by dom.inside_shift, so the probes go at least a few times that far out;
+    where both or neither probe is in the fluid (a wall thinner than that, a corner) the
+    side is taken from the probe behind the triangle as before."""
+    e = max(eps, 4.0 * dom.inside_shift)
+    back = dom.inside(p - e * nrm)
+    front = dom.inside(p + e * nrm)
+    flip = np.where(back != front, back, dom.inside(p - eps * nrm))
+    return np.where(flip[:, None], -nrm, nrm)
+
+
+def _auto_gap_samples(dom, h0, region_level, nacross, lmax):
+    """Wall samples of gaps too narrow for nacross cells of the wall's surface level:
+    from each sample a line goes into the fluid along the normal; the first wall it hits
+    gives the gap width w, and the level whose cells fit nacross times into w is the
+    target (capped at lmax).  Returns ([(level, samples, n_unresolved)], n_unresolved):
+    n_unresolved samples would need more than lmax."""
+    p, ti = dom.samples(h0 / 2 ** lmax)
+    T = dom.tris[ti]
+    nrm = np.cross(T[:, 1] - T[:, 0], T[:, 2] - T[:, 0])
+    nrm /= np.maximum(np.linalg.norm(nrm, axis=1), 1e-300)[:, None]
+    lw = region_level[dom.region[ti]]                       # surface level of the wall
+    hw = h0 / 2.0 ** lw
+    eps = 1e-3 * h0 / 2 ** lmax
+    into = _fluid_side(dom, p, nrm, eps)
+    wmax = nacross * hw                                     # wider gaps are resolved anyway
+    a = p + eps * into
+    b = p + wmax[:, None] * into
+    seg, t, _ = dom.segment_hits(a, b)
+    w = np.full(len(p), np.inf)
+    if len(seg):
+        first = np.ones(len(seg), bool)
+        first[1:] = seg[1:] != seg[:-1]
+        w[seg[first]] = eps + t[first] * (wmax[seg[first]] - eps)
+    with np.errstate(divide="ignore"):
+        need = np.ceil(np.log2(nacross * h0 / w)).astype(float)
+    need = np.where(np.isfinite(w), need, -1)
+    out = []
+    nun = int(((need > lmax) & (need > lw)).sum())
+    lev = np.minimum(need, lmax)
+    for L in range(int(lw.min()) + 1, lmax + 1):
+        m = (lev == L) & (L > lw)
+        if m.any():
+            out.append((L, p[m], nun))
+    return out, nun
+
+
 def _thin_gap(dom, p, into, tg, eps, max_steps=512):
     """wall samples p whose fluid along `into` ends (leaves the domain) within tg.
     Marches by the distance to the STL - no wall can be closer, so none is skipped; a step
@@ -737,6 +794,7 @@ def generate(cfg, log=print):
     Lmax = int(max([region_level.max(), flevel] + [max(z["surfaceLevel"], z["volumeLevel"]) for z in zones]
                    + [int(z["wallProximity"]["level"]) for z in zones if z["wallProximity"]]
                    + ([int(cfg["gapRefinement"]["level"])] if cfg.get("gapRefinement") else [])
+                   + ([_auto_gap_spec(cfg, sref)[1]] if cfg.get("autoGapRefinement") else [])
                    + [lv for _, lv in regions]))
     hmin = h0 / 2 ** Lmax
     log(f"domain: {len(dom.tris)} triangles, regions {dom.names}")
@@ -762,6 +820,15 @@ def generate(cfg, log=print):
         if region_level[r] > 0:
             p, _ = dom.samples(h0 / 2 ** region_level[r] / 2, regions=[r])
             ssrc.append((cKDTree(p), int(region_level[r]), nbuf))
+    if cfg.get("autoGapRefinement"):
+        nacross, lag = _auto_gap_spec(cfg, sref)
+        groups, nun = _auto_gap_samples(dom, h0, region_level, nacross, lag)
+        for lv, pts_, _ in groups:
+            ssrc.append((cKDTree(pts_), lv, nbuf))
+            log(f"auto gap refinement: {len(pts_)} wall samples -> level {lv}")
+        if nun:
+            log(f"auto gap refinement: {nun} wall samples in gaps narrower than {nacross:g} cells"
+                f" of level {lag} (raise maxLevel to resolve them)")
     gr = cfg.get("gapRefinement")
     if gr:
         # fluid thinner than `thickness` (slot tips, narrow channels): refine its walls to `level`
@@ -1595,6 +1662,38 @@ def generate(cfg, log=print):
         n_ = o_n[occs]
         off = np.repeat(o_ptr[occs] - np.concatenate([[0], np.cumsum(n_)[:-1]]), n_)
         return n_, o_verts[np.arange(int(n_.sum())) + off]
+
+    # ------------------------------------------------------------ isolated fluid regions
+    # fragments cut off from the main fluid (e.g. the tip of an acute slot narrower than
+    # the cells) have no inflow and break the solution: small ones are removed
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+    ncomp, lab = connected_components(coo_matrix((np.ones(len(i_own)), (i_own, i_nei)), shape=(nC, nC)),
+                                      directed=False)
+    if ncomp > 1:
+        ann, avv = gather(np.concatenate([i_occ, b_occ]))
+        ffa = quality.FlatFaces((ann, avv))
+        Cf_, Sf_ = quality.face_geometry(P, ffa)
+        _, Vc = quality.cell_geometry(nC, np.concatenate([i_own, b_own]), i_nei, Cf_, Sf_)
+        del ann, avv, ffa, Cf_, Sf_
+        vol = np.bincount(lab, np.abs(Vc), ncomp)
+        drop = vol < cfg["minRegionVolume"] * vol.sum()
+        drop[np.argmax(vol)] = False            # never the main fluid region
+        if drop.any():
+            kc = ~drop[lab]
+            new = np.cumsum(kc) - 1
+            ki = kc[i_own]
+            i_occ, i_own, i_nei = i_occ[ki], new[i_own[ki]], new[i_nei[ki]]
+            kb = kc[b_own]
+            b_occ, b_own = b_occ[kb], new[b_own[kb]]
+            cell_zone = cell_zone[kc]
+            log(f"isolated fluid regions: {int(drop.sum())} removed ({int((~kc).sum())} cells,"
+                f" volume {vol[drop].sum():.3g} = {vol[drop].sum() / vol.sum():.2e} of the total)")
+            nC = int(kc.sum())
+        if (~drop).sum() > 1:
+            big = np.sort(vol[~drop])[::-1]
+            log(f"WARNING: the fluid has {len(big)} separate regions (volumes {', '.join(f'{v:.3g}' for v in big[:6])})"
+                " - check for gaps closed by the mesh")
 
     # ------------------------------------------------------------ patches
     bnn, bverts = gather(b_occ)
