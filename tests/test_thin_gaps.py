@@ -149,16 +149,42 @@ class ThinGaps(unittest.TestCase):
             return Surface(read_stl(os.path.join(d, "b.stl")))
 
     def test_segment_hits_fallback_exact(self):
-        # without Rust the crossings are sampled, then bisected: a crossing at 1/300 of a
-        # long segment is located exactly, not at the middle of the first sample interval
+        # without Rust a crossing at 1/300 of a long segment is located exactly, not at
+        # the middle of a sample interval
         S = self._box()
-        a, b = np.array([[0.5, 0.5, 0.99]]), np.array([[0.5, 0.5, 3.99]])
+        a, b = np.array([[0.3, 0.6, 0.99]]), np.array([[0.3, 0.6, 3.99]])
         S._rs, S._nb = None, None
-        S.build_search(0.5)
         seg, t, _ = S.segment_hits(a, b)
         self.assertEqual(len(seg), 1)
-        # exact up to inside()'s own shift (was up to half a sample interval, 1/128)
-        self.assertAlmostEqual(t[0], 0.01 / 3.0, delta=2 * S.inside_shift / 3.0)
+        self.assertAlmostEqual(t[0], 0.01 / 3.0, delta=1e-12)
+
+    def test_segment_hits_fallback_thin_wall(self):
+        # a wall 1/128 of the segment thick, between two of the 64 samples the old fallback
+        # took of the inside test: it saw fluid at every sample and missed the wall
+        S = self._box()
+        a, b = np.array([[0.3, 0.6, -0.5]]), np.array([[0.3, 0.6, 127.5]])
+        S._rs, S._nb = None, None
+        seg, t, _ = S.segment_hits(a, b)
+        self.assertEqual(len(seg), 2)
+        self.assertTrue(np.allclose(t, [0.5 / 128, 1.5 / 128], atol=1e-12))
+
+    def test_segment_hits_fallback_matches_rust(self):
+        from cutmesh.geometry import rust_available
+        if not rust_available():
+            self.skipTest("Rust extension not built")
+        S = self._box()
+        rng = np.random.default_rng(1)
+        a = rng.uniform(-0.5, 1.5, (2000, 3))
+        b = a + rng.normal(0.0, 0.6, (2000, 3))
+        a[:200, 1] = 1.0                                   # segments in the plane of a face
+        b[:200, 1] = 1.0
+        ref = S.segment_hits(a, b)
+        S._rs, S._nb = None, None
+        for chunk in (2_000_000, 7):                       # 7: segments split over chunks
+            got = S.segment_hits(a, b, chunk=chunk)
+            self.assertTrue(np.array_equal(ref[0], got[0]))
+            self.assertTrue(np.array_equal(ref[2], got[2]))
+            self.assertTrue(np.allclose(ref[1], got[1], atol=1e-12))
 
     def test_fluid_side_beyond_inside_shift(self):
         # a probe closer to the wall than inside()'s shift must not pick the solid side

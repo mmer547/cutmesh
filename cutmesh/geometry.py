@@ -141,6 +141,24 @@ def closest_point_triangles(p, a, b, c):
     return res
 
 
+def _seg_tri(p, d, T, tol=1e-9):
+    """Moeller-Trumbore crossing of the segments p -> p + d with the triangles T, the
+    same test and tolerances as the Rust seg_tri: (t clamped to [0, 1], hit mask)."""
+    e1, e2 = T[:, 1] - T[:, 0], T[:, 2] - T[:, 0]
+    pv = np.cross(d, e2)
+    det = np.einsum("ij,ij->i", e1, pv)
+    ok = np.abs(det) >= 1e-300
+    inv = np.where(ok, 1.0 / np.where(ok, det, 1.0), 0.0)
+    tv = p - T[:, 0]
+    u = np.einsum("ij,ij->i", tv, pv) * inv
+    qv = np.cross(tv, e1)
+    v = np.einsum("ij,ij->i", d, qv) * inv
+    t = np.einsum("ij,ij->i", e2, qv) * inv
+    ok &= (u >= -tol) & (u <= 1 + tol) & (v >= -tol) & (u + v <= 1 + tol)
+    ok &= (t >= -tol) & (t <= 1 + tol)
+    return np.clip(t, 0.0, 1.0), ok
+
+
 def subdivide_triangles(tris, maxedge):
     """Longest-edge bisection until every edge <= maxedge. Returns (tris, parent)."""
     T = np.asarray(tris, float)
@@ -275,28 +293,55 @@ class Surface:
             cp[s0:s0 + chunk] = c1; d[s0:s0 + chunk] = d1; sid[s0:s0 + chunk] = s1
         return cp, d, self._sub_parent[sid]
 
-    def segment_hits(self, a, b, samples=64):
+    def segment_hits(self, a, b, chunk=2_000_000):
         """Crossings of the segments a[i] -> b[i] with the surface, sorted along each:
-        (segment index, parameter t, triangle id).  Exact with the Rust extension; the
-        fallback samples the segments to find the crossings (crossings closer than
-        1/samples merge) and then bisects each one to t +- 2^-40."""
+        (segment index, parameter t, triangle id).  Exact in both backends (the same
+        segment-triangle test); the fallback takes its candidates from the ray bins of
+        inside() and keeps those whose bounding box meets the segment's."""
         a = np.ascontiguousarray(np.atleast_2d(a), float)
         b = np.ascontiguousarray(np.atleast_2d(b), float)
         if self._rs is not None:
             return self._rs.segment_hits(a, b)
-        ts = (np.arange(samples + 1)) / samples
-        Q = a[:, None, :] + ts[None, :, None] * (b - a)[:, None, :]
-        ins = self.inside(Q.reshape(-1, 3)).reshape(len(a), samples + 1)
-        sg, k = np.nonzero(ins[:, 1:] != ins[:, :-1])
-        lo, hi, s0 = ts[k], ts[k + 1], ins[sg, k]
-        A, D = a[sg], (b - a)[sg]
-        for _ in range(34):
-            m = 0.5 * (lo + hi)
-            same = self.inside(A + m[:, None] * D) == s0
-            lo = np.where(same, m, lo); hi = np.where(same, hi, m)
-        t = 0.5 * (lo + hi)
-        _, _, tid = self.closest(A + t[:, None] * D)
-        return sg.astype(np.int64), t, tid.astype(np.int64)
+        if self._nb is None:
+            self._build_ray_bins()
+        T = self.tris
+        tol = 1e-9 * self.L
+        tlo, thi = T.min(1) - tol, T.max(1) + tol
+        slo, shi = np.minimum(a, b), np.maximum(a, b)
+        bi = lambda v, k: np.clip(((v - self._blo[k]) / self._bsz[k]).astype(int), 0, self._nb - 1)
+        i0, i1 = bi(slo[:, 1], 0), bi(shi[:, 1], 0)
+        j0, j1 = bi(slo[:, 2], 1), bi(shi[:, 2], 1)
+        ni, nj = i1 - i0 + 1, j1 - j0 + 1
+        # (segment, bin) pairs, then (segment, triangle) pairs; a triangle spanning several
+        # bins of one segment comes up more than once (np.unique, per chunk and at the end)
+        sb = np.repeat(np.arange(len(a)), ni * nj)
+        r = np.arange(len(sb)) - np.repeat(np.cumsum(ni * nj) - ni * nj, ni * nj)
+        bins = (i0[sb] + r // nj[sb]) * self._nb + j0[sb] + r % nj[sb]
+        cnt = self._bstart[bins + 1] - self._bstart[bins]
+        cum = np.cumsum(cnt)
+        S, Tt, I = [], [], []
+        b0 = 0
+        while b0 < len(bins):
+            b1 = max(int(np.searchsorted(cum, (cum[b0 - 1] if b0 else 0) + chunk, side="right")), b0 + 1)
+            c = cnt[b0:b1]
+            sg = np.repeat(sb[b0:b1], c)
+            off = np.repeat(self._bstart[bins[b0:b1]] - (np.cumsum(c) - c), c)
+            ti = self._btri[off + np.arange(len(sg))]
+            ok = ((tlo[ti] <= shi[sg]) & (thi[ti] >= slo[sg])).all(1)
+            sg, ti = sg[ok], ti[ok]
+            if len(sg):
+                key = np.unique(sg * len(T) + ti)
+                sg, ti = key // len(T), key % len(T)
+                t, hit = _seg_tri(a[sg], b[sg] - a[sg], T[ti])
+                S.append(sg[hit]); Tt.append(t[hit]); I.append(ti[hit])
+            b0 = b1
+        if not S:
+            return np.zeros(0, np.int64), np.zeros(0), np.zeros(0, np.int64)
+        S, Tt, I = np.concatenate(S), np.concatenate(Tt), np.concatenate(I)
+        _, u = np.unique(S * len(T) + I, return_index=True)
+        S, Tt, I = S[u], Tt[u], I[u]
+        o = np.lexsort((I, Tt, S))
+        return S[o].astype(np.int64), Tt[o], I[o].astype(np.int64)
 
     def approx_distance(self, p, upper=np.inf):
         d, _ = self._kd.query(p, distance_upper_bound=upper, workers=-1)
