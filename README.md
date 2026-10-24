@@ -212,9 +212,11 @@ python -m cutmesh.layers CASE [layerDict.json] [-out CASE2] [-noCheck]
 | `minThickness` | 総厚がこれ未満の所は層を付けない | 0.05 |
 | `minNormalCos` | 節点法線と面法線の cos がこれ未満（鋭い凸エッジ）の所は層を付けない | 0.25 |
 | `maxNonOrtho` | 非直交角 [deg] がこれを超えるセルは不正とみなす（元からある内部面は元の値 + 2° まで許す） | 65 |
+| `maxSkewness` | skewness（checkMesh と同じ定義）がこれを超える面のセルは不正とみなす（元からある面は元の値 + 0.2 まで許す。`null` で無効） | 4 |
 | `wallNonOrthMargin` | 元の壁面（層の挿入後は内部面）に、境界面としての角度 + この値 [deg] まで許す。被覆率は上がるが 70° 超の面が出る | なし |
 | `maxThicknessSlope` | 壁に沿った単位長さあたりの総厚の変化の上限（層の端を徐々に細らせる） | 0.5 |
 | `cornerStretch` | 角の節点を T/cos 動かし、角でも層厚 T を保つ | true |
+| `maxGapFraction` | 総厚を、向かい合う壁までの距離のこの割合以下に抑える（狭い隙間で両側の層がぶつからないように。0 で無効） | 0.3 |
 | `nRings` / `nSmooth` | 内部節点を押し込む範囲（壁からの辺数）とラプラス平滑化の回数 | 6 / 60 |
 | `nIter` / `nCollapseIter` | 不正セルの所の厚さを半減する反復回数 / その後に層を止める反復回数 | 8 / 60 |
 

@@ -15,8 +15,8 @@ The mesh is shrunk away from the walls and the gap is filled with prism layers:
    inserted per wall face (geometric growth by expansionRatio towards the interior).
    The original wall face becomes the internal face to the first original cell.
 4. Where the point normal is undefined (sharp convex edges) or a cell becomes
-   invalid or too non-orthogonal, the thickness at the points involved is halved
-   (nIter times) and then set to zero until the mesh is valid.
+   invalid, too non-orthogonal or too skewed, the thickness at the points involved is
+   halved (nIter times) and then set to zero until the mesh is valid.
    At points with zero thickness the layer points collapse into one, so the layers
    terminate there with wedge cells (as in snappyHexMesh).
 
@@ -26,6 +26,7 @@ unless relativeSizes is false.
 import time
 import numpy as np
 from scipy import sparse
+from scipy.spatial import cKDTree
 
 from . import quality
 from .geometry import paused_gc
@@ -44,8 +45,10 @@ DEFAULTS = {
     "nCollapseIter": 60,         # then iterations collapsing the layers there
     "maxThicknessSlope": 0.5,    # thickness may change by this much per unit length along the wall
     "maxNonOrtho": 65.0,         # [deg] cells at faces above this (original faces: above their value + 2) are bad
+    "maxSkewness": 4.0,          # cells at faces more skewed than this (original faces: their value + 0.2) are bad
     "wallNonOrthMargin": None,   # [deg] wall faces may get this much worse than their value as boundary faces
     "cornerStretch": True,       # move corner points by T / cos so the layers keep thickness T
+    "maxGapFraction": 0.3,       # total thickness at most this fraction of the distance to a facing wall
 }
 
 
@@ -61,9 +64,10 @@ def _nonorth(C, Cf, Sf, own, nei):
     return np.degrees(np.arccos(np.clip(c, -1, 1)))
 
 
-def _cells_bad(P, nn, vv, own, nei, nC, max_no=None):
+def _cells_bad(P, nn, vv, own, nei, nC, max_no=None, max_sk=None):
     """cells with non-positive volume or a non-positive face pyramid (checkMesh), or a
-    face more non-orthogonal than max_no (scalar or per internal face)"""
+    face more non-orthogonal than max_no (scalar or per internal face) or more skewed
+    than allowed (max_sk = (face ids, limit per face))"""
     ff = quality.FlatFaces((nn, vv))
     Cf, Sf = quality.face_geometry(P, ff)
     C, V = quality.cell_geometry(nC, own, nei, Cf, Sf)
@@ -77,6 +81,11 @@ def _cells_bad(P, nn, vv, own, nei, nC, max_no=None):
         hi = _nonorth(C, Cf, Sf, own, nei) > max_no
         bad[own[:nI][hi]] = True
         bad[nei[hi]] = True
+    if max_sk is not None:
+        fs, lim = max_sk
+        hi = fs[quality.face_skewness(P, ff, Cf, Sf, C, own, nei, fs, lim) > lim]
+        bad[own[hi]] = True
+        bad[nei[hi[hi < nI]]] = True
     return bad
 
 
@@ -137,6 +146,48 @@ def _constraint_planes(pid, nrm):
     u, st = np.unique(pid, return_index=True)
     en = np.append(st[1:], len(pid))
     return {int(p): _plane_groups(list(nrm[a:b])) for p, a, b in zip(u, st, en)}
+
+
+def _gap_width(X, dirn, h, R, PO, nO):
+    """distance along dirn from each point X to the nearest facing wall point ahead (inf
+    if none within R): an obstacle point PO with normal nO counts when it lies ahead,
+    within a cone around dirn (or 0.7 h laterally) and its normal faces back.
+    The nearest-neighbour search widens until no candidate within the range can be missed."""
+    nX, nPO = len(X), len(PO)
+    width = np.full(nX, np.inf)
+    if not nX or not nPO:
+        return width
+
+    def reach(w, hc):
+        # candidates with along < w lie closer than this
+        return np.sqrt(w * w + np.maximum(0.36 * w * w, 0.49 * hc * hc))
+
+    tree = cKDTree(PO)
+    todo = np.nonzero(R > 0)[0]
+    k = 32
+    while len(todo):
+        kq = min(k, nPO)
+        step = max(1, 4_000_000 // kq)
+        left = []
+        for a in range(0, len(todo), step):
+            c = todo[a:a + step]
+            h_ = h[c]
+            dist, idx = tree.query(X[c], k=kq, distance_upper_bound=float(reach(R[c], h_).max()))
+            dist, idx = dist.reshape(len(c), kq), idx.reshape(len(c), kq)
+            valid = idx < nPO
+            idc = np.where(valid, idx, 0)
+            v = PO[idc] - X[c][:, None, :]
+            along = np.einsum("ikj,ij->ik", v, dirn[c])
+            lat = np.linalg.norm(v - along[..., None] * dirn[c][:, None, :], axis=2)
+            facing = np.einsum("ikj,ij->ik", nO[idc], dirn[c]) > 0.5
+            ahead = valid & facing & (along > 0) & (along <= R[c][:, None]) \
+                & (lat < np.maximum(0.6 * along, 0.7 * h_[:, None]))
+            width[c] = np.where(ahead, along, np.inf).min(1)
+            done = ~valid[:, -1] | (dist[:, -1] >= reach(np.minimum(width[c], R[c]), h_))
+            left.append(c[~done])
+        todo = np.concatenate(left) if kq < nPO else np.zeros(0, np.int64)
+        k *= 4
+    return width
 
 
 @paused_gc
@@ -237,6 +288,27 @@ def add_layers(mesh, spec=None, log=print):
     tfin = float(s["finalLayerThickness"])
     T = np.where(ok_dir, tfin * gsum * scale, 0.0)
     T_target = T.copy()
+    gf = s["maxGapFraction"]
+    if gf:
+        # narrow gaps: the layers from facing walls would meet; limit each side to a
+        # fraction of the distance to the opposite wall (measured along the extrusion
+        # direction to the wall points ahead whose own normal faces back).  The facing
+        # wall may be any wall patch, also one without layers.  The point moves by
+        # T * stretch, so that displacement is what the limit applies to.
+        wp = np.array([p["type"] == "wall" for p in patches])
+        wf = np.nonzero(is_lf | ((bpatch >= 0) & wp[bpatch]))[0]
+        wfn = nn[wf]
+        wfv = vv[_gather_idx(ptr, wf)]
+        O, oinv = np.unique(wfv, return_inverse=True)
+        onrm = np.zeros((len(O), 3))
+        np.add.at(onrm, oinv, Sf[wf][np.repeat(np.arange(len(wf)), wfn)])
+        onrm /= np.maximum(np.linalg.norm(onrm, axis=1), 1e-300)[:, None]
+        width = _gap_width(P0[W], dirn, hw, T * stretch / float(gf), P0[O], onrm)
+        lim = float(gf) * width / stretch
+        ng = int(((lim < T) & (T > 0)).sum())
+        T = np.minimum(T, lim)
+        T_target = T.copy()
+        log(f"addLayers: {ng} wall points in narrow gaps, thickness limited to {gf:g} x the gap")
     tmin = float(s["minThickness"]) * scale
     frac = np.concatenate([[0.0], np.cumsum([r ** -(N - 1 - j) for j in range(N)])]) / gsum
 
@@ -293,6 +365,12 @@ def add_layers(mesh, spec=None, log=print):
         cw = np.einsum("ij,ij->i", dw, nf_unit[Lf]) / np.maximum(np.linalg.norm(dw, axis=1), 1e-300)
         lim0[Lf] = np.maximum(lim0[Lf], np.degrees(np.arccos(np.clip(cw, -1, 1)))
                               + float(s["wallNonOrthMargin"]))
+    # skewness limit (checkMesh warns above 4): maxSkewness, or for faces of the original
+    # mesh their own value + 0.2
+    skmax = s["maxSkewness"]
+    if skmax is not None:
+        sk0 = np.maximum(float(skmax), quality.face_skewness(P0, ff, Cf, Sf, C0, own, nei) + 0.2)
+        moved0 = isw.copy(); moved0[band] = True
     del C0
 
     zone_names = list(cell_zones.keys())
@@ -442,7 +520,16 @@ def add_layers(mesh, spec=None, log=print):
         new_nei = ne_all[ii]
         oi = old_all[ii]
         max_no = np.where(oi >= 0, lim0[np.maximum(oi, 0)], float(s["maxNonOrtho"]))
-        bad = _cells_bad(P, new_n, new_v, new_own, new_nei, nCn, max_no)
+        max_sk = None
+        if skmax is not None:
+            # only the faces of cells with moved or new points can have changed
+            mv = np.concatenate([moved0, np.ones(len(P) - nP0, bool)])[new_v]
+            fm = np.logical_or.reduceat(mv, _ptr(new_n)[:-1])
+            cm = np.zeros(nCn, bool); cm[new_own[fm]] = True; cm[new_nei[fm[:len(ii)]]] = True
+            fs = np.nonzero(cm[new_own] | np.concatenate([cm[new_nei], np.zeros(len(bb), bool)]))[0]
+            oa = old_all[order][fs]
+            max_sk = (fs, np.where(oa >= 0, sk0[np.maximum(oa, 0)], float(skmax)))
+        bad = _cells_bad(P, new_n, new_v, new_own, new_nei, nCn, max_no, max_sk)
         nbad = int(bad.sum())
         log(f"  iteration {it}: {ne}/{nW} points extruded, {nA} faces with layers,"
             f" {nbad} invalid cells")
