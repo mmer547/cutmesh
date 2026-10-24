@@ -938,6 +938,25 @@ def generate(cfg, log=print):
     free_snap = np.zeros(len(pts), bool)   # hanging vertices projected freely onto a surface
     no_free = np.zeros(len(pts), bool)     # free projections that broke a cell: not allowed
     msgs = []
+    occ_leaf = np.repeat(f_cell, fn)
+
+    def side_width(kv, side):
+        """Thickness of the fluid (side -1) / solid (side 1) at the vertices kv, from the
+        nearest wall through the vertex to the opposite wall if within 1.5 cells (else inf).
+        Only for the vertices off the wall (mask off); returns (off, nearest wall point,
+        direction away from it, width) for those."""
+        cpk, dk, _ = dom.closest(pts[kv])
+        # vertices already on the wall (phi a rounding error off zero) carry nothing and
+        # give no direction
+        off = dk > 0.01 * vh_min[kv]
+        kv, cpk, dk = kv[off], cpk[off], dk[off]
+        dirk = (pts[kv] - cpk) / np.maximum(dk, 1e-300)[:, None]
+        width = np.full(len(kv), np.inf)
+        for t in np.linspace(0.05, 1.5, 30):
+            q = cpk + (t * vh_min[kv])[:, None] * dirk
+            hit = np.isinf(width) & (dom.inside(q) != (side < 0))
+            width[hit] = t * vh_min[kv][hit]
+        return off, cpk, dirk, width
 
     def snap_features(feat, phi, label, concave=None):
         """corners first, then feature edges, then (farther) the concave feature edges;
@@ -945,6 +964,7 @@ def generate(cfg, log=print):
         nc = 0
         if feat is None or feat._kd is None:
             return np.zeros(0, np.int64)
+        phi0 = phi.copy()
         on = []
         lim = np.where(no_far, tol_f, tol_f2)
         if len(feat.corners):
@@ -971,28 +991,50 @@ def generate(cfg, log=print):
             # vertex lies already, so no two vertices land on one point
             lim = np.where(no_far, tol_f, tol_cc)
             cand = movable & ~snapped & (phi > 0) & (phi < 2 * tol_cc + hmin)
-            n0 = 0
+            c_sel, c_X, c_d = [], [], []
             if len(concave.corners):
                 kd = cKDTree(pts)
                 d, j = kd.query(concave.corners)
                 for X, dd, jj in zip(concave.corners, d.tolist(), j.tolist()):
                     if cand[jj] and dd < lim[jj]:
-                        far_snap[jj] = ccv_far[jj] = dd >= tol_f[jj]
-                        pts[jj] = X; phi[jj] = 0.0; snapped[jj] = True; cand[jj] = False
-                        res.append(np.array([jj], np.int64)); n0 += 1
+                        c_sel.append(jj); c_X.append(X); c_d.append(dd); cand[jj] = False
+            c_X = np.reshape(c_X, (-1, 3))
             sel = np.nonzero(cand)[0]
             cp, d = concave.closest(pts[sel])
             ok = d < lim[sel]
             if ok.any():
                 dn, _ = cKDTree(pts[sel[ok]]).query(cp[ok])       # nearest solid candidate
-                d0, _ = cKDTree(pts).query(cp[ok])                 # a vertex there already
+                d0, _ = cKDTree(np.concatenate([pts, c_X])).query(cp[ok])   # a vertex there already
                 ok[ok] = (d[ok] <= dn * (1 + 1e-9)) & (d0 > 1e-6 * hmin)
             sel, cp, d = sel[ok], cp[ok], d[ok]
             _, first = np.unique(np.round(cp / (1e-6 * hmin)).astype(np.int64), axis=0, return_index=True)
-            sel, cp, d = sel[first], cp[first], d[first]
+            sel = np.concatenate([np.array(c_sel, np.int64), sel[first]])
+            cp = np.concatenate([c_X, cp[first]])
+            d = np.concatenate([np.array(c_d, float), d[first]])
+            # A cell that loses its last solid vertex through these snaps (the earlier
+            # feature snaps of this pass included, by the signs before them) keeps no solid:
+            # right at a wedge of a thick solid, but a solid thinner than the reach (a post
+            # or fin narrower than ~1.5 cells) would vanish there.  Those are not snapped.
+            gone = (phi0 > 0) & (phi <= 0)
+            gone[sel] = True
+            nkeep = np.bincount(occ_leaf, ((phi0 > 0) & ~gone)[fverts], nleaf)
+            nfluid = np.bincount(occ_leaf, (phi0 < 0)[fverts], nleaf)
+            nlost = np.bincount(occ_leaf, gone[fverts], nleaf)
+            lost = (nlost > 0) & (nkeep == 0) & (nfluid > 0)
+            nthin = 0
+            if lost.any():
+                occ = lost[occ_leaf]
+                at = np.isin(sel, fverts[occ])
+                off, _, _, width = side_width(sel[at], 1.0)
+                thin = np.zeros(len(sel), bool)
+                thin[np.nonzero(at)[0][off]] = np.isfinite(width)
+                sel, cp, d = sel[~thin], cp[~thin], d[~thin]
+                nthin = int(thin.sum())
             far_snap[sel] = ccv_far[sel] = d >= tol_f[sel]
             pts[sel] = cp; phi[sel] = 0.0; snapped[sel] = True
-            msgs.append(f"snapped {n0} more vertices to the ends and {len(sel)} to the concave {label} feature edges")
+            n0 = int(np.isin(sel, c_sel).sum())
+            msgs.append(f"snapped {n0} more vertices to the ends and {len(sel) - n0} to the concave"
+                        f" {label} feature edges ({nthin} not: the solid there is thinner than 1.5 cells)")
             res.append(sel)
         return np.concatenate(res)
 
@@ -1013,7 +1055,6 @@ def generate(cfg, log=print):
         # about one cell thick the cell's vertices on that side can all lie near the two
         # walls; snapping them all would leave the cell without fluid (the gap closes) or
         # without solid (the wall vanishes: a bypass).  There they go to the middle instead.
-        occ_leaf = np.repeat(f_cell, fn)
         for side, label in ((-1.0, "fluid vertices to the middle of thin gaps"),
                             (1.0, "solid vertices to the middle of thin walls")):
             on = side * phi_d > 0
@@ -1025,19 +1066,10 @@ def generate(cfg, log=print):
                 continue
             occ = lost[occ_leaf]
             kv = np.unique(fverts[occ][on[fverts[occ]]])
-            cpk, dk, _ = dom.closest(pts[kv])
-            # vertices already on the wall (phi a rounding error off zero) carry nothing:
-            # dropping that side of the cell is right, and they give no direction
-            off = dk > 0.01 * vh_min[kv]
-            kv, cpk, dk = kv[off], cpk[off], dk[off]
-            dirk = (pts[kv] - cpk) / np.maximum(dk, 1e-300)[:, None]
-            # thickness of this side from the near wall (cpk) to the opposite one, if
-            # within 1.5 cells; elsewhere the snap removes a sliver as intended
-            width = np.full(len(kv), np.inf)
-            for t in np.linspace(0.05, 1.5, 30):
-                q = cpk + (t * vh_min[kv])[:, None] * dirk
-                hit = np.isinf(width) & (dom.inside(q) != (side < 0))
-                width[hit] = t * vh_min[kv][hit]
+            # thickness of this side; where it is not within 1.5 cells, the snap removes a
+            # sliver as intended (vertices on the wall: dropping that side is right)
+            off, cpk, dirk, width = side_width(kv, side)
+            kv = kv[off]
             thin = np.isfinite(width)
             # vertices that would have to move too far are snapped as usual (left close to
             # a wall unsnapped, they cut skewed slivers)

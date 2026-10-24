@@ -282,6 +282,8 @@ class Surface:
         ins = self.inside(Q.reshape(-1, 3)).reshape(len(a), samples + 1)
         sg, k = np.nonzero(ins[:, 1:] != ins[:, :-1])
         mid = 0.5 * (Q[sg, k] + Q[sg, k + 1])
+        if self._kd is None and len(mid):
+            self.build_search(self.L / 50)
         _, _, tid = self.closest(mid)
         return sg.astype(np.int64), (k + 0.5) / samples, tid.astype(np.int64)
 
@@ -412,9 +414,14 @@ class Surface:
                 m = 0.5 * (ea[j1] + eb[j1])
                 w = dv[j1] + dv[j2]
                 w /= np.maximum(np.linalg.norm(w, axis=1, keepdims=True), 1e-300)
-                # well inside the wedge: far beyond the ray perturbation of inside()
+                # well inside the wedge: far beyond the ray perturbation of inside(), but
+                # short of any other wall (a nearby shell would decide the side instead)
                 r = 0.25 * np.minimum(hgt[j1], hgt[j2])
-                solid = ~self.inside(m + r[:, None] * w)
+                sg, tt, tid = self.segment_hits(m, m + r[:, None] * w)
+                far = (tt > 1e-9) & (tid != et[j1][sg]) & (tid != et[j2][sg])
+                tmin = np.ones(len(k))
+                np.minimum.at(tmin, sg[far], 0.5 * tt[far])
+                solid = ~self.inside(m + (tmin * r)[:, None] * w)
                 feat[g[k[solid]]] = True
         else:
             feat[g[sharp | (self.region[t1] != self.region[t2])]] = True
