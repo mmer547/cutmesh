@@ -17,8 +17,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from cutmesh import quality                                   # noqa: E402
-from cutmesh.geometry import Surface, write_stl_ascii, sample_segments   # noqa: E402
-from cutmesh.mesher import load_config, generate              # noqa: E402
+from cutmesh.geometry import Surface, FeatureSet, write_stl_ascii, sample_segments   # noqa: E402
+from cutmesh.mesher import load_config, generate, make_pinch_hook   # noqa: E402
+from cutmesh.cutcell import CutContext, split_components     # noqa: E402
 from test_thin_gaps import voxel_stl, _write_json             # noqa: E402
 
 
@@ -215,6 +216,50 @@ class SlotMouths(unittest.TestCase):
         # without the concave pass most of the diagonal mouths are chamfered
         miss0 = self.mesh({"concaveSnapMax": 0.5})
         self.assertGreater((miss0 > 0.2).any(1).sum(), 4)
+
+
+class PinchedCut(unittest.TestCase):
+    """The tip of a wedge of solid on a cell face (a vertex on the concave edge, e.g. a
+    hanging vertex at a level transition) with the walls leaving through the opposite
+    faces: the kept side is two pieces joined along the edge.  The face chords bend
+    through the tip and the cell splits into two cells instead of chamfering the edge."""
+
+    class Wedge:
+        """solid: x > |y - 1|"""
+        def sdf(self, p):
+            p = np.atleast_2d(p)
+            return np.minimum(p[:, 0] - (p[:, 1] - 1), p[:, 0] + (p[:, 1] - 1)) / np.sqrt(2)
+
+    def test_two_cells(self):
+        dom = self.Wedge()
+        X = [(0, 0), (0, 1), (0, 2), (2, 2), (2, 0)]          # bottom loop, tip (0, 1) on the left face
+        pos = [[x, y, z] for z in (0.0, 1.0) for x, y in X]
+        b, t = list(range(5)), list(range(5, 10))
+        faces = [(0, b), (1, t[::-1]),                         # outward
+                 (2, [b[0], b[1], t[1], t[0]][::-1]), (3, [b[1], b[2], t[2], t[1]][::-1]),
+                 (4, [b[2], b[3], t[3], t[2]][::-1]), (5, [b[3], b[4], t[4], t[3]][::-1]),
+                 (6, [b[4], b[0], t[0], t[4]][::-1])]
+        phi = [float(dom.sdf(np.array(x))[0]) for x in pos]
+        for v in (b[1], t[1]):
+            phi[v] = 0.0
+        ctx = CutContext(pos, phi, 100)
+        ctx.pinch_hook = make_pinch_hook(dom, FeatureSet(np.array([[[0, 1, 0], [0, 1, 1.0]]])), lambda v: 2.0)
+        neg, _, caps = ctx.cut(faces, shared_cap=False)
+        comps = split_components(neg, ctx.last_pinch)
+        self.assertEqual(len(comps), 2)
+        P = np.array(ctx.pos)
+        for comp in comps:
+            de = {}
+            for _, q in comp:
+                for k in range(len(q)):
+                    de[(q[k], q[(k + 1) % len(q)])] = de.get((q[k], q[(k + 1) % len(q)]), 0) + 1
+            self.assertTrue(all(de.get((y, x), 0) == c for (x, y), c in de.items()))   # closed
+            vol = sum(np.dot(P[q[0]], np.cross(P[q[k]], P[q[k + 1]])) for _, q in comp
+                      for k in range(1, len(q) - 1)) / 6
+            self.assertAlmostEqual(vol, 0.5, places=9)     # triangle (0,1)-(0,0|2)-(1,0|2) x 1
+        # nothing of the wedge kept: all kept vertices on the fluid side
+        kept = set(v for comp in comps for _, q in comp for v in q)
+        self.assertTrue((dom.sdf(P[sorted(kept)]) <= 1e-12).all())
 
 
 if __name__ == "__main__":

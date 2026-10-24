@@ -158,6 +158,54 @@ def make_chord_hook(feat):
     return chord
 
 
+def make_pinch_hook(dom, ccv, h_of_vertex):
+    """A face cut by a straight chord a-b next to a concave edge: a surface vertex of the
+    kept part beyond the chord (the tip of the wedge of solid, a vertex on the edge)
+    with solid between it and the chord.  The chord bends through it: the kept part of
+    the face splits in two there (the cell splits along the edge, cutcell.cut)."""
+    def hook(ctx, poly, a, b, cand):
+        pos = ctx.pos
+        A = np.array(pos[a]); B = np.array(pos[b])
+        V = np.array([pos[v] for v in poly])
+        n = _newell(V - V.mean(0))
+        nn = np.linalg.norm(n)
+        u = B - A
+        L = np.linalg.norm(u)
+        if nn == 0 or L == 0:
+            return None
+        n /= nn
+        side = np.cross(u, n)                   # in the face plane, normal to the chord
+        neg = [pos[v] for v in poly if ctx.phi[v] < 0]
+        if not neg:
+            return None
+        sk = np.sign(np.dot(np.mean(neg, 0) - A, side))   # the kept side
+        X = np.array([pos[v] for v in cand])
+        dist = sk * (X - A) @ side / L
+        h = float(min(h_of_vertex(a), h_of_vertex(b)))
+        ok = dist > 0.02 * h
+        if not ok.any():
+            return None
+        # beyond the chord, within the face span along it
+        t = (X - A) @ u / (L * L)
+        ok &= (t > 0) & (t < 1)
+        if not ok.any():
+            return None
+        k = np.nonzero(ok)[0]
+        # on (or next to) a concave edge
+        _, de = ccv.closest(X[k])
+        k = k[de < 0.25 * h]
+        k = k[np.argsort(-dist[k])]
+        for j in k[:2].tolist():
+            T = X[j]
+            # solid between the chord and the vertex, fluid beyond the vertex
+            q = np.array([(A + B + T) / 3, T + 0.1 * (T - 0.5 * (A + B))])
+            sd = dom.sdf(q)
+            if sd[0] > 0.01 * h and sd[1] < 0:
+                return cand[j]
+        return None
+    return hook
+
+
 def _split_on_features(ctx, loop, feat, h, tol=0.05, reach=0.75, depth=4):
     """Split a cap loop along the feature edges through the cell: from loop vertex to
     loop vertex on the feature (entry/exit points), or spokes to a feature corner inside
@@ -640,7 +688,7 @@ def cut_with_fallback(ctx, items, shared_cap, hk, csize, max_iter=4):
         faces, leaf = items[k]
         st["cell"] = leaf; st["forbid"] = k in forbid; st["did"] = False
         neg, pos, _ = ctx.cut(faces, shared_cap=shared_cap, cap_hook=hook)
-        res[k] = (split_components(neg), split_components(pos) if shared_cap else [])
+        res[k] = (split_components(neg, ctx.last_pinch), split_components(pos) if shared_cap else [])
         used[k] = (list(ctx.used_chords), bool(st["did"]))
 
     for k, (faces, _) in enumerate(items):
@@ -1352,6 +1400,10 @@ def generate(cfg, log=print):
     if hk:
         ctx.chord_hook = make_chord_hook(dom_feat)
         ctx.onfeat = set(on_feat_d.tolist())
+    if dom_ccv is not None and dom_ccv._kd is not None:
+        vh_ = np.full(len(pts), np.inf)
+        np.minimum.at(vh_, fverts, np.repeat(csize[f_cell], fn))
+        ctx.pinch_hook = make_pinch_hook(dom, dom_ccv, lambda v: vh_[v] if v < len(vh_) else hmin)
     pieces = []        # [faces, parent_leaf, zone]
     cl = cut_leaves.tolist()
     cb = []
