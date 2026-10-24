@@ -168,6 +168,21 @@ class ThinGaps(unittest.TestCase):
         self.assertEqual(len(seg), 2)
         self.assertTrue(np.allclose(t, [0.5 / 128, 1.5 / 128], atol=1e-12))
 
+    def test_segment_hits_fallback_bin_boundary(self):
+        # y extent [0, 2]: the middle ray-bin boundary is at y = 1, where the face x = 0 of
+        # the upper cube starts.  A segment within the tolerance below it crosses the face
+        # (as in Rust) although its own box lies in the bin below the face's.
+        filled = np.zeros((6, 2, 1), bool)
+        filled[0, 1, 0] = filled[5, 0, 0] = True
+        with tempfile.TemporaryDirectory() as d:
+            voxel_stl(os.path.join(d, "b.stl"), filled, 1.0)
+            S = Surface(read_stl(os.path.join(d, "b.stl")))
+        a, b = np.array([[-0.5, 1 - 5e-10, 0.3]]), np.array([[0.5, 1 - 5e-10, 0.3]])
+        S._rs, S._nb = None, None
+        seg, t, _ = S.segment_hits(a, b)
+        self.assertEqual(len(seg), 1)
+        self.assertAlmostEqual(t[0], 0.5, delta=1e-12)
+
     def test_segment_hits_fallback_matches_rust(self):
         from cutmesh.geometry import rust_available
         if not rust_available():

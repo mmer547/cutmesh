@@ -308,33 +308,44 @@ class Surface:
         tol = 1e-9 * self.L
         tlo, thi = T.min(1) - tol, T.max(1) + tol
         slo, shi = np.minimum(a, b), np.maximum(a, b)
+        # bins of the segment's box grown by tol: a triangle whose tol-grown box meets the
+        # segment's box shares at least one bin with it
         bi = lambda v, k: np.clip(((v - self._blo[k]) / self._bsz[k]).astype(int), 0, self._nb - 1)
-        i0, i1 = bi(slo[:, 1], 0), bi(shi[:, 1], 0)
-        j0, j1 = bi(slo[:, 2], 1), bi(shi[:, 2], 1)
+        i0, i1 = bi(slo[:, 1] - tol, 0), bi(shi[:, 1] + tol, 0)
+        j0, j1 = bi(slo[:, 2] - tol, 1), bi(shi[:, 2] + tol, 1)
         ni, nj = i1 - i0 + 1, j1 - j0 + 1
-        # (segment, bin) pairs, then (segment, triangle) pairs; a triangle spanning several
-        # bins of one segment comes up more than once (np.unique, per chunk and at the end)
-        sb = np.repeat(np.arange(len(a)), ni * nj)
-        r = np.arange(len(sb)) - np.repeat(np.cumsum(ni * nj) - ni * nj, ni * nj)
-        bins = (i0[sb] + r // nj[sb]) * self._nb + j0[sb] + r % nj[sb]
-        cnt = self._bstart[bins + 1] - self._bstart[bins]
-        cum = np.cumsum(cnt)
+        nsb = ni * nj
+        csb = np.cumsum(nsb)
         S, Tt, I = [], [], []
-        b0 = 0
-        while b0 < len(bins):
-            b1 = max(int(np.searchsorted(cum, (cum[b0 - 1] if b0 else 0) + chunk, side="right")), b0 + 1)
-            c = cnt[b0:b1]
-            sg = np.repeat(sb[b0:b1], c)
-            off = np.repeat(self._bstart[bins[b0:b1]] - (np.cumsum(c) - c), c)
-            ti = self._btri[off + np.arange(len(sg))]
-            ok = ((tlo[ti] <= shi[sg]) & (thi[ti] >= slo[sg])).all(1)
-            sg, ti = sg[ok], ti[ok]
-            if len(sg):
-                key = np.unique(sg * len(T) + ti)
-                sg, ti = key // len(T), key % len(T)
-                t, hit = _seg_tri(a[sg], b[sg] - a[sg], T[ti])
-                S.append(sg[hit]); Tt.append(t[hit]); I.append(ti[hit])
-            b0 = b1
+        s0 = 0
+        while s0 < len(a):
+            # segments in batches of <= chunk (segment, bin) pairs (at least one segment)
+            s1 = max(int(np.searchsorted(csb, (csb[s0 - 1] if s0 else 0) + chunk, side="right")), s0 + 1)
+            n = nsb[s0:s1]
+            # (segment, bin) pairs, then (segment, triangle) pairs; a triangle spanning
+            # several bins of one segment comes up more than once (np.unique, per chunk
+            # and at the end)
+            sb = np.repeat(np.arange(s0, s1), n)
+            r = np.arange(len(sb)) - np.repeat(np.cumsum(n) - n, n)
+            bins = (i0[sb] + r // nj[sb]) * self._nb + j0[sb] + r % nj[sb]
+            cnt = self._bstart[bins + 1] - self._bstart[bins]
+            cum = np.cumsum(cnt)
+            b0 = 0
+            while b0 < len(bins):
+                b1 = max(int(np.searchsorted(cum, (cum[b0 - 1] if b0 else 0) + chunk, side="right")), b0 + 1)
+                c = cnt[b0:b1]
+                sg = np.repeat(sb[b0:b1], c)
+                off = np.repeat(self._bstart[bins[b0:b1]] - (np.cumsum(c) - c), c)
+                ti = self._btri[off + np.arange(len(sg))]
+                ok = ((tlo[ti] <= shi[sg]) & (thi[ti] >= slo[sg])).all(1)
+                sg, ti = sg[ok], ti[ok]
+                if len(sg):
+                    key = np.unique(sg * len(T) + ti)
+                    sg, ti = key // len(T), key % len(T)
+                    t, hit = _seg_tri(a[sg], b[sg] - a[sg], T[ti])
+                    S.append(sg[hit]); Tt.append(t[hit]); I.append(ti[hit])
+                b0 = b1
+            s0 = s1
         if not S:
             return np.zeros(0, np.int64), np.zeros(0), np.zeros(0, np.int64)
         S, Tt, I = np.concatenate(S), np.concatenate(Tt), np.concatenate(I)
