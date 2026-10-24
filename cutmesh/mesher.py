@@ -1535,7 +1535,9 @@ def generate(cfg, log=print):
         _, dv, _ = dom.closest(P[ev])
         dmap = dict(zip(ev.tolist(), dv.tolist()))
         for r, ex, hc in tet_cand:
-            if max(dmap[v] for v in ex) < 0.4 * hc:
+            # no internal face at all (a sliver enclosed by walls): removing it exposes
+            # nothing, so it goes as well (max() of the empty set used to crash here)
+            if max((dmap[v] for v in ex), default=0.0) < 0.4 * hc:
                 removed[r] = True
     if removed.any():
         log(f"removed {int(removed.sum())} invalid wall slivers"
