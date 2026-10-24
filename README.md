@@ -212,6 +212,7 @@ python -m cutmesh.layers CASE [layerDict.json] [-out CASE2] [-noCheck]
 | `wallNonOrthMargin` | 元の壁面（層の挿入後は内部面）に、境界面としての角度 + この値 [deg] まで許す。被覆率は上がるが 70° 超の面が出る | なし |
 | `maxThicknessSlope` | 壁に沿った単位長さあたりの総厚の変化の上限（層の端を徐々に細らせる） | 0.5 |
 | `cornerStretch` | 角の節点を T/cos 動かし、角でも層厚 T を保つ | true |
+| `maxGapFraction` | 総厚を、向かい合う壁までの距離のこの割合以下に抑える（狭い隙間で両側の層がぶつからないように。0 で無効） | 0.3 |
 | `nRings` / `nSmooth` | 内部節点を押し込む範囲（壁からの辺数）とラプラス平滑化の回数 | 6 / 60 |
 | `nIter` / `nCollapseIter` | 不正セルの所の厚さを半減する反復回数 / その後に層を止める反復回数 | 8 / 60 |
 

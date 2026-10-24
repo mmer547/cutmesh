@@ -26,6 +26,7 @@ unless relativeSizes is false.
 import time
 import numpy as np
 from scipy import sparse
+from scipy.spatial import cKDTree
 
 from . import quality
 from .geometry import paused_gc
@@ -46,6 +47,7 @@ DEFAULTS = {
     "maxNonOrtho": 65.0,         # [deg] cells at faces above this (original faces: above their value + 2) are bad
     "wallNonOrthMargin": None,   # [deg] wall faces may get this much worse than their value as boundary faces
     "cornerStretch": True,       # move corner points by T / cos so the layers keep thickness T
+    "maxGapFraction": 0.3,       # total thickness at most this fraction of the distance to a facing wall
 }
 
 
@@ -237,6 +239,28 @@ def add_layers(mesh, spec=None, log=print):
     tfin = float(s["finalLayerThickness"])
     T = np.where(ok_dir, tfin * gsum * scale, 0.0)
     T_target = T.copy()
+    gf = s["maxGapFraction"]
+    if gf:
+        # narrow gaps: the layers from facing walls would meet; limit each side to a
+        # fraction of the distance to the opposite wall (measured along the extrusion
+        # direction to the wall points ahead whose own normal faces back)
+        PW = P0[W]
+        kq = min(48, nW)
+        R = float(np.max(T)) / float(gf) if np.any(T > 0) else 0.0
+        dist, idx = cKDTree(PW).query(PW, k=kq, distance_upper_bound=R)
+        valid = idx < nW
+        idc = np.where(valid, idx, 0)
+        v = PW[idc] - PW[:, None, :]
+        along = np.einsum("ikj,ij->ik", v, dirn)
+        lat = np.linalg.norm(v - along[..., None] * dirn[:, None, :], axis=2)
+        facing = np.einsum("ikj,ij->ik", npn[idc], dirn) > 0.5
+        ahead = valid & facing & (along > 0) & (lat < np.maximum(0.6 * along, 0.7 * hw[:, None]))
+        width = np.where(ahead, along, np.inf).min(1)
+        lim = float(gf) * width
+        ng = int(((lim < T) & (T > 0)).sum())
+        T = np.minimum(T, lim)
+        T_target = T.copy()
+        log(f"addLayers: {ng} wall points in narrow gaps, thickness limited to {gf:g} x the gap")
     tmin = float(s["minThickness"]) * scale
     frac = np.concatenate([[0.0], np.cumsum([r ** -(N - 1 - j) for j in range(N)])]) / gsum
 
