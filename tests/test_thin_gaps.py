@@ -126,6 +126,49 @@ class ThinGaps(unittest.TestCase):
             self.assertEqual(q["openCellEdges"], 0)
             self.assertEqual(q["nNegVol"], 0)
 
+    def test_main_region_kept(self):
+        # two equal chambers and a threshold above both: the larger one must stay
+        h, v = self.h, self.h / 10
+        G = np.zeros((60, 60, 90), bool)
+        G[:, :, 0:30] = True
+        G[:, :, 60:90] = True
+        with tempfile.TemporaryDirectory() as d:
+            voxel_stl(os.path.join(d, "s.stl"), G, v)
+            _write_json(os.path.join(d, "m.json"), {"domain": "s.stl", "baseCellSize": h, "featureLevel": 0,
+                       "surfaceRefinement": {"default": 0}, "minRegionVolume": 0.6})
+            R = generate(load_config(os.path.join(d, "m.json")), log=lambda s: None)
+        own, nei = R["owner"], R["neighbour"]
+        nC = int(max(own.max(), nei.max())) + 1
+        self.assertEqual(components(own, nei, nC), 1)
+        q = quality.check(R["points"], R["faces"], own, nei, log=lambda s: None)
+        self.assertAlmostEqual(q["totalVol"] / (G.sum() * v ** 3), 0.5, delta=0.01)
+
+    def _box(self):
+        with tempfile.TemporaryDirectory() as d:
+            voxel_stl(os.path.join(d, "b.stl"), np.ones((1, 1, 1), bool), 1.0)
+            return Surface(read_stl(os.path.join(d, "b.stl")))
+
+    def test_segment_hits_fallback_exact(self):
+        # without Rust the crossings are sampled, then bisected: a crossing at 1/300 of a
+        # long segment is located exactly, not at the middle of the first sample interval
+        S = self._box()
+        a, b = np.array([[0.5, 0.5, 0.99]]), np.array([[0.5, 0.5, 3.99]])
+        S._rs, S._nb = None, None
+        S.build_search(0.5)
+        seg, t, _ = S.segment_hits(a, b)
+        self.assertEqual(len(seg), 1)
+        # exact up to inside()'s own shift (was up to half a sample interval, 1/128)
+        self.assertAlmostEqual(t[0], 0.01 / 3.0, delta=2 * S.inside_shift / 3.0)
+
+    def test_fluid_side_beyond_inside_shift(self):
+        # a probe closer to the wall than inside()'s shift must not pick the solid side
+        from cutmesh.mesher import _fluid_side
+        S = self._box()
+        p = np.array([[0.5, 1.0, 0.5], [0.5, 0.0, 0.5], [0.5, 0.5, 1.0]])
+        n = np.array([[0.0, 1.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, 1.0]])     # outward
+        eps = 0.1 * S.inside_shift
+        self.assertTrue(np.allclose(_fluid_side(S, p, n, eps), -n))
+
     def test_slot_centred_on_vertex_plane(self):
         ncomp, vr = self.mesh(3.0 * self.h, 0.5 * self.h, fill=0)
         self.assertEqual(ncomp, 1)

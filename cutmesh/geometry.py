@@ -175,6 +175,9 @@ def _sample_triangles(tris, spacing):
 # ----------------------------------------------------------------------------
 # Triangulated closed surface
 # ----------------------------------------------------------------------------
+INSIDE_PERT = np.array([0.0, 3.14159265e-7, 2.71828183e-7])   # x L: ray origin shift of inside()
+
+
 class Surface:
     """Closed (watertight) triangulated surface, possibly with several solids/regions."""
 
@@ -185,6 +188,9 @@ class Surface:
         self.bbmin = self.tris.reshape(-1, 3).min(0)
         self.bbmax = self.tris.reshape(-1, 3).max(0)
         self.L = float(np.linalg.norm(self.bbmax - self.bbmin))
+        # inside() shifts every query point by this much (the ray origin perturbation, the
+        # same in Rust): a probe closer to the surface may be judged on the wrong side
+        self.inside_shift = float(self.L * np.linalg.norm(INSIDE_PERT))
         self._kd = None
         self._kd_spacing = None
         self._rs = _core.TriMesh(np.ascontiguousarray(self.tris)) if _core else None
@@ -272,7 +278,8 @@ class Surface:
     def segment_hits(self, a, b, samples=64):
         """Crossings of the segments a[i] -> b[i] with the surface, sorted along each:
         (segment index, parameter t, triangle id).  Exact with the Rust extension; the
-        fallback samples the segments (crossings closer than 1/samples merge)."""
+        fallback samples the segments to find the crossings (crossings closer than
+        1/samples merge) and then bisects each one to t +- 2^-40."""
         a = np.ascontiguousarray(np.atleast_2d(a), float)
         b = np.ascontiguousarray(np.atleast_2d(b), float)
         if self._rs is not None:
@@ -281,9 +288,15 @@ class Surface:
         Q = a[:, None, :] + ts[None, :, None] * (b - a)[:, None, :]
         ins = self.inside(Q.reshape(-1, 3)).reshape(len(a), samples + 1)
         sg, k = np.nonzero(ins[:, 1:] != ins[:, :-1])
-        mid = 0.5 * (Q[sg, k] + Q[sg, k + 1])
-        _, _, tid = self.closest(mid)
-        return sg.astype(np.int64), (k + 0.5) / samples, tid.astype(np.int64)
+        lo, hi, s0 = ts[k], ts[k + 1], ins[sg, k]
+        A, D = a[sg], (b - a)[sg]
+        for _ in range(34):
+            m = 0.5 * (lo + hi)
+            same = self.inside(A + m[:, None] * D) == s0
+            lo = np.where(same, m, lo); hi = np.where(same, hi, m)
+        t = 0.5 * (lo + hi)
+        _, _, tid = self.closest(A + t[:, None] * D)
+        return sg.astype(np.int64), t, tid.astype(np.int64)
 
     def approx_distance(self, p, upper=np.inf):
         d, _ = self._kd.query(p, distance_upper_bound=upper, workers=-1)
@@ -321,7 +334,7 @@ class Surface:
         if self._nb is None:
             self._build_ray_bins()
         res = np.zeros(len(p), bool)
-        pert = self.L * np.array([0.0, 3.14159265e-7, 2.71828183e-7])
+        pert = self.L * INSIDE_PERT
         for s in range(0, len(p), chunk):
             q = p[s:s + chunk] + pert
             ib = ((q[:, 1] - self._blo[0]) / self._bsz[0]).astype(int)

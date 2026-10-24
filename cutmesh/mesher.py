@@ -697,6 +697,18 @@ def _auto_gap_spec(cfg, sref):
     return float(ag.get("cellsAcross", 3)), int(ag.get("maxLevel", max(lev) + 2))
 
 
+def _fluid_side(dom, p, nrm, eps):
+    """Unit normals at the surface points p turned towards the fluid.  inside() shifts its
+    query points by dom.inside_shift, so the probes go at least a few times that far out;
+    where both or neither probe is in the fluid (a wall thinner than that, a corner) the
+    side is taken from the probe behind the triangle as before."""
+    e = max(eps, 4.0 * dom.inside_shift)
+    back = dom.inside(p - e * nrm)
+    front = dom.inside(p + e * nrm)
+    flip = np.where(back != front, back, dom.inside(p - eps * nrm))
+    return np.where(flip[:, None], -nrm, nrm)
+
+
 def _auto_gap_samples(dom, h0, region_level, nacross, lmax):
     """Wall samples of gaps too narrow for nacross cells of the wall's surface level:
     from each sample a line goes into the fluid along the normal; the first wall it hits
@@ -710,7 +722,7 @@ def _auto_gap_samples(dom, h0, region_level, nacross, lmax):
     lw = region_level[dom.region[ti]]                       # surface level of the wall
     hw = h0 / 2.0 ** lw
     eps = 1e-3 * h0 / 2 ** lmax
-    into = np.where(dom.inside(p - eps * nrm)[:, None], -nrm, nrm)   # towards the fluid
+    into = _fluid_side(dom, p, nrm, eps)
     wmax = nacross * hw                                     # wider gaps are resolved anyway
     a = p + eps * into
     b = p + wmax[:, None] * into
@@ -1664,6 +1676,7 @@ def generate(cfg, log=print):
         del ann, avv, ffa, Cf_, Sf_
         vol = np.bincount(lab, np.abs(Vc), ncomp)
         drop = vol < cfg["minRegionVolume"] * vol.sum()
+        drop[np.argmax(vol)] = False            # never the main fluid region
         if drop.any():
             kc = ~drop[lab]
             new = np.cumsum(kc) - 1
