@@ -32,6 +32,8 @@ DEFAULTS = {
     "checkLeaks": True,         # check the final mesh for fluid joined through a solid wall
     "minRegionVolume": 1e-3,    # remove fluid regions cut off from the rest below this volume fraction
     "fillThinWalls": 3,         # passes splitting cells with solid inside but no solid corner (Cartesian base; 0 = off)
+    "thinCutCells": 2,          # passes splitting cut cells keeping < thinCutFraction fluid next to finer cells (Cartesian base; 0 = off)
+    "thinCutFraction": 0.35,
     "patchTypes": {},
     "rotatingZones": [],
     "writeMRFProperties": True,
@@ -720,6 +722,20 @@ def cut_with_fallback(ctx, items, shared_cap, hk, csize, max_iter=4):
     return res, nsharp, nfb
 
 
+def _fluid_fraction(dom, c, h, n=6):
+    """Fluid fraction of cells (centres c, sizes h) from the trilinear interpolation of
+    the signed distance at their corners, and whether the wall cuts them."""
+    corners = np.array(list(itertools.product((-1, 1), repeat=3)), float)
+    sd = dom.sdf((c[:, None, :] + 0.5 * h[:, None, None] * corners[None]).reshape(-1, 3)).reshape(len(c), 8)
+    t = (np.arange(n) + 0.5) / n
+    T = np.array(list(itertools.product(t, t, t)))                       # sample points in [0,1]^3
+    # trilinear weights of the 8 corners (corner k at (-1|1)^3 -> (0|1)^3)
+    cw = (corners + 1) / 2
+    W = np.prod(np.where(cw[None, :, :] > 0, T[:, None, :], 1 - T[:, None, :]), axis=2)   # (n^3, 8)
+    phi = sd @ W.T
+    return (phi < 0).mean(1), (sd.min(1) < 0) & (sd.max(1) > 0)
+
+
 def _thin_wall_cells(dom, c, h):
     """Cells (centres c, sizes h) with no corner in the solid that contain a solid wall:
     on one of 13 lines through the cell the surface is entered and left again with
@@ -995,6 +1011,38 @@ def generate(cfg, log=print):
             oc.balance(lambda s: None)
             log(f"thin gaps / walls: split {nh} cells with fluid inside but no fluid corner,"
                 f" {nw} with a solid wall inside but no solid corner")
+        n_tc = int(cfg["thinCutCells"])
+        thr = float(cfg["thinCutFraction"])
+        nsplit = 0
+        for it in range(n_tc):
+            # A cut cell keeping little fluid next to finer cells: its centre sits on the
+            # wall, far from the plane of the finer cells' centres, and the faces between
+            # them are strongly non-orthogonal.  Split it: the level transition moves off
+            # the wall, into whole cells.
+            c = oc.centers(); hl = oc.leaf_sizes()
+            near = (oc.lev < Lmax) & (dom.approx_distance(c, upper=float(hl.max()) + dom._rmax)
+                                      < 0.9 * hl + dom._rmax)
+            cand = np.nonzero(near)[0]
+            fr, cut = _fluid_fraction(dom, c[cand], hl[cand])
+            cand = cand[cut & (fr > 0) & (fr < thr)]
+            fine = np.zeros(len(cand), bool)
+            for lv in np.unique(oc.lev[cand]).tolist():
+                m_ = oc.lev[cand] == lv
+                fl = np.nonzero(oc.lev > lv)[0]
+                if not len(fl):
+                    continue
+                hc = float(hl[cand[m_]][0])
+                dd, _ = cKDTree(c[fl]).query(c[cand[m_]], distance_upper_bound=0.95 * hc)
+                fine[m_] = dd < 0.95 * hc
+            mark = np.zeros(len(oc.lev), bool)
+            mark[cand[fine]] = True
+            if not mark.any():
+                break
+            nsplit += int(mark.sum())
+            oc.split(mark)
+            oc.balance(lambda s: None)
+        if n_tc:
+            log(f"thin cut cells at level transitions: split {nsplit}")
     T(f"octree ({len(oc.lev)} leaves)")
     M = oc.build_cells()
     nleaf = len(M["cell_size"])
