@@ -34,6 +34,11 @@ class CutContext:
         self.onfeat = set()           # vertices lying on the feature edges of this pass
         self.used_chords = []         # chord_cache keys with a feature point, used by cut()
         self.zero_edge = {}           # (face, lo, hi) -> +1 solid / -1 fluid for edges between phi == 0 vertices
+        self.pinch_hook = None        # (ctx, poly, a, b, candidates) -> surface vertex the chord a-b bends through, or None
+        self.pinch_cache = {}
+        self.pinch_min_area = 0.05    # each kept piece of a bent face, as a fraction of the kept part
+        self.pinch_now = set()        # vertices the chords of the current cut bend through
+        self.last_pinch = set()       # of the last cut: the line the kept side is pinched along
 
     # ------------------------------------------------------------------
     def new_face_id(self):
@@ -137,6 +142,25 @@ class CutContext:
     def forbid_chord(self, key):
         """fall back to the straight chord on this face (both cells must be re-cut)"""
         self.chord_cache[key] = None
+        self.pinch_cache[key] = None
+
+    def pinch_point(self, fid, poly, npoly, a, b):
+        """Surface vertex of the kept part of the face beyond its chord a-b (the tip of a
+        wedge of solid at a concave edge, the vertex on the edge): the chord bends
+        through it, which splits the kept part in two.  Cached per (face, chord)."""
+        key = (fid, a, b) if a < b else (fid, b, a)
+        if key in self.pinch_cache:
+            c = self.pinch_cache[key]
+        else:
+            n = len(npoly)
+            ia, ib = npoly.index(a), npoly.index(b)
+            near = {a, b, npoly[ia - 1], npoly[(ib + 1) % n]}
+            cand = [v for v in npoly if self.phi[v] == 0.0 and v not in near]
+            c = self.pinch_hook(self, poly, a, b, cand) if cand else None
+            self.pinch_cache[key] = c
+        if c is not None:
+            self.used_chords.append(key)
+        return c
 
     # ------------------------------------------------------------------
     def classify(self, faces):
@@ -170,6 +194,7 @@ class CutContext:
         phi = self.phi
         neg, pos = [], []
         self.used_chords = []
+        self.pinch_now = set()
         for fid, poly in faces:
             hasN = hasP = False
             for v in poly:
@@ -191,6 +216,7 @@ class CutContext:
                 if cls[i] and not cls[i - 1]:
                     s = i; break
             seqN, ppieces, cur = [], [], None
+            chords = []
             for step in range(n):
                 i = (s + step) % n
                 j = (i + 1) % n
@@ -206,6 +232,7 @@ class CutContext:
                 elif (not cls[i]) and cls[j]:
                     c = self._xing(a, poly[j], False)
                     f = self.chord_point(fid, poly, cur[0], c) if self.chord_hook else None
+                    chords.append((cur[0], c, f))
                     cur.append(c)
                     if f is not None:          # chord c_out -> f -> c_in follows the edge
                         cur.append(f)
@@ -215,7 +242,27 @@ class CutContext:
                     cur = None
             pieces = []
             npoly = _dedupe(seqN)
-            if len(set(npoly)) >= 3:
+            T = None
+            if self.pinch_hook is not None and len(chords) == 1 and chords[0][2] is None                     and len(set(npoly)) == len(npoly) >= 4:
+                a, b, _ = chords[0]
+                if a != b and a in npoly and b in npoly and                         npoly[(npoly.index(b) - 1) % len(npoly)] == a:
+                    T = self.pinch_point(fid, poly, npoly, a, b)
+            if T is not None:
+                # kept part: [T, b, ...] and [T, ..., a]; the solid part gets T
+                ib = npoly.index(b)
+                seq = npoly[ib:] + npoly[:ib]
+                it = seq.index(T)
+                k1, k2 = [T] + seq[:it], seq[it:]
+                # both parts real cells, not slivers along a wall
+                a1, a2, a0 = self._area(k1), self._area(k2), self._area(npoly)
+                if min(a1, a2) < self.pinch_min_area * a0:
+                    T = None
+            if T is not None:
+                pieces.append((0, k1))
+                pieces.append((0, k2))
+                ppieces[0].append(T)
+                self.pinch_now.add(T)
+            elif len(set(npoly)) >= 3:
                 pieces.append((0, npoly))
             for pp in ppieces:
                 pp = _dedupe(pp)
@@ -228,19 +275,24 @@ class CutContext:
                 # key by vertex set: independent of traversal direction / start
                 fid2 = self.sub_id((fid, tuple(sorted(pp))))
                 (neg if k == 0 else pos).append((fid2, pp))
-        # cap = reversed open boundary of the N-side faces
-        de = {}
-        for _, p in neg:
-            m = len(p)
-            for k in range(m):
-                e = (p[k], p[k + 1 if k + 1 < m else 0])
-                de[e] = de.get(e, 0) + 1
-        segs = []
-        for (a, b), c in de.items():
-            r = de.get((b, a), 0)
-            for _ in range(c - r):
-                segs.append((b, a))
-        caps = _chain_loops(segs)
+        # cap = reversed open boundary of the N-side faces (of each part, where the
+        # kept side is pinched along a line of surface vertices)
+        self.last_pinch = self._pinch_line(neg) if len(self.pinch_now) >= 2 else set()
+        groups = split_components(neg, self.last_pinch) if self.last_pinch else [neg]
+        caps = []
+        for grp in groups:
+            de = {}
+            for _, p in grp:
+                m = len(p)
+                for k in range(m):
+                    e = (p[k], p[k + 1 if k + 1 < m else 0])
+                    de[e] = de.get(e, 0) + 1
+            segs = []
+            for (a, b), c in de.items():
+                r = de.get((b, a), 0)
+                for _ in range(c - r):
+                    segs.append((b, a))
+            caps += _chain_loops(segs)
         out_caps = []
         for loop in caps:
             polys = cap_hook(self, loop) if cap_hook is not None else [loop]
@@ -254,6 +306,44 @@ class CutContext:
                     neg.append((self.new_face_id(), poly))
                     pos.append((self.new_face_id(), poly[::-1]))
         return neg, pos, out_caps
+
+    def _area(self, poly):
+        pos = self.pos
+        x0 = pos[poly[0]]
+        s = [0.0, 0.0, 0.0]
+        for k in range(1, len(poly) - 1):
+            u = [pos[poly[k]][i] - x0[i] for i in range(3)]
+            w = [pos[poly[k + 1]][i] - x0[i] for i in range(3)]
+            s[0] += u[1] * w[2] - u[2] * w[1]
+            s[1] += u[2] * w[0] - u[0] * w[2]
+            s[2] += u[0] * w[1] - u[1] * w[0]
+        return 0.5 * (s[0] * s[0] + s[1] * s[1] + s[2] * s[2]) ** 0.5
+
+    def _pinch_line(self, neg):
+        """the bend vertices of this cut and the surface vertices of the kept faces in line
+        between two of them (e.g. hanging vertices on the edge)"""
+        pv = sorted(self.pinch_now)
+        pos = self.pos
+        line = set(pv)
+        zs = set(v for _, p in neg for v in p if self.phi[v] == 0.0) - line
+        for i in range(len(pv)):
+            A = pos[pv[i]]
+            for j in range(i + 1, len(pv)):
+                B = pos[pv[j]]
+                u = [B[0] - A[0], B[1] - A[1], B[2] - A[2]]
+                L2 = u[0] * u[0] + u[1] * u[1] + u[2] * u[2]
+                if L2 == 0.0:
+                    continue
+                for v in zs:
+                    X = pos[v]
+                    w = [X[0] - A[0], X[1] - A[1], X[2] - A[2]]
+                    t = (w[0] * u[0] + w[1] * u[1] + w[2] * u[2]) / L2
+                    if not 0.0 < t < 1.0:
+                        continue
+                    d = [w[0] - t * u[0], w[1] - t * u[1], w[2] - t * u[2]]
+                    if d[0] * d[0] + d[1] * d[1] + d[2] * d[2] < 0.01 * L2:
+                        line.add(v)
+        return line
 
 
 def _chain_loops(segs):
@@ -298,8 +388,9 @@ def _simple_loops(loop):
     return [s for s in out if len(s) >= 3]
 
 
-def split_components(faces):
-    """Split a face list into edge-connected components (separate cells)."""
+def split_components(faces, apart=None):
+    """Split a face list into edge-connected components (separate cells).  apart:
+    vertices along which the faces are not joined (a kept side pinched along a line)."""
     n = len(faces)
     if n <= 4:
         return [faces]
@@ -316,6 +407,8 @@ def split_components(faces):
         m = len(p)
         for k in range(m):
             a = p[k]; b = p[k + 1 if k + 1 < m else 0]
+            if apart and a in apart and b in apart:
+                continue
             key = (a, b) if a < b else (b, a)
             j = owner.get(key)
             if j is None:
