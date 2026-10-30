@@ -63,12 +63,19 @@ def write_polymesh(case_dir, points, faces, owner, neighbour, patches,
     with _open(d, "faces", "faceList") as f:
         f.write(f"{nfaces}\n(\n")
         if isinstance(faces, tuple):
+            # one token per vertex: "<n>(" before a face's first vertex, then the vertex,
+            # then " " or ")\n" after its last one (joined in chunks of faces)
             CH = 200000
             for s0 in range(0, nfaces, CH):
                 s1 = min(nfaces, s0 + CH)
-                f.write("\n".join(f"{sizes[i]}(" + " ".join(flat_s[ptr[i]:ptr[i + 1]]) + ")"
-                                   for i in range(s0, s1)))
-                f.write("\n")
+                a0, a1 = int(ptr[s0]), int(ptr[s1])
+                tok = np.empty(3 * (a1 - a0), dtype=object)
+                tok[0::3] = ""
+                tok[1::3] = flat_s[a0:a1]
+                tok[2::3] = " "
+                tok[3 * (ptr[s0:s1] - a0)] = [f"{n}(" for n in sizes[s0:s1].tolist()]
+                tok[3 * (ptr[s0 + 1:s1 + 1] - a0) - 1] = ")\n"
+                f.write("".join(tok.tolist()))
         else:
             f.write("\n".join(f"{len(p)}(" + " ".join(map(str, p)) + ")" for p in faces))
             f.write("\n")

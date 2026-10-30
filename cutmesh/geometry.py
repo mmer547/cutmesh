@@ -21,6 +21,41 @@ def rust_available():
     return _core is not None
 
 
+def unique(x):
+    """np.unique(x) (sorted distinct values of the flattened array) through a sort.
+    NumPy >= 2.3 answers np.unique without return_* through a hash table, which is
+    several times slower than sorting for large integer arrays (1.2 s against 0.03 s
+    for 2M distinct int64)."""
+    x = np.sort(np.asarray(x).ravel())
+    if len(x) < 2:
+        return x
+    m = np.empty(len(x), bool)
+    m[0] = True
+    np.not_equal(x[1:], x[:-1], out=m[1:])
+    return x[m]
+
+
+def unique_rows(a):
+    """np.unique(a, axis=0) for a 2-D integer array (rows sorted lexicographically),
+    through one int64 key per row when the value ranges allow"""
+    a = np.asarray(a)
+    if len(a) < 2 or a.ndim != 2 or a.dtype.kind not in "iu":
+        return np.unique(a, axis=0)
+    lo = a.min(0).astype(np.int64)
+    ext = a.max(0).astype(np.int64) - lo + 1
+    if float(np.prod(ext.astype(float))) >= 2.0 ** 62:
+        return np.unique(a, axis=0)
+    k = np.zeros(len(a), np.int64)
+    for j in range(a.shape[1]):
+        k = k * ext[j] + (a[:, j].astype(np.int64) - lo[j])
+    k = unique(k)
+    out = np.empty((len(k), a.shape[1]), np.int64)
+    for j in range(a.shape[1] - 1, -1, -1):
+        out[:, j] = k % ext[j] + lo[j]
+        k = k // ext[j]
+    return out.astype(a.dtype, copy=False)
+
+
 def paused_gc(fn):
     """Run fn with Python's cyclic garbage collector paused.  The mesher builds millions
     of small lists (faces of cut cells) and hardly any reference cycles; each GC pass
@@ -358,6 +393,26 @@ class Surface:
         d, _ = self._kd.query(p, distance_upper_bound=upper, workers=-1)
         return d
 
+    def approx_below(self, p, thr):
+        """approx_distance(p) < thr (thr: scalar or one per point), exactly as the KD-tree
+        test gives it.  With the Rust extension the exact distance decides most points:
+        the nearest sub-triangle centroid is never closer than the closest point on the
+        STL, and never farther than that plus _rmax (the centroid of the sub-triangle
+        holding the closest point).  Only the points in between go to the KD-tree, which
+        is slow for points far from the surface (it visits many nodes before it can stop)."""
+        p = np.atleast_2d(p)
+        thr = np.broadcast_to(np.asarray(thr, float), (len(p),))
+        if self._rs is None or len(p) == 0:
+            return self.approx_distance(p, upper=float(thr.max(initial=0.0))) < thr
+        _, d, _ = self._rs.closest(np.ascontiguousarray(p, float))
+        eps = 1e-9 * self.L
+        res = d + self._rmax + eps < thr
+        band = np.nonzero(~res & (d <= thr + eps))[0]
+        if len(band):
+            tb = thr[band]
+            res[band] = self.approx_distance(p[band], upper=float(tb.max())) < tb
+        return res
+
     # ---------------- inside / outside by ray parity ----------------
     def _build_ray_bins(self):
         t = self.tris
@@ -599,6 +654,11 @@ class SurfaceZone:
         """cheap signed distance for refinement decisions (sub-triangle centroid distance)"""
         return np.where(self.s.inside(p), -1.0, 1.0) * self.s.approx_distance(p)
 
+    def refine_below(self, p, thr):
+        """refine_sdf(p) < thr for thr > 0 (inside, or the centroid distance below thr),
+        without the unbounded KD-tree search of refine_sdf"""
+        return self.s.inside(p) | self.s.approx_below(p, thr)
+
     def closest(self, p):
         return self.s.closest(p)
 
@@ -610,6 +670,24 @@ class SurfaceZone:
         if len(seg) == 0:
             return np.zeros((0, 3))
         return sample_segments(seg, spacing)
+
+
+class LevelSet:
+    """A level-set function f(p) for refinement, with a faster test below(p, thr) of
+    f(p) < thr (the same result)."""
+
+    def __init__(self, f, below):
+        self.f = f
+        self.below = below
+
+    def __call__(self, p):
+        return self.f(p)
+
+
+def sdf_below(sdf, p, thr):
+    """sdf(p) < thr, through sdf.below when the level set has one"""
+    b = getattr(sdf, "below", None)
+    return b(p, thr) if b is not None else sdf(p) < thr
 
 
 def sample_segments(seg, spacing):

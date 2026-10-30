@@ -8,6 +8,8 @@ cylindrical block); see cylbase.py.
 import itertools
 import numpy as np
 
+from .geometry import sdf_below, unique, unique_rows
+
 OFF26 = np.array([d for d in itertools.product((-1, 0, 1), repeat=3) if d != (0, 0, 0)])
 CHILD = np.array(list(itertools.product((0, 1), repeat=3)))   # (8,3)
 
@@ -138,7 +140,7 @@ class Octree:
                 if Lv <= l:
                     continue
                 R = sum(nbuf * self.h(q) for q in range(l + 1, Lv))
-                mark |= sdf(c) < R + hd
+                mark |= sdf_below(sdf, c, R + hd)
             if keep_fn is not None and mark.any():
                 mi = np.nonzero(mark)[0]
                 mark[mi[~keep_fn(c[mi], hd)]] = False
@@ -157,9 +159,9 @@ class Octree:
                 sel = np.nonzero(self.lev == m)[0]
                 if len(sel) == 0:
                     continue
-                P = np.unique(self.ijk[sel] >> 1, axis=0)            # level m-1 parents
+                P = unique_rows(self.ijk[sel] >> 1)            # level m-1 parents
                 Q = (P[:, None, :] + OFF26[None]).reshape(-1, 3)
-                Q = np.unique(Q, axis=0)
+                Q = unique_rows(Q)
                 r = self.find_covering(m - 1, Q)
                 ok = r >= 0
                 r = r[ok]
@@ -186,7 +188,7 @@ class Octree:
 
         corners = base[:, None, :] + CHILD[None] * S[:, None, None]
         ck = vkey(corners).ravel()
-        ukeys = np.unique(ck)
+        ukeys = unique(ck)
         pts_lat = np.stack([ukeys // (NV[1] * NV[2]), (ukeys // NV[2]) % NV[1], ukeys % NV[2]], 1)
         points = self.map_lattice(pts_lat)
 
