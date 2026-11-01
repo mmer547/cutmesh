@@ -29,6 +29,7 @@ import math
 
 import numpy as np
 
+from .geometry import sdf_below
 from .octree import Octree, CHILD
 
 TH0 = -0.25 * math.pi          # angle of the square's corner (a, -a): v = 0
@@ -98,7 +99,7 @@ class MappedBlock(Octree):
                 if len(need) == 0:
                     continue
                 R = nbuf * np.maximum(size[need] - 2 * t, 0.0) + hd[need]
-                mark[need[sdf(c[need]) < R]] = True
+                mark[need[sdf_below(sdf, c[need], R)]] = True
             if keep_fn is not None and mark.any():
                 mi = np.nonzero(mark)[0]
                 mark[mi[~keep_fn(c[mi], hd[mi])]] = False

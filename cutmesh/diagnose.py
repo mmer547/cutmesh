@@ -29,6 +29,14 @@ def through_wall(dom, points, faces, owner, neighbour, samples=16, cos_opposite=
     fcs = np.concatenate([np.arange(len(owner)), np.arange(nI)])
     A, B = C[cells], Cf[fcs]
     ts = (np.arange(samples) + 0.5) / samples
+    if getattr(dom, "_rs", None) is not None:
+        # a line from a centre in the fluid that stays closer to it than the STL (less the
+        # ray shift of inside()) has every sample inside: no need to sample it
+        _, dC, _ = dom.closest(C)
+        free = np.where(dom.inside(C), dC - dom.inside_shift - 1e-9 * dom.L, -np.inf)
+        ln = np.linalg.norm(B - A, axis=1) * ts[-1]
+        keep = np.nonzero(ln >= free[cells])[0]
+        A, B = A[keep], B[keep]
     hits, mids = 0, []
     for s0 in range(0, len(A), 200000):
         a, b = A[s0:s0 + 200000], B[s0:s0 + 200000]

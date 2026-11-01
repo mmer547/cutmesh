@@ -8,7 +8,7 @@ import numpy as np
 from scipy.spatial import cKDTree
 
 from .geometry import (Surface, Cylinder, SurfaceZone, FeatureSet, read_stl,
-                       sample_segments, cylinder_features, paused_gc, _core)
+                       sample_segments, cylinder_features, paused_gc, _core, LevelSet, unique)
 from .octree import Octree
 from .cylbase import CylindricalBase
 from .cutcell import CutContext, split_components
@@ -674,6 +674,34 @@ def _same_orientation(p, q):
     return q[(i + 1) % m] == p[1]
 
 
+def _unique_points(p):
+    """p with (most) repeated points removed.  The STL samples repeat every subdivision
+    vertex once per sub-triangle (about 2.7x the points); a KD-tree over fewer points
+    is faster to build and to search, and gives the same nearest distances as long as
+    every distinct point is kept.  Rows are sorted by a 64-bit hash of their bits and a
+    row equal to the one before it is dropped (a hash collision can only leave a
+    repeat in, never drop a distinct point)."""
+    p = np.ascontiguousarray(p, float)
+    if len(p) < 2:
+        return p
+    b = p.view(np.uint64)
+
+    def mix(x):                                  # splitmix64 finaliser
+        x = (x ^ (x >> np.uint64(30))) * np.uint64(0xBF58476D1CE4E5B9)
+        x = (x ^ (x >> np.uint64(27))) * np.uint64(0x94D049BB133111EB)
+        return x ^ (x >> np.uint64(31))
+    o = np.argsort(mix(mix(mix(b[:, 0]) ^ b[:, 1]) ^ b[:, 2]))
+    bs = b[o]
+    keep = np.ones(len(p), bool)
+    keep[1:] = (bs[1:] != bs[:-1]).any(1)
+    return p[o[keep]]
+
+
+def _points_kd(p):
+    """KD-tree for nearest-distance queries of the sample points p (distances only)"""
+    return cKDTree(_unique_points(p))
+
+
 def cut_with_fallback(ctx, items, shared_cap, hk, csize, max_iter=4):
     """Cut items [(faces, parent_leaf)].  Cells where the feature refinement (bent face
     chords, split caps) produced a non-convex piece are re-cut without it, together
@@ -748,6 +776,10 @@ def _thin_wall_cells(dom, c, h):
     no_solid = ~(sd.reshape(len(c), 8) > 1e-3 * h[:, None]).any(1)
     idx = np.nonzero(no_solid)[0]
     out = np.zeros(len(c), bool)
+    if len(idx) and dom._rs is not None:
+        # the 13 lines stay within 0.5 sqrt(3) h of the centre: no crossing farther out
+        _, dc, _ = dom.closest(c[idx])
+        idx = idx[dc <= (0.5 * np.sqrt(3) + 1e-6) * h[idx]]
     if not len(idx):
         return out
     A = (c[idx][:, None, :] - 0.5 * h[idx][:, None, None] * D[None]).reshape(-1, 3)
@@ -765,7 +797,7 @@ def _thin_wall_cells(dom, c, h):
     keep[1:] = ~((seg[1:] == seg[:-1]) & (np.abs(t[1:] - t[:-1]) < 1e-9) & (enter[1:] == enter[:-1]))
     seg, n, enter = seg[keep], n[keep], enter[keep]
     pair = (seg[1:] == seg[:-1]) & enter[:-1] & ~enter[1:] & (np.einsum("ij,ij->i", n[:-1], n[1:]) < -0.5)
-    hit = np.unique(seg[:-1][pair]) // len(D)
+    hit = unique(seg[:-1][pair]) // len(D)
     out[idx[hit]] = True
     return out
 
@@ -900,12 +932,12 @@ def generate(cfg, log=print):
     for r, name in enumerate(dom.names):
         if region_level[r] > 0:
             p, _ = dom.samples(h0 / 2 ** region_level[r] / 2, regions=[r])
-            ssrc.append((cKDTree(p), int(region_level[r]), nbuf))
+            ssrc.append((_points_kd(p), int(region_level[r]), nbuf))
     if cfg.get("autoGapRefinement"):
         nacross, lag = _auto_gap_spec(cfg, sref)
         groups, nun = _auto_gap_samples(dom, h0, region_level, nacross, lag)
         for lv, pts_, _ in groups:
-            ssrc.append((cKDTree(pts_), lv, nbuf))
+            ssrc.append((_points_kd(pts_), lv, nbuf))
             log(f"auto gap refinement: {len(pts_)} wall samples -> level {lv}")
         if nun:
             log(f"auto gap refinement: {nun} wall samples in gaps narrower than {nacross:g} cells"
@@ -926,7 +958,7 @@ def generate(cfg, log=print):
             log(f"gap refinement: {nun} wall samples not resolved (walk along a wall)")
         p = p[thin]
         if len(p):
-            ssrc.append((cKDTree(p), lg, nbuf))
+            ssrc.append((_points_kd(p), lg, nbuf))
         log(f"gap refinement: {len(p)} wall samples where the fluid is thinner than {tg:g} -> level {lg}")
     seg = dom.feature_edges(cfg["featureAngle"])
     dom_feat = FeatureSet(seg, L=dom.L)
@@ -939,12 +971,12 @@ def generate(cfg, log=print):
     if flevel > 0:
         if len(seg):
             fp = sample_segments(seg, h0 / 2 ** flevel / 2)
-            ssrc.append((cKDTree(fp), int(flevel), nbuf))
+            ssrc.append((_points_kd(fp), int(flevel), nbuf))
             log(f"feature edges: {len(seg)} segments -> level {flevel}")
     for z in zones:
         if z["surfaceLevel"] > 0:
             p, _ = z["geom"].samples(h0 / 2 ** z["surfaceLevel"] / 2)
-            ssrc.append((cKDTree(p), z["surfaceLevel"], nbuf))
+            ssrc.append((_points_kd(p), z["surfaceLevel"], nbuf))
         wp = z["wallProximity"]
         if wp:
             # the zone surface closer than `distance` to the STL: refine to `level` there only
@@ -954,11 +986,13 @@ def generate(cfg, log=print):
             _, d, _ = dom.closest(p)
             p = p[d < float(wp["distance"])]
             if len(p):
-                ssrc.append((cKDTree(p), lw, int(wp.get("bufferLayers", nbuf))))
+                ssrc.append((_points_kd(p), lw, int(wp.get("bufferLayers", nbuf))))
             log(f"zone '{z['name']}': {len(p)} surface samples within {float(wp['distance']):g} of the STL"
                 f" -> level {lw}")
         if z["volumeLevel"] > 0:
-            vsrc.append((getattr(z["geom"], "refine_sdf", z["geom"].sdf), z["volumeLevel"], nbuf))
+            g_ = z["geom"]
+            vsrc.append((LevelSet(g_.refine_sdf, g_.refine_below) if isinstance(g_, SurfaceZone) else g_.sdf,
+                         z["volumeLevel"], nbuf))
     for g, lv in regions:
         vsrc.append((g.sdf, lv, nbuf))
     T("geometry / search structures")
@@ -966,7 +1000,7 @@ def generate(cfg, log=print):
     # ------------------------------------------------------------ octree
     def keep_fn(c, hd):
         out = ~dom.inside(c)
-        far = dom.approx_distance(c, upper=float(np.max(hd)) + dom._rmax) > hd + dom._rmax
+        far = ~dom.approx_below(c, np.nextafter(hd + dom._rmax, np.inf))     # approx > hd + rmax
         return ~(out & far)
     if cyl is not None:
         oc = cyl
@@ -984,8 +1018,8 @@ def generate(cfg, log=print):
         corner = np.all(sgn != 0, axis=1)
         for it in range(max(nfill_g, nfill_w)):
             c = oc.centers(); hl = oc.leaf_sizes()
-            near = (oc.lev < oc.Lmax) & (dom.approx_distance(c, upper=float(hl.max()) + dom._rmax)
-                                         < 0.9 * hl + dom._rmax)
+            near = oc.lev < oc.Lmax
+            near[near] = dom.approx_below(c[near], 0.9 * hl[near] + dom._rmax)
             mark = np.zeros(len(oc.lev), bool)
             nh = nw = 0
             if it < nfill_g:
@@ -1087,9 +1121,7 @@ def generate(cfg, log=print):
     # ------------------------------------------------------------ level sets + snapping
     alpha = float(cfg["snapTolerance"])
     free_hang = cfg.get("hangingSnap", "free") == "free"
-    approx = dom.approx_distance(pts, upper=float(np.sqrt(3) * vh_max.max() + dom._rmax + hmin))
-    near = approx < np.sqrt(3) * vh_max + dom._rmax + hmin
-    del approx
+    near = dom.approx_below(pts, np.sqrt(3) * vh_max + dom._rmax + hmin)
     phi_d = dom.sdf(pts, exact_mask=near, far_value=dom.L, exact_within=alpha * h0 + 2 * hmin)
     movable = ~hanging
     tol_v = alpha * vh_min
@@ -1235,7 +1267,7 @@ def generate(cfg, log=print):
             if not lost.any():
                 continue
             occ = lost[occ_leaf]
-            kv = np.unique(fverts[occ][on[fverts[occ]]])
+            kv = unique(fverts[occ][on[fverts[occ]]])
             # thickness of this side; where it is not within 1.5 cells, the snap removes a
             # sliver as intended (vertices on the wall: dropping that side is right)
             off, cpk, dirk, width = side_width(kv, side)
@@ -1296,8 +1328,7 @@ def generate(cfg, log=print):
         for z in zones:
             g = z["geom"]
             if isinstance(g, SurfaceZone):
-                nearz = g.s.approx_distance(pts, upper=float(np.sqrt(3) * vh_max.max() + g.s._rmax + hmin)) \
-                    < np.sqrt(3) * vh_max + g.s._rmax + hmin
+                nearz = g.s.approx_below(pts, np.sqrt(3) * vh_max + g.s._rmax + hmin)
                 pz = g.sdf(pts, exact_mask=nearz, far_value=g.L)
             else:
                 pz = g.sdf(pts)
@@ -1416,7 +1447,7 @@ def generate(cfg, log=print):
         vb = np.concatenate([fverts[fptr[f]:fptr[f + 1]] for f in fo.tolist()])
         for _ in range(3):          # hanging vertices move with their parents
             p_ = hp2[vb].ravel()
-            vb = np.unique(np.concatenate([vb, p_[p_ >= 0]]))
+            vb = unique(np.concatenate([vb, p_[p_ >= 0]]))
         resp = vb[far_snap[vb] & ~no_far[vb]]
         respf = vb[free_snap[vb] & ~no_free[vb]]
         if not (len(resp) or len(respf)):

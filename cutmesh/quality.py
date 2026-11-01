@@ -135,7 +135,7 @@ def check(points, faces, owner, neighbour, log=print):
     fs = np.sort(fw)
     pos = np.clip(np.searchsorted(fs, bw), 0, len(fs) - 1)
     open_edges = int(np.sum(fs[pos] != bw))
-    dup = int(len(fs) - len(np.unique(fs)))
+    dup = int(np.count_nonzero(fs[1:] == fs[:-1]))     # repeats in the sorted list
     # --- non-orthogonality / skewness
     d = C[neighbour] - C[owner[:nI]]
     cosang = np.einsum("ij,ij->i", d, Sf[:nI]) / np.maximum(np.linalg.norm(d, axis=1) * magSf[:nI], 1e-300)

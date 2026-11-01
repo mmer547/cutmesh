@@ -29,7 +29,7 @@ from scipy import sparse
 from scipy.spatial import cKDTree
 
 from . import quality
-from .geometry import paused_gc
+from .geometry import paused_gc, unique, unique_rows
 
 DEFAULTS = {
     "patches": None,             # patch names with layers (default: all wall patches)
@@ -231,7 +231,7 @@ def add_layers(mesh, spec=None, log=print):
     lfv = vv[_gather_idx(ptr, Lf)]
     lpos = np.full(nF, -1, np.int64); lpos[Lf] = np.arange(len(Lf))
     lff = np.repeat(np.arange(len(Lf)), lfn)              # layer face index per vertex
-    W = np.unique(lfv)
+    W = unique(lfv)
     widx = np.full(nP0, -1, np.int64)
     widx[W] = np.arange(len(W))
     nW = len(W)
@@ -246,7 +246,7 @@ def add_layers(mesh, spec=None, log=print):
     cfaces = [np.nonzero((bpatch >= 0) & ~is_lf)[0]]
     for fl, _ in face_zones.values():
         cfaces.append(np.asarray(fl, np.int64))
-    cfaces = np.unique(np.concatenate(cfaces)) if cfaces else np.zeros(0, np.int64)
+    cfaces = unique(np.concatenate(cfaces)) if cfaces else np.zeros(0, np.int64)
     cidx = _gather_idx(ptr, cfaces)
     cplanes = _constraint_planes(vv[cidx], nf_unit[ff.fid[cidx]])
 
@@ -314,7 +314,7 @@ def add_layers(mesh, spec=None, log=print):
 
     # interior points: band of nRings edges around the wall points (point graph)
     ea = np.minimum(vv, vv[ff.nxt]); eb = np.maximum(vv, vv[ff.nxt])
-    ek = np.unique(ea * nP0 + eb)
+    ek = unique(ea * nP0 + eb)
     ea, eb = ek // nP0, ek % nP0
     # conductance 1 / edge length: the displacement decays linearly with the distance,
     # and thin cells at the wall (short edges) move almost rigidly with it
@@ -385,7 +385,7 @@ def add_layers(mesh, spec=None, log=print):
     nx_ = np.arange(len(lfw)) + 1
     nx_[lptr[1:] - 1] = lptr[:-1]
     wb_ = lfw[nx_]
-    we = np.unique(np.sort(np.stack([wa_, wb_], 1), 1), axis=0)
+    we = unique_rows(np.sort(np.stack([wa_, wb_], 1), 1))
     wlen = np.linalg.norm(P0[W[we[:, 0]]] - P0[W[we[:, 1]]], axis=1)
     slope = float(s["maxThicknessSlope"])
 
@@ -539,7 +539,7 @@ def add_layers(mesh, spec=None, log=print):
         hit = np.zeros(nW, bool)
         bl = np.nonzero(bad[nC:])[0] // N              # active face index of bad layer cells
         if len(bl):
-            hit[np.unique(lfw[np.isin(lff, A[bl])])] = True
+            hit[unique(lfw[np.isin(lff, A[bl])])] = True
         bo = np.nonzero(bad[:nC])[0]
         if len(bo):
             fo = np.nonzero(np.isin(own, bo) | np.isin(np.concatenate([nei, np.full(nF - nI, -1)]), bo))[0]
