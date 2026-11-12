@@ -42,6 +42,18 @@ class MergeWallFaces(unittest.TestCase):
         self.assertEqual(nj, 0)
         self.assertEqual(len(nn), 5)
 
+    def test_slightly_folded_pair_joins(self):
+        # two pieces of a curved wall (a cone cut by the grid) meet at a 2 deg fold: never
+        # exactly coplanar, but one face; kept apart, the small piece's centre lies far off
+        # the cell centre's normal and the layers collapse there
+        for deg, joined in ((2.0, True), (4.5, True), (6.0, False)):
+            t = np.radians(deg)
+            P = [(-1, 0, 0), (0, 0, 0), (np.cos(t), 0, np.sin(t)),
+                 (-1, 1, 0), (0, 1, 0), (np.cos(t), 1, np.sin(t))]
+            nn, nj = merge(P, [[0, 1, 4, 3], [1, 2, 5, 4]])
+            self.assertEqual(nj, int(joined), deg)
+            self.assertEqual(len(nn), 1 if joined else 2, deg)
+
     def test_curved_strip_kept(self):
         # neighbours 4 deg apart (each pair passes a 5 deg test), the ends 8 deg apart
         ang = np.radians([0.0, 4.0, 8.0])

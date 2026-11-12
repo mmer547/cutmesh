@@ -121,10 +121,10 @@ class LayersInGap(unittest.TestCase):
         R = self.slot_mesh()
         L = add_layers(R, {"nLayers": 3, "maxSkewness": None}, log=lambda s: None)
         q = quality.check(L["points"], L["faces"], L["owner"], L["neighbour"], log=lambda s: None)
-        self.assertGreater(q["maxSkewness"], 3.2)
-        L = add_layers(R, {"nLayers": 3, "maxSkewness": 3.0}, log=lambda s: None)
+        self.assertGreater(q["maxSkewness"], 3.0)
+        L = add_layers(R, {"nLayers": 3, "maxSkewness": 2.7}, log=lambda s: None)
         q = quality.check(L["points"], L["faces"], L["owner"], L["neighbour"], log=lambda s: None)
-        self.assertLessEqual(q["maxSkewness"], 3.0)
+        self.assertLessEqual(q["maxSkewness"], 2.7)
         self.assertGreater((L["layer_thickness"]["T"] > 0).mean(), 0.9)
 
     def test_face_skewness_subset(self):
