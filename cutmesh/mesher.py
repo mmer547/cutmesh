@@ -402,11 +402,12 @@ def _tets_ok(P, faces, cf, cc, vmin):
     return True
 
 
-def _merged_face_ok(P, loop, parts, nrms, cmin, flat_tol=1e-3):
+def _merged_face_ok(P, loop, parts, nrms, cmin, flat_tol):
     """the joined face keeps the geometry of its parts: every part normal is within the
-    angle of the joined normal (the pairwise test is transitive across a curved wall),
-    all part vertices lie in its plane, and the fan triangles from both the vertex mean
-    and the area-weighted centre are positive (a U-shaped loop has its centre in the notch)"""
+    angle acos(cmin) of the joined normal (the pairwise test is transitive across a curved
+    wall), all part vertices lie within flat_tol * sqrt(area) of its plane, and the fan
+    triangles from both the vertex mean and the area-weighted centre are positive (a
+    U-shaped loop has its centre in the notch)"""
     Q = P[loop]
     c0 = Q.mean(0)
     tri = np.cross(Q - c0, np.roll(Q, -1, 0) - c0)
@@ -433,9 +434,16 @@ def merge_coplanar_wall_faces(P, nn, vv, owner, nI, patches, max_angle=5.0):
     share edges into a single face.  Cut cells can carry a flat wall split into several
     faces; a piece off to the side of a thin cell has its centre far off the cell
     centre's normal, which becomes a large non-orthogonality once layers are added on top.
+    Neighbouring pieces join when their normals are within max_angle; the joined face is
+    accepted when every piece is within max_angle / 2 of its normal.  So two pieces of a
+    curved wall folded by up to max_angle join (they are never exactly coplanar), while a
+    strip that keeps bending is kept apart.  The out-of-plane bound matches: a fold by
+    max_angle puts the vertices about 0.24 * max_angle [rad] * sqrt(area) off the plane.
     Returns (nn, vv, owner, patches, n_joined)."""
     ptr = np.concatenate([[0], np.cumsum(nn)])
     cmin = np.cos(np.radians(max_angle))
+    cpart = np.cos(np.radians(0.5 * max_angle))
+    flat_tol = 0.25 * np.sin(np.radians(max_angle))
     out_n = [nn[:nI]]; out_v = [vv[:ptr[nI]]]; out_o = [owner[:nI]]
     new_p, start, joined = [], nI, 0
     for p in patches:
@@ -496,7 +504,8 @@ def merge_coplanar_wall_faces(P, nn, vv, owner, nI, patches, max_angle=5.0):
                             if a is None or a == a0:
                                 break
                     if (ok and a0 is not None and a == a0 and len(loop) == len(segs) and len(loop) >= 3
-                            and _merged_face_ok(P, loop, [polys[i] for i in ids], [nrm[i] for i in ids], cmin)):
+                            and _merged_face_ok(P, loop, [polys[i] for i in ids], [nrm[i] for i in ids],
+                                                cpart, flat_tol)):
                         res.append(loop); joined += len(ids) - 1
                     else:
                         res.extend(polys[i] for i in ids)

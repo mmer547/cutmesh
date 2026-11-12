@@ -49,6 +49,7 @@ DEFAULTS = {
     "wallNonOrthMargin": None,   # [deg] wall faces may get this much worse than their value as boundary faces
     "cornerStretch": True,       # move corner points by T / cos so the layers keep thickness T
     "maxGapFraction": 0.3,       # total thickness at most this fraction of the distance to a facing wall
+    "concaveSlide": 0.5,         # concave corners: wall points slide along their wall to keep c + k*s0 off the other wall (None = off)
 }
 
 
@@ -190,6 +191,75 @@ def _gap_width(X, dirn, h, R, PO, nO):
     return width
 
 
+def _slide_pairs(PW, dirn, own_keys, CfL, mL, reach, hw, cos_max=0.84):
+    """(wall point, layer face) pairs for the concave-corner slide: faces of another wall
+    within reach with the point on their fluid side.  A face belongs to another wall when
+    its fluid normal mL is at an angle to the point's extrusion direction and to the
+    normals of all its own faces (|cos| < cos_max: a corner, not the same smoothly curved
+    wall - also not for a point on the corner, whose own faces lie on both walls and whose
+    direction already is the offset corner - and not a facing wall).
+    Returns (w, f, s0, slide direction in the point's tangent plane, 1 / (direction . mL))."""
+    nL = len(CfL)
+    tree = cKDTree(CfL)
+    lists = tree.query_ball_point(PW, reach)
+    ln = np.array([len(l) for l in lists], np.int64)
+    pw = np.repeat(np.arange(len(PW)), ln)
+    pf = np.concatenate([np.asarray(l, np.int64) for l in lists]) if len(pw) else np.zeros(0, np.int64)
+    keep = ~np.isin(pw * nL + pf, own_keys)
+    pw, pf = pw[keep], pf[keep]
+    m = mL[pf]
+    s0 = np.einsum("ij,ij->i", PW[pw] - CfL[pf], m)
+    c = np.einsum("ij,ij->i", m, dirn[pw])
+    keep = (s0 > -1e-6 * hw[pw]) & (np.abs(c) < cos_max)
+    ow, of = own_keys // nL, own_keys % nL
+    ow_s = np.argsort(ow, kind="stable")
+    st = np.searchsorted(ow[ow_s], np.arange(len(PW) + 1))
+    deg = st[1:] - st[:-1]
+    for j in range(int(deg.max()) if len(deg) else 0):
+        has = keep & (deg[pw] > j)
+        fo = of[ow_s[np.minimum(st[pw] + j, len(ow) - 1)]]
+        keep[has] &= np.abs(np.einsum("ij,ij->i", m[has], mL[fo[has]])) < cos_max
+    pw, pf, s0, m, c = pw[keep], pf[keep], np.maximum(s0[keep], 0.0), m[keep], c[keep]
+    d = m - c[:, None] * dirn[pw]                   # in the point's tangent plane
+    dn = np.linalg.norm(d, axis=1)                  # = d_unit . m
+    return pw, pf, s0, d / dn[:, None], 1.0 / dn
+
+
+def _slide(D, PW, T, cF, pairs, CfL, mL, radL, kap, proj, sweeps=6):
+    """Concave corners: the moved wall point q = p + D of a point near another wall must
+    stay clear of that wall's layers.  Where q is closer to the plane of a face f of the
+    other wall than c_f + kap * s0 (c_f: layer thickness of f, s0: the original distance of
+    p from that plane) and q projects onto f, q slides along its own wall (keeping its own
+    clearance) away from f.  With kap < 1 the points within c_f / (1 - kap) of the corner
+    keep their order: a fan instead of overlapping, inverted layer cells."""
+    pw, pf, s0, d, inv = pairs
+    if not len(pw):
+        return D
+    m = mL[pf]
+    live = (T[pw] > 0) & (cF[pf] > 0)
+    req = cF[pf] + kap * s0
+    D = D.copy()
+    for _ in range(sweeps):
+        q = PW[pw] + D[pw]
+        s1 = np.einsum("ij,ij->i", q - CfL[pf], m)
+        need = req - s1
+        foot = q - s1[:, None] * m
+        on = np.linalg.norm(foot - CfL[pf], axis=1) <= 1.05 * radL[pf]
+        a = np.nonzero(live & on & (need > 1e-3 * T[pw]))[0]
+        if not len(a):
+            break
+        amt = need[a] * inv[a]
+        o = np.lexsort((-amt, pw[a]))                 # largest push per point
+        first = o[np.r_[True, pw[a][o][1:] != pw[a][o][:-1]]]
+        sel = a[first]
+        push = d[sel] * amt[first][:, None]
+        for k, w in enumerate(pw[sel].tolist()):
+            if w in proj:
+                push[k] = _project(push[k], proj[w])
+        D[pw[sel]] += push
+    return D
+
+
 @paused_gc
 def add_layers(mesh, spec=None, log=print):
     """mesh: dict(points, faces=(sizes, flat), owner, neighbour, patches,
@@ -239,6 +309,24 @@ def add_layers(mesh, spec=None, log=print):
     npn = np.zeros((nW, 3))
     np.add.at(npn, lfw, Sf[Lf][lff])                      # area weighted
     npn /= np.maximum(np.linalg.norm(npn, axis=1), 1e-300)[:, None]
+    # at edges and corners the area weighting follows the largest face (a big face on one
+    # side tilts the normal away from the bisector, and the corner point then moves too
+    # far off one wall and too little off the other): where the faces lie in distinct
+    # planes, use the offset corner x with n_i . x = 1 for every plane
+    cfa = np.ones(nW)
+    np.minimum.at(cfa, lfw, np.einsum("ij,ij->i", npn[lfw], nf_unit[Lf][lff]))
+    multi = np.nonzero(cfa < 0.97)[0]
+    if len(multi):
+        o = np.argsort(lfw, kind="stable")
+        st = np.searchsorted(lfw[o], np.arange(nW + 1))
+        for w in multi.tolist():
+            G = np.array(_plane_groups(list(nf_unit[Lf][lff[o[st[w]:st[w + 1]]]]), tol=0.97))
+            if len(G) < 2:
+                continue
+            x = np.linalg.lstsq(G, np.ones(len(G)), rcond=None)[0]
+            nx = np.linalg.norm(x)
+            if nx > 0 and np.all(G @ (x / nx) > 0):
+                npn[w] = x / nx
     cmin = np.ones(nW)
     np.minimum.at(cmin, lfw, np.einsum("ij,ij->i", npn[lfw], nf_unit[Lf][lff]))
 
@@ -310,6 +398,20 @@ def add_layers(mesh, spec=None, log=print):
         T_target = T.copy()
         log(f"addLayers: {ng} wall points in narrow gaps, thickness limited to {gf:g} x the gap")
     tmin = float(s["minThickness"]) * scale
+    kap = s["concaveSlide"]
+    slide = None
+    if kap is not None:
+        # concave corners: the layers of the two walls overlap near the corner, where a
+        # point of one wall moving along its normal ends up behind the corner point (which
+        # moves T / cos along the bisector) and the layer cells between them invert
+        CfL, mL = Cf[Lf], -nf_unit[Lf]
+        radL = np.zeros(len(Lf))
+        np.maximum.at(radL, lff, np.linalg.norm(P0[lfv] - CfL[lff], axis=1))
+        reach = 2.0 * T * stretch + 2.0 * np.where(np.isfinite(hw), hw, 0.0)
+        pairs = _slide_pairs(P0[W], dirn, unique(lfw * len(Lf) + lff), CfL, mL, reach, hw)
+        proj = {int(w): cplanes[int(W[w])] for w in np.unique(pairs[0]).tolist() if int(W[w]) in cplanes}
+        slide = (pairs, CfL, mL, radL, float(kap), proj)
+        log(f"addLayers: {len(np.unique(pairs[0]))} wall points near concave corners may slide along their wall")
     frac = np.concatenate([[0.0], np.cumsum([r ** -(N - 1 - j) for j in range(N)])]) / gsum
 
     # interior points: band of nRings edges around the wall points (point graph)
@@ -409,6 +511,10 @@ def add_layers(mesh, spec=None, log=print):
         # ------------------------------------------------------------ positions
         P = P0.copy()
         D = dirn * (T * stretch)[:, None]
+        if slide is not None:
+            pairs_, CfL_, mL_, radL_, kap_, proj_ = slide
+            cF = np.bincount(lff, weights=T[lfw], minlength=len(Lf)) / lfn
+            D = _slide(D, P0[W], T, cF, pairs_, CfL_, mL_, radL_, kap_, proj_)
         P[band] += interior(D)
         P[W] = P0[W] + D
         ne = int(ext.sum())
