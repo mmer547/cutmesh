@@ -244,7 +244,7 @@ python -m cutmesh.layers CASE [layerDict.json] [-out CASE2] [-noCheck]
 ## 高速化（Rust 拡張、任意）
 
 最近点・内外判定・符号付き距離（STL と特徴線）、特徴線が面を貫く点（鋭角エッジに沿わせるカット）、フックなしのカット（回転ゾーン）、面・セルの重心と体積（品質チェック、セル統合、
-境界層の判定で使う）を Rust（`rust/`、BVH + rayon による並列化）で計算します。Rust ツールチェーン（cargo）があれば次でビルドされ、`cutmesh/_core.pyd`（Linux/macOS は
+境界層の判定で使う）、境界層の内部節点の平滑化とセルの妥当性検査を Rust（`rust/`、BVH + rayon による並列化）で計算します。Rust ツールチェーン（cargo）があれば次でビルドされ、`cutmesh/_core.pyd`（Linux/macOS は
 `.so`）が置かれます。無ければ従来の Python/NumPy の処理で動きます（結果は同じ）。
 
 ```bash

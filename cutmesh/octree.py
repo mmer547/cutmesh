@@ -134,7 +134,7 @@ class Octree:
                 if Ls <= l:
                     continue
                 R = sum(nbuf * self.h(q) for q in range(l + 1, Ls))
-                d, _ = kd.query(c, distance_upper_bound=R + hd)
+                d, _ = kd.query(c, distance_upper_bound=R + hd, workers=-1)
                 mark |= d < R + hd
             for sdf, Lv, nbuf in volume_sources:
                 if Lv <= l:
