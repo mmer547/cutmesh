@@ -2,12 +2,10 @@
 import os
 import numpy as np
 
+# a neutral comment instead of the OpenFOAM banner: the files are not written by OpenFOAM
+# (OPENFOAM is a trademark of OpenCFD Ltd); the FoamFile dictionary is all a reader needs
 HEADER = """/*--------------------------------*- C++ -*----------------------------------*\\
-  =========                 |
-  \\\\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
-   \\\\    /   O peration     |
-    \\\\  /    A nd           | written by cutmesh
-     \\\\/     M anipulation  |
+  written by cutmesh
 \\*---------------------------------------------------------------------------*/
 FoamFile
 {{

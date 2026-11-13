@@ -5,6 +5,8 @@ __pycache__/
 build/
 # generated meshes / OpenFOAM cases
 examples/*/case*/
+# local runs with third-party geometry (licences of their own; not for distribution)
+run/
 # Rust extension (built by tools/build_rust.py)
 rust/target/
 cutmesh/_core*.pyd
