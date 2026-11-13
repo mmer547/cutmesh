@@ -67,7 +67,7 @@ def main(argv):
     nC = int(max(R["owner"].max(), R["neighbour"].max())) + 1
     print(f"{nC} cells, hmin {hmin * 1e3:g} mm")
 
-    dom = Surface(read_stl(_rel(cfg, cfg["domain"])))
+    dom = Surface(read_stl(_rel(cfg, cfg["domain"])), log=print, what="domain STL")
     dom.build_search(2 * hmin)
     seg = dom.feature_edges(cfg.get("featureAngle", 30.0))
     fs = sample_segments(seg, hmin / 4)

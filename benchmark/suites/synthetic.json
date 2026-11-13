@@ -1,0 +1,182 @@
+{
+ "name": "synthetic",
+ "description": "Synthetic stress shapes from make_synthetic.py (run it first).",
+ "defaults": {
+  "cellsAcross": 24,
+  "meshDict": {
+   "surfaceRefinement": {
+    "default": 2
+   }
+  }
+ },
+ "cases": [
+  {
+   "name": "sphere",
+   "stl": "../data/synthetic/sphere.stl",
+   "expect": "pass",
+   "note": "smooth convex baseline"
+  },
+  {
+   "name": "cube",
+   "stl": "../data/synthetic/cube.stl",
+   "expect": "pass",
+   "note": "sharp convex edges and corners, 12 large triangles"
+  },
+  {
+   "name": "cube_rotated",
+   "stl": "../data/synthetic/cube_rotated.stl",
+   "expect": "pass",
+   "note": "sharp edges not aligned with the octree"
+  },
+  {
+   "name": "cube_aligned",
+   "stl": "../data/synthetic/cube_aligned.stl",
+   "expect": "pass",
+   "note": "faces lie exactly on octree grid planes (degenerate cuts)",
+   "meshDict": {
+    "baseCellSize": 0.0625
+   }
+  },
+  {
+   "name": "cylinder",
+   "stl": "../data/synthetic/cylinder.stl",
+   "expect": "pass",
+   "note": "curved face meeting flat caps at sharp rims"
+  },
+  {
+   "name": "duct_patches",
+   "stl": "../data/synthetic/duct_patches.stl",
+   "expect": "pass",
+   "note": "ASCII multi-solid: inlet/outlet/walls patches",
+   "meshDict": {
+    "patchTypes": {
+     "inlet": "patch",
+     "outlet": "patch"
+    }
+   }
+  },
+  {
+   "name": "l_bracket",
+   "stl": "../data/synthetic/l_bracket.stl",
+   "expect": "pass",
+   "note": "one long concave (re-entrant) edge"
+  },
+  {
+   "name": "stepped_shaft",
+   "stl": "../data/synthetic/stepped_shaft.stl",
+   "expect": "pass",
+   "note": "concave and convex circular rims"
+  },
+  {
+   "name": "star_prism",
+   "stl": "../data/synthetic/star_prism.stl",
+   "expect": "valid",
+   "note": "acute convex spikes (36 deg) and reflex edges"
+  },
+  {
+   "name": "cone_tip",
+   "stl": "../data/synthetic/cone_tip.stl",
+   "expect": "valid",
+   "note": "point singularity at the apex"
+  },
+  {
+   "name": "wedge_10deg",
+   "stl": "../data/synthetic/wedge_10deg.stl",
+   "expect": "valid",
+   "note": "fluid wedge closing to a 10 deg knife edge"
+  },
+  {
+   "name": "torus",
+   "stl": "../data/synthetic/torus.stl",
+   "expect": "pass",
+   "note": "genus 1"
+  },
+  {
+   "name": "shell_nested",
+   "stl": "../data/synthetic/shell_nested.stl",
+   "expect": "pass",
+   "note": "fluid between two nested spheres (inner surface inverted)"
+  },
+  {
+   "name": "two_spheres",
+   "stl": "../data/synthetic/two_spheres.stl",
+   "expect": "valid",
+   "note": "two disjoint fluid bodies (expect a separate-regions warning)"
+  },
+  {
+   "name": "thin_channels",
+   "stl": "../data/synthetic/thin_channels.stl",
+   "expect": "valid",
+   "note": "fluid fingers 0.02 wide (~2 smallest cells)"
+  },
+  {
+   "name": "thin_walls",
+   "stl": "../data/synthetic/thin_walls.stl",
+   "expect": "valid",
+   "note": "solid fins 0.004 thick (< smallest cell) splitting the fluid"
+  },
+  {
+   "name": "tapered_slot",
+   "stl": "../data/synthetic/tapered_slot.stl",
+   "expect": "valid",
+   "note": "fluid slot tapering to a zero-width tip"
+  },
+  {
+   "name": "solid_spike",
+   "stl": "../data/synthetic/solid_spike.stl",
+   "expect": "valid",
+   "note": "solid knife edge jutting into the fluid"
+  },
+  {
+   "name": "sliver_cylinder",
+   "stl": "../data/synthetic/sliver_cylinder.stl",
+   "expect": "pass",
+   "note": "800 sliver triangles (aspect ratio ~300)"
+  },
+  {
+   "name": "dirty_flipped",
+   "stl": "../data/synthetic/dirty_flipped.stl",
+   "expect": "valid",
+   "note": "all normals inward: should still mesh"
+  },
+  {
+   "name": "dirty_mixed_orient",
+   "stl": "../data/synthetic/dirty_mixed_orient.stl",
+   "expect": "valid",
+   "note": "half the triangles flipped: should still mesh"
+  },
+  {
+   "name": "dirty_duplicates",
+   "stl": "../data/synthetic/dirty_duplicates.stl",
+   "expect": "valid",
+   "note": "duplicated and zero-area triangles: should still mesh"
+  },
+  {
+   "name": "dirty_edge_touch",
+   "stl": "../data/synthetic/dirty_edge_touch.stl",
+   "expect": "valid",
+   "note": "two boxes sharing one edge (non-manifold edge)"
+  },
+  {
+   "name": "dirty_open_box",
+   "stl": "../data/synthetic/dirty_open_box.stl",
+   "expect": "reject",
+   "note": "one face missing: must not give a silent mesh"
+  },
+  {
+   "name": "dirty_open_box_strict",
+   "stl": "../data/synthetic/dirty_open_box.stl",
+   "expect": "reject",
+   "note": "same open box with strictInput: must stop with an error",
+   "meshDict": {
+    "strictInput": true
+   }
+  },
+  {
+   "name": "dirty_overlap",
+   "stl": "../data/synthetic/dirty_overlap.stl",
+   "expect": "reject",
+   "note": "two overlapping closed spheres (self-intersecting union)"
+  }
+ ]
+}
