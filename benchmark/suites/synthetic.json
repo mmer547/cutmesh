@@ -29,6 +29,15 @@
    "note": "sharp edges not aligned with the octree"
   },
   {
+   "name": "cube_rotated_gapsnap",
+   "stl": "../data/synthetic/cube_rotated.stl",
+   "expect": "pass",
+   "note": "sharp edges not aligned with the octree; featureGapSnap 0.75 (one more vertex per gap along convex edges)",
+   "meshDict": {
+    "featureGapSnap": 0.75
+   }
+  },
+  {
    "name": "cube_aligned",
    "stl": "../data/synthetic/cube_aligned.stl",
    "expect": "pass",
@@ -74,10 +83,28 @@
    "note": "acute convex spikes (36 deg) and reflex edges"
   },
   {
+   "name": "star_prism_gapsnap",
+   "stl": "../data/synthetic/star_prism.stl",
+   "expect": "valid",
+   "note": "acute convex spikes (36 deg) and reflex edges; featureGapSnap 0.75 (one more vertex per gap along convex edges)",
+   "meshDict": {
+    "featureGapSnap": 0.75
+   }
+  },
+  {
    "name": "cone_tip",
    "stl": "../data/synthetic/cone_tip.stl",
    "expect": "valid",
    "note": "point singularity at the apex"
+  },
+  {
+   "name": "cone_tip_gapsnap",
+   "stl": "../data/synthetic/cone_tip.stl",
+   "expect": "valid",
+   "note": "point singularity at the apex; featureGapSnap 0.75 (one more vertex per gap along convex edges)",
+   "meshDict": {
+    "featureGapSnap": 0.75
+   }
   },
   {
    "name": "wedge_10deg",

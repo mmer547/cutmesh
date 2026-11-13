@@ -26,6 +26,7 @@ DEFAULTS = {
     "featureSnapTolerance": 0.5,  # snap vertices within this fraction of h onto feature edges
     "featureSnapMax": 0.5,      # experimental: up to this fraction where the octree cells stay valid
     "concaveSnapMax": 0.75,     # concave (re-entrant) feature edges: up to this fraction, where valid
+    "featureGapSnap": 0.0,      # convex feature edges: one vertex per gap > 0.5 cell, from up to this fraction (0 = off)
     "mergeRatio": 0.25,         # merge cut cells smaller than this fraction of their hex
     "hangingSnap": "free",      # hanging nodes that cannot slide onto a surface: "free" projection or "constrained" (treated as on-surface)
     "fillThinGaps": 2,          # passes splitting cells with fluid inside but no fluid corner (Cartesian base; 0 = off)
@@ -983,8 +984,14 @@ def generate(cfg, log=print):
     # ones (the chord / cap hooks bend the cut through them, which would make the cell
     # non-convex here).  A vertex snapped onto the edge keeps it: those vertices may come
     # from farther, as long as the octree cells stay valid.
-    dom_ccv = FeatureSet(dom.feature_edges(cfg["featureAngle"], concave_only=True), L=dom.L) \
+    ccv_seg = dom.feature_edges(cfg["featureAngle"], concave_only=True)
+    dom_ccv = FeatureSet(ccv_seg, L=dom.L) \
         if float(cfg["concaveSnapMax"]) > float(cfg["featureSnapMax"]) else None
+    # convex feature edges: fill the stretches between feature vertices (fill_feature_gaps)
+    gap_reach = float(cfg["featureGapSnap"])
+    gap_ccv = FeatureSet(ccv_seg, L=dom.L) if len(ccv_seg) else None
+    if gap_ccv is not None and gap_ccv._kd is None:
+        gap_ccv = None
     if flevel > 0:
         if len(seg):
             fp = sample_segments(seg, h0 / 2 ** flevel / 2)
@@ -1176,6 +1183,74 @@ def generate(cfg, log=print):
             width[hit] = t * vh_min[kv][hit]
         return off, cpk, dirk, width
 
+    def fill_feature_gaps(feat, phi, onv, label):
+        """Convex feature edges are kept only where vertices lie on them: the cut joins
+        consecutive feature vertices, and where they are more than ~half a cell apart the
+        cap between them is chamfered (no face chord reaches the edge there, because the
+        faces next to snapped vertices are no longer split by the level set).  Here every
+        stretch of edge farther than 0.5 cell from a feature vertex gets one more vertex:
+        the one whose foot point on the edge falls in the gap with the shortest move, up
+        to gap_reach x its cell size.  These are far snaps: they are undone where an
+        octree cell would break (no_far), and the stage is repeated.
+        Off by default (featureGapSnap = 0): the edges come out much sharper, but where
+        prism layers are added the layers of the two walls meeting at such an edge (an
+        inside corner for the layers) lose some thickness there."""
+        S = feat.seg
+        if gap_ccv is not None:
+            _, dc = gap_ccv.closest(0.5 * (S[:, 0] + S[:, 1]))
+            S = S[dc > 1e-6 * hmin]                  # concave edges have their own snaps
+        if not len(S):
+            return np.zeros(0, np.int64)
+        smp = sample_segments(S, 0.25 * hmin)
+        kd = cKDTree(pts)
+        _, jn = kd.query(smp)
+        hl = vh_min[jn]
+        hl = np.where(np.isfinite(hl), hl, hmin)
+        dist = cKDTree(pts[onv]).query(smp)[0] if len(onv) else np.full(len(smp), np.inf)
+        unc = np.nonzero(dist > 0.5 * hl)[0]
+        newp, new = [], []
+        missp = []                                   # gaps left (counted once each)
+
+        def miss(x, h_):
+            if not missp or float(np.min(np.linalg.norm(np.asarray(missp) - x, axis=1))) > 0.5 * h_:
+                missp.append(x)
+        for i in unc[np.argsort(-dist[unc])].tolist():
+            x, h_ = smp[i], hl[i]
+            dmin = dist[i]
+            if newp:
+                dmin = min(dmin, float(np.min(np.linalg.norm(np.asarray(newp) - x, axis=1))))
+            if dmin <= 0.5 * h_:
+                continue                             # covered by a vertex placed for a neighbour
+            cand = np.asarray(kd.query_ball_point(x, (gap_reach + 0.5) * h_), np.int64)
+            if len(cand):
+                cand = cand[movable[cand] & ~snapped[cand] & ~no_far[cand]]
+            if not len(cand):
+                miss(x, h_)
+                continue
+            fp, df = feat.closest(pts[cand])
+            ok = (df <= gap_reach * vh_min[cand]) & (np.linalg.norm(fp - x, axis=1) <= 0.5 * h_)
+            if gap_ccv is not None and ok.any():
+                _, dcc = gap_ccv.closest(fp[ok])
+                ok[np.nonzero(ok)[0][dcc < 1e-6 * hmin]] = False
+            if not ok.any():
+                miss(x, h_)
+                continue
+            k = np.nonzero(ok)[0][np.argmin(df[ok])]
+            v = int(cand[k])
+            far_snap[v] = df[k] >= tol_f[v]
+            pts[v] = fp[k]; phi[v] = 0.0; snapped[v] = True
+            new.append(v); newp.append(fp[k])
+        if missp and newp:                           # filled later from a neighbouring sample
+            dm, _ = cKDTree(np.asarray(newp)).query(np.asarray(missp))
+            _, jm = kd.query(np.asarray(missp))
+            hm = np.where(np.isfinite(vh_min[jm]), vh_min[jm], hmin)
+            missp = [m for m, dd, hh in zip(missp, dm, hm) if dd > 0.5 * hh]
+        ngap = len(new) + len(missp)
+        msgs.append(f"feature gaps: {ngap} stretches of {label} convex feature edges farther than 0.5 cell"
+                    f" from a feature vertex: {len(new)} got a vertex snapped onto the edge,"
+                    f" {len(missp)} have no vertex within {gap_reach:g} cell")
+        return np.array(new, np.int64)
+
     def snap_features(feat, phi, label, concave=None):
         """corners first, then feature edges, then (farther) the concave feature edges;
         moved vertices get phi = 0.  Returns the ids of the vertices now on the features."""
@@ -1202,6 +1277,8 @@ def generate(cfg, log=print):
         pts[sel] = cp; phi[sel] = 0.0; snapped[sel] = True
         msgs.append(f"snapped {nc} vertices to {label} corners, {len(sel)} to {label} feature edges")
         res = [np.array(on, np.int64), sel]
+        if gap_reach > 0 and label == "STL":
+            res.append(fill_feature_gaps(feat, phi, np.concatenate(res), label))
         if concave is not None and concave._kd is not None:
             # the vertex in the solid wedge goes onto its edge (a fluid vertex there would
             # flatten the cell holding the wedge, and the cut would still chamfer it); of

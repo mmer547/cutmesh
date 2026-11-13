@@ -1,6 +1,6 @@
 {
  "suite": "synthetic",
- "date": "2026-11-13 11:04:05",
+ "date": "2026-11-13 15:36:30",
  "python": "3.14.7",
  "args": {
   "worker": null,
@@ -75,23 +75,24 @@
     "minFaceArea": 1.201519224175513e-05
    },
    "steps": {
-    "geometry / search structures": 1.067,
-    "octree (147272 leaves)": 0.527,
-    "polyhedral cells (189837 points)": 2.199,
-    "level sets and vertex snapping": 1.243,
-    "domain cut": 5.217,
-    "assembly and small-cell merging": 4.309,
-    "patches, zones, renumbering": 2.083,
-    "leak check": 0.236,
-    "write polyMesh": 0.944,
-    "quality check": 0.844
+    "geometry / search structures": 1.086,
+    "octree (147272 leaves)": 0.539,
+    "polyhedral cells (189837 points)": 1.605,
+    "level sets and vertex snapping": 1.119,
+    "domain cut": 3.918,
+    "assembly and small-cell merging": 2.978,
+    "patches, zones, renumbering": 1.353,
+    "leak check": 0.184,
+    "write polyMesh": 0.694,
+    "quality check": 0.668
    },
+   "edge": null,
    "images": [
     "overview.png",
     "cut.png"
    ],
-   "renderTime": 1.7,
-   "time": 20.312,
+   "renderTime": 1.29,
+   "time": 15.458,
    "peakMemMB": null,
    "warnings": [],
    "repairs": [],
@@ -161,23 +162,30 @@
     "minFaceArea": 0.00010850694444444079
    },
    "steps": {
-    "geometry / search structures": 3.753,
-    "octree (278256 leaves)": 1.103,
-    "polyhedral cells (331621 points)": 3.495,
-    "level sets and vertex snapping": 0.642,
-    "domain cut": 0.304,
-    "assembly and small-cell merging": 0.853,
-    "patches, zones, renumbering": 0.419,
-    "leak check": 0.149,
-    "write polyMesh": 1.441,
-    "quality check": 1.452
+    "geometry / search structures": 3.489,
+    "octree (278256 leaves)": 0.967,
+    "polyhedral cells (331621 points)": 2.812,
+    "level sets and vertex snapping": 0.563,
+    "domain cut": 0.235,
+    "assembly and small-cell merging": 0.708,
+    "patches, zones, renumbering": 0.33,
+    "leak check": 0.141,
+    "write polyMesh": 1.112,
+    "quality check": 1.255
+   },
+   "edge": {
+    "samples": 4620,
+    "mean": 0.006213394448690534,
+    "p95": 0.02941176470587692,
+    "max": 0.02941176470588258,
+    "over02": 0.0
    },
    "images": [
     "overview.png",
     "cut.png"
    ],
-   "renderTime": 2.86,
-   "time": 15.281,
+   "renderTime": 1.99,
+   "time": 13.235,
    "peakMemMB": null,
    "warnings": [],
    "repairs": [],
@@ -247,23 +255,30 @@
     "minFaceArea": 2.4366257299224178e-06
    },
    "steps": {
-    "geometry / search structures": 0.746,
-    "octree (115326 leaves)": 0.664,
-    "polyhedral cells (148473 points)": 1.585,
-    "level sets and vertex snapping": 0.638,
-    "domain cut": 5.745,
-    "assembly and small-cell merging": 2.572,
-    "patches, zones, renumbering": 1.93,
-    "leak check": 0.162,
-    "write polyMesh": 0.788,
-    "quality check": 0.614
+    "geometry / search structures": 0.776,
+    "octree (115326 leaves)": 0.656,
+    "polyhedral cells (148473 points)": 1.296,
+    "level sets and vertex snapping": 0.555,
+    "domain cut": 4.505,
+    "assembly and small-cell merging": 2.045,
+    "patches, zones, renumbering": 1.15,
+    "leak check": 0.127,
+    "write polyMesh": 0.556,
+    "quality check": 0.49
+   },
+   "edge": {
+    "samples": 2940,
+    "mean": 0.08212065348397109,
+    "p95": 0.4038902156383602,
+    "max": 0.7873633971746242,
+    "over02": 0.1649659863945578
    },
    "images": [
     "overview.png",
     "cut.png"
    ],
-   "renderTime": 1.4,
-   "time": 17.025,
+   "renderTime": 1.15,
+   "time": 13.615,
    "peakMemMB": null,
    "warnings": [],
    "repairs": [],
@@ -275,6 +290,99 @@
     "3 faces skewness > 4"
    ],
    "verdict": "UNEXPECTED"
+  },
+  {
+   "name": "cube_rotated_gapsnap",
+   "stl": "benchmark/data/synthetic/cube_rotated.stl",
+   "expect": "pass",
+   "input": {
+    "triangles": 12,
+    "vertices": 8,
+    "edges": 18,
+    "euler": 2,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "inconsistentEdges": 0,
+    "degenerateTris": 0,
+    "duplicateTris": 0,
+    "components": 1,
+    "signedVolume": 0.9999999943227786,
+    "bbox": [
+     [
+      -0.7778212428092957,
+      -0.7888582348823547,
+      -0.6792899966239929
+     ],
+     [
+      0.7778212428092957,
+      0.7888582348823547,
+      0.6792899966239929
+     ]
+    ],
+    "diag": 2.599029126439737,
+    "closed": true,
+    "oriented": true,
+    "clean": true,
+    "solids": [
+     "walls"
+    ]
+   },
+   "quality": {
+    "nPoints": 74725,
+    "nCells": 53441,
+    "nFaces": 186814,
+    "nInternalFaces": 167338,
+    "upperTriangular": true,
+    "maxClosedness": 1.4841659085294156e-16,
+    "openCellEdges": 0,
+    "duplicateCellEdges": 0,
+    "minVol": 1.4213008059415784e-07,
+    "maxVol": 0.0002840881720365573,
+    "totalVol": 0.99993710633764,
+    "nNegVol": 0,
+    "maxNonOrth": 63.17331155832927,
+    "avgNonOrth": 9.703214309847699,
+    "nNonOrth70": 0,
+    "maxSkewness": 3.1809871704331187,
+    "nSkew4": 0,
+    "nBadPyramids": 0,
+    "nBadTetDecomp": 99,
+    "minFaceArea": 1.809879585235781e-06
+   },
+   "steps": {
+    "geometry / search structures": 0.769,
+    "octree (115326 leaves)": 0.65,
+    "polyhedral cells (148473 points)": 1.295,
+    "level sets and vertex snapping": 0.694,
+    "domain cut": 4.437,
+    "assembly and small-cell merging": 2.068,
+    "patches, zones, renumbering": 1.165,
+    "leak check": 0.129,
+    "write polyMesh": 0.555,
+    "quality check": 0.485
+   },
+   "edge": {
+    "samples": 2940,
+    "mean": 0.03549420856787095,
+    "p95": 0.20172036219765435,
+    "max": 0.6163130670380412,
+    "over02": 0.05102040816326531
+   },
+   "images": [
+    "overview.png",
+    "cut.png"
+   ],
+   "renderTime": 1.12,
+   "time": 13.729,
+   "peakMemMB": null,
+   "warnings": [],
+   "repairs": [],
+   "boundaryDistCells": 0.49,
+   "baseCellSize": 0.06573818624019623,
+   "volErr": -6.288798549569652e-05,
+   "status": "PASS",
+   "notes": [],
+   "verdict": "ok"
   },
   {
    "name": "cube_aligned",
@@ -335,23 +443,30 @@
     "minFaceArea": 0.000244140625
    },
    "steps": {
-    "geometry / search structures": 0.745,
-    "octree (120639 leaves)": 0.824,
-    "polyhedral cells (144424 points)": 1.346,
-    "level sets and vertex snapping": 0.276,
-    "domain cut": 0.163,
-    "assembly and small-cell merging": 0.138,
-    "patches, zones, renumbering": 0.228,
-    "leak check": 0.123,
-    "write polyMesh": 0.81,
-    "quality check": 0.674
+    "geometry / search structures": 0.76,
+    "octree (120639 leaves)": 0.676,
+    "polyhedral cells (144424 points)": 1.252,
+    "level sets and vertex snapping": 0.248,
+    "domain cut": 0.143,
+    "assembly and small-cell merging": 0.152,
+    "patches, zones, renumbering": 0.193,
+    "leak check": 0.061,
+    "write polyMesh": 0.486,
+    "quality check": 0.572
+   },
+   "edge": {
+    "samples": 3084,
+    "mean": 0.0,
+    "p95": 0.0,
+    "max": 0.0,
+    "over02": 0.0
    },
    "images": [
     "overview.png",
     "cut.png"
    ],
-   "renderTime": 1.61,
-   "time": 6.957,
+   "renderTime": 1.23,
+   "time": 6.027,
    "peakMemMB": null,
    "warnings": [],
    "repairs": [],
@@ -421,23 +536,30 @@
     "minFaceArea": 1.1338158961698893e-05
    },
    "steps": {
-    "geometry / search structures": 2.561,
-    "octree (157484 leaves)": 0.637,
-    "polyhedral cells (195211 points)": 1.9,
-    "level sets and vertex snapping": 1.065,
-    "domain cut": 3.423,
-    "assembly and small-cell merging": 2.138,
-    "patches, zones, renumbering": 0.361,
-    "leak check": 0.195,
-    "write polyMesh": 0.858,
-    "quality check": 1.126
+    "geometry / search structures": 2.616,
+    "octree (157484 leaves)": 0.561,
+    "polyhedral cells (195211 points)": 1.702,
+    "level sets and vertex snapping": 0.895,
+    "domain cut": 2.749,
+    "assembly and small-cell merging": 1.581,
+    "patches, zones, renumbering": 0.274,
+    "leak check": 0.174,
+    "write polyMesh": 0.813,
+    "quality check": 0.764
+   },
+   "edge": {
+    "samples": 2176,
+    "mean": 0.016668436674672795,
+    "p95": 0.030376990197560672,
+    "max": 0.0465174889125686,
+    "over02": 0.0
    },
    "images": [
     "overview.png",
     "cut.png"
    ],
-   "renderTime": 1.85,
-   "time": 15.798,
+   "renderTime": 1.36,
+   "time": 13.663,
    "peakMemMB": null,
    "warnings": [],
    "repairs": [],
@@ -509,23 +631,30 @@
     "minFaceArea": 1.736111111111122e-05
    },
    "steps": {
-    "geometry / search structures": 0.843,
-    "octree (86218 leaves)": 0.528,
-    "polyhedral cells (103400 points)": 0.999,
-    "level sets and vertex snapping": 0.651,
-    "domain cut": 1.996,
-    "assembly and small-cell merging": 0.554,
-    "patches, zones, renumbering": 0.263,
-    "leak check": 0.092,
-    "write polyMesh": 0.523,
-    "quality check": 0.499
+    "geometry / search structures": 0.916,
+    "octree (86218 leaves)": 0.522,
+    "polyhedral cells (103400 points)": 0.858,
+    "level sets and vertex snapping": 0.537,
+    "domain cut": 1.367,
+    "assembly and small-cell merging": 0.49,
+    "patches, zones, renumbering": 0.249,
+    "leak check": 0.076,
+    "write polyMesh": 0.418,
+    "quality check": 0.413
+   },
+   "edge": {
+    "samples": 2780,
+    "mean": 0.010028636113928681,
+    "p95": 0.02941176470587692,
+    "max": 0.03116883116883118,
+    "over02": 0.0
    },
    "images": [
     "overview.png",
     "cut.png"
    ],
-   "renderTime": 1.36,
-   "time": 8.481,
+   "renderTime": 1.02,
+   "time": 7.308,
    "peakMemMB": null,
    "warnings": [],
    "repairs": [],
@@ -595,23 +724,30 @@
     "minFaceArea": 5.208360652157253e-05
    },
    "steps": {
-    "geometry / search structures": 1.466,
-    "octree (146445 leaves)": 0.539,
-    "polyhedral cells (177439 points)": 1.981,
-    "level sets and vertex snapping": 0.51,
-    "domain cut": 1.465,
-    "assembly and small-cell merging": 0.639,
-    "patches, zones, renumbering": 0.331,
-    "leak check": 0.127,
-    "write polyMesh": 0.894,
-    "quality check": 0.769
+    "geometry / search structures": 1.551,
+    "octree (146445 leaves)": 0.544,
+    "polyhedral cells (177439 points)": 1.539,
+    "level sets and vertex snapping": 0.472,
+    "domain cut": 1.107,
+    "assembly and small-cell merging": 0.439,
+    "patches, zones, renumbering": 0.253,
+    "leak check": 0.103,
+    "write polyMesh": 0.597,
+    "quality check": 0.572
+   },
+   "edge": {
+    "samples": 4480,
+    "mean": 0.01217567861787989,
+    "p95": 0.02941176470587692,
+    "max": 0.0312274805232029,
+    "over02": 0.0
    },
    "images": [
     "overview.png",
     "cut.png"
    ],
-   "renderTime": 1.82,
-   "time": 10.187,
+   "renderTime": 1.55,
+   "time": 8.884,
    "peakMemMB": null,
    "warnings": [],
    "repairs": [],
@@ -681,23 +817,30 @@
     "minFaceArea": 1.6469352486355824e-07
    },
    "steps": {
-    "geometry / search structures": 1.966,
-    "octree (128782 leaves)": 0.55,
-    "polyhedral cells (159955 points)": 1.772,
-    "level sets and vertex snapping": 2.377,
-    "domain cut": 2.844,
-    "assembly and small-cell merging": 1.271,
-    "patches, zones, renumbering": 0.28,
-    "leak check": 0.13,
-    "write polyMesh": 0.805,
-    "quality check": 0.729
+    "geometry / search structures": 1.955,
+    "octree (128782 leaves)": 0.457,
+    "polyhedral cells (159955 points)": 1.493,
+    "level sets and vertex snapping": 1.896,
+    "domain cut": 2.437,
+    "assembly and small-cell merging": 1.334,
+    "patches, zones, renumbering": 0.325,
+    "leak check": 0.131,
+    "write polyMesh": 0.563,
+    "quality check": 0.579
+   },
+   "edge": {
+    "samples": 4480,
+    "mean": 0.019222766051617424,
+    "p95": 0.03154398452227173,
+    "max": 0.40362756229137026,
+    "over02": 0.0035714285714285713
    },
    "images": [
     "overview.png",
     "cut.png"
    ],
-   "renderTime": 1.45,
-   "time": 14.179,
+   "renderTime": 1.69,
+   "time": 12.868,
    "peakMemMB": null,
    "warnings": [],
    "repairs": [],
@@ -767,29 +910,129 @@
     "minFaceArea": 3.1990705385015533e-06
    },
    "steps": {
-    "geometry / search structures": 1.048,
-    "octree (95810 leaves)": 0.552,
-    "polyhedral cells (119140 points)": 1.036,
-    "level sets and vertex snapping": 0.847,
-    "domain cut": 2.967,
-    "assembly and small-cell merging": 1.318,
-    "patches, zones, renumbering": 0.457,
-    "leak check": 0.123,
-    "write polyMesh": 0.675,
-    "quality check": 0.518
+    "geometry / search structures": 1.118,
+    "octree (95810 leaves)": 0.599,
+    "polyhedral cells (119140 points)": 1.014,
+    "level sets and vertex snapping": 0.722,
+    "domain cut": 2.98,
+    "assembly and small-cell merging": 1.104,
+    "patches, zones, renumbering": 0.317,
+    "leak check": 0.134,
+    "write polyMesh": 0.454,
+    "quality check": 0.403
+   },
+   "edge": {
+    "samples": 5172,
+    "mean": 0.05533362491398247,
+    "p95": 0.48228635487619054,
+    "max": 1.4000005722045934,
+    "over02": 0.07733952049497293
    },
    "images": [
     "overview.png",
     "cut.png"
    ],
-   "renderTime": 1.42,
-   "time": 11.001,
+   "renderTime": 1.49,
+   "time": 10.395,
    "peakMemMB": null,
    "warnings": [],
    "repairs": [],
    "boundaryDistCells": 0.21,
    "baseCellSize": 0.041666666666666664,
    "volErr": -9.215238651127944e-05,
+   "status": "PASS",
+   "notes": [],
+   "verdict": "ok"
+  },
+  {
+   "name": "star_prism_gapsnap",
+   "stl": "benchmark/data/synthetic/star_prism.stl",
+   "expect": "valid",
+   "input": {
+    "triangles": 44,
+    "vertices": 24,
+    "edges": 66,
+    "euler": 2,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "inconsistentEdges": 0,
+    "degenerateTris": 0,
+    "duplicateTris": 0,
+    "components": 1,
+    "signedVolume": 0.10800000491383183,
+    "bbox": [
+     [
+      -0.5,
+      -0.4330126941204071,
+      0.0
+     ],
+     [
+      0.5,
+      0.4330126941204071,
+      0.4000000059604645
+     ]
+    ],
+    "diag": 1.3820274880934984,
+    "closed": true,
+    "oriented": true,
+    "clean": true,
+    "solids": [
+     "walls"
+    ]
+   },
+   "quality": {
+    "nPoints": 61217,
+    "nCells": 45068,
+    "nFaces": 152734,
+    "nInternalFaces": 133419,
+    "upperTriangular": true,
+    "maxClosedness": 1.481170005718689e-16,
+    "openCellEdges": 0,
+    "duplicateCellEdges": 0,
+    "minVol": 3.837961190341869e-08,
+    "maxVol": 7.233796296296327e-05,
+    "totalVol": 0.1079918682022238,
+    "nNegVol": 0,
+    "maxNonOrth": 58.33989840945284,
+    "avgNonOrth": 5.932462609627466,
+    "nNonOrth70": 0,
+    "maxSkewness": 3.139037198091669,
+    "nSkew4": 0,
+    "nBadPyramids": 0,
+    "nBadTetDecomp": 284,
+    "minFaceArea": 3.1990705385015533e-06
+   },
+   "steps": {
+    "geometry / search structures": 1.07,
+    "octree (95810 leaves)": 0.537,
+    "polyhedral cells (119140 points)": 0.953,
+    "level sets and vertex snapping": 0.817,
+    "domain cut": 3.352,
+    "assembly and small-cell merging": 1.566,
+    "patches, zones, renumbering": 0.545,
+    "leak check": 0.136,
+    "write polyMesh": 0.642,
+    "quality check": 0.578
+   },
+   "edge": {
+    "samples": 5172,
+    "mean": 0.0453892576342729,
+    "p95": 0.4822135368588804,
+    "max": 0.6264959939667335,
+    "over02": 0.06496519721577726
+   },
+   "images": [
+    "overview.png",
+    "cut.png"
+   ],
+   "renderTime": 1.64,
+   "time": 11.95,
+   "peakMemMB": null,
+   "warnings": [],
+   "repairs": [],
+   "boundaryDistCells": 0.21,
+   "baseCellSize": 0.041666666666666664,
+   "volErr": -7.533991886865543e-05,
    "status": "PASS",
    "notes": [],
    "verdict": "ok"
@@ -853,29 +1096,129 @@
     "minFaceArea": 9.877163252886668e-06
    },
    "steps": {
-    "geometry / search structures": 1.357,
-    "octree (89647 leaves)": 0.526,
-    "polyhedral cells (113410 points)": 0.911,
-    "level sets and vertex snapping": 0.544,
-    "domain cut": 2.564,
-    "assembly and small-cell merging": 1.983,
-    "patches, zones, renumbering": 1.045,
-    "leak check": 0.103,
-    "write polyMesh": 0.565,
-    "quality check": 0.444
+    "geometry / search structures": 1.311,
+    "octree (89647 leaves)": 0.529,
+    "polyhedral cells (113410 points)": 0.957,
+    "level sets and vertex snapping": 0.574,
+    "domain cut": 3.486,
+    "assembly and small-cell merging": 2.198,
+    "patches, zones, renumbering": 1.267,
+    "leak check": 0.114,
+    "write polyMesh": 0.598,
+    "quality check": 0.495
+   },
+   "edge": {
+    "samples": 1088,
+    "mean": 0.095761137773445,
+    "p95": 0.43893266792636726,
+    "max": 0.6845441041601042,
+    "over02": 0.19301470588235295
    },
    "images": [
     "overview.png",
     "cut.png"
    ],
-   "renderTime": 1.2,
-   "time": 11.538,
+   "renderTime": 1.34,
+   "time": 13.016,
    "peakMemMB": null,
    "warnings": [],
    "repairs": [],
    "boundaryDistCells": 0.67,
    "baseCellSize": 0.041666666666666664,
    "volErr": -0.0005568426291212569,
+   "status": "PASS",
+   "notes": [],
+   "verdict": "ok"
+  },
+  {
+   "name": "cone_tip_gapsnap",
+   "stl": "benchmark/data/synthetic/cone_tip.stl",
+   "expect": "valid",
+   "input": {
+    "triangles": 128,
+    "vertices": 66,
+    "edges": 192,
+    "euler": 2,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "inconsistentEdges": 0,
+    "degenerateTris": 0,
+    "duplicateTris": 0,
+    "components": 1,
+    "signedVolume": 0.167282587820227,
+    "bbox": [
+     [
+      -0.4000000059604645,
+      -0.4000000059604645,
+      0.0
+     ],
+     [
+      0.4000000059604645,
+      0.4000000059604645,
+      1.0
+     ]
+    ],
+    "diag": 1.5099668996858748,
+    "closed": true,
+    "oriented": true,
+    "clean": true,
+    "solids": [
+     "walls"
+    ]
+   },
+   "quality": {
+    "nPoints": 55790,
+    "nCells": 40103,
+    "nFaces": 139754,
+    "nInternalFaces": 124606,
+    "upperTriangular": true,
+    "maxClosedness": 1.05579295806253e-16,
+    "openCellEdges": 0,
+    "duplicateCellEdges": 0,
+    "minVol": 2.8304353083526964e-07,
+    "maxVol": 7.233796296296327e-05,
+    "totalVol": 0.1672002671638719,
+    "nNegVol": 0,
+    "maxNonOrth": 48.98935067691911,
+    "avgNonOrth": 8.711084107739026,
+    "nNonOrth70": 0,
+    "maxSkewness": 1.969546628960402,
+    "nSkew4": 0,
+    "nBadPyramids": 0,
+    "nBadTetDecomp": 0,
+    "minFaceArea": 9.877163252886668e-06
+   },
+   "steps": {
+    "geometry / search structures": 1.306,
+    "octree (89647 leaves)": 0.529,
+    "polyhedral cells (113410 points)": 1.223,
+    "level sets and vertex snapping": 0.773,
+    "domain cut": 3.534,
+    "assembly and small-cell merging": 2.205,
+    "patches, zones, renumbering": 1.274,
+    "leak check": 0.106,
+    "write polyMesh": 0.627,
+    "quality check": 0.55
+   },
+   "edge": {
+    "samples": 1088,
+    "mean": 0.05053167519110436,
+    "p95": 0.3330874216762061,
+    "max": 0.6845441041601042,
+    "over02": 0.08088235294117647
+   },
+   "images": [
+    "overview.png",
+    "cut.png"
+   ],
+   "renderTime": 1.39,
+   "time": 13.745,
+   "peakMemMB": null,
+   "warnings": [],
+   "repairs": [],
+   "boundaryDistCells": 0.67,
+   "baseCellSize": 0.041666666666666664,
+   "volErr": -0.0004921053495632322,
    "status": "PASS",
    "notes": [],
    "verdict": "ok"
@@ -939,23 +1282,30 @@
     "minFaceArea": 1.8828283358274212e-05
    },
    "steps": {
-    "geometry / search structures": 0.502,
-    "octree (51079 leaves)": 0.214,
-    "polyhedral cells (62122 points)": 0.493,
-    "level sets and vertex snapping": 0.14,
-    "domain cut": 0.452,
-    "assembly and small-cell merging": 0.344,
-    "patches, zones, renumbering": 0.161,
-    "leak check": 0.037,
-    "write polyMesh": 0.224,
-    "quality check": 0.212
+    "geometry / search structures": 0.511,
+    "octree (51079 leaves)": 0.236,
+    "polyhedral cells (62122 points)": 0.502,
+    "level sets and vertex snapping": 0.156,
+    "domain cut": 0.469,
+    "assembly and small-cell merging": 0.537,
+    "patches, zones, renumbering": 0.218,
+    "leak check": 0.047,
+    "write polyMesh": 0.297,
+    "quality check": 0.258
+   },
+   "edge": {
+    "samples": 2269,
+    "mean": 0.9720419665359757,
+    "p95": 7.846177413237605,
+    "max": 21.37755832643195,
+    "over02": 0.1132657558395769
    },
    "images": [
     "overview.png",
     "cut.png"
    ],
-   "renderTime": 1.05,
-   "time": 4.253,
+   "renderTime": 1.13,
+   "time": 4.867,
    "peakMemMB": null,
    "warnings": [],
    "repairs": [],
@@ -1025,23 +1375,24 @@
     "minFaceArea": 8.975353934864492e-06
    },
    "steps": {
-    "geometry / search structures": 0.854,
-    "octree (82356 leaves)": 0.28,
-    "polyhedral cells (106062 points)": 0.824,
-    "level sets and vertex snapping": 0.43,
-    "domain cut": 2.827,
-    "assembly and small-cell merging": 2.183,
-    "patches, zones, renumbering": 1.06,
-    "leak check": 0.146,
-    "write polyMesh": 0.513,
-    "quality check": 0.479
+    "geometry / search structures": 0.877,
+    "octree (82356 leaves)": 0.287,
+    "polyhedral cells (106062 points)": 0.827,
+    "level sets and vertex snapping": 0.498,
+    "domain cut": 3.626,
+    "assembly and small-cell merging": 2.377,
+    "patches, zones, renumbering": 0.979,
+    "leak check": 0.133,
+    "write polyMesh": 0.503,
+    "quality check": 0.434
    },
+   "edge": null,
    "images": [
     "overview.png",
     "cut.png"
    ],
-   "renderTime": 1.29,
-   "time": 11.063,
+   "renderTime": 1.41,
+   "time": 12.099,
    "peakMemMB": null,
    "warnings": [],
    "repairs": [],
@@ -1111,23 +1462,24 @@
     "minFaceArea": 1.000876337178599e-05
    },
    "steps": {
-    "geometry / search structures": 1.568,
-    "octree (196328 leaves)": 0.623,
-    "polyhedral cells (253203 points)": 2.471,
-    "level sets and vertex snapping": 1.552,
-    "domain cut": 7.975,
-    "assembly and small-cell merging": 4.781,
-    "patches, zones, renumbering": 1.871,
-    "leak check": 0.366,
-    "write polyMesh": 1.375,
-    "quality check": 1.22
+    "geometry / search structures": 1.6,
+    "octree (196328 leaves)": 0.699,
+    "polyhedral cells (253203 points)": 2.896,
+    "level sets and vertex snapping": 1.652,
+    "domain cut": 8.275,
+    "assembly and small-cell merging": 6.552,
+    "patches, zones, renumbering": 2.869,
+    "leak check": 0.405,
+    "write polyMesh": 1.637,
+    "quality check": 1.318
    },
+   "edge": null,
    "images": [
     "overview.png",
     "cut.png"
    ],
-   "renderTime": 2.49,
-   "time": 25.335,
+   "renderTime": 2.46,
+   "time": 29.48,
    "peakMemMB": null,
    "warnings": [],
    "repairs": [],
@@ -1197,23 +1549,24 @@
     "minFaceArea": 1.9835285685772025e-05
    },
    "steps": {
-    "geometry / search structures": 0.583,
-    "octree (51686 leaves)": 0.19,
-    "polyhedral cells (67614 points)": 0.524,
-    "level sets and vertex snapping": 0.341,
-    "domain cut": 1.827,
-    "assembly and small-cell merging": 1.625,
-    "patches, zones, renumbering": 0.684,
-    "leak check": 0.088,
-    "write polyMesh": 0.344,
-    "quality check": 0.277
+    "geometry / search structures": 0.492,
+    "octree (51686 leaves)": 0.209,
+    "polyhedral cells (67614 points)": 0.625,
+    "level sets and vertex snapping": 0.35,
+    "domain cut": 2.078,
+    "assembly and small-cell merging": 1.668,
+    "patches, zones, renumbering": 0.773,
+    "leak check": 0.082,
+    "write polyMesh": 0.393,
+    "quality check": 0.299
    },
+   "edge": null,
    "images": [
     "overview.png",
     "cut.png"
    ],
-   "renderTime": 1.16,
-   "time": 7.914,
+   "renderTime": 1.21,
+   "time": 8.508,
    "peakMemMB": null,
    "warnings": [
     "WARNING: the fluid has 2 separate regions (volumes 0.112, 0.112) - check for gaps closed by the mesh"
@@ -1287,23 +1640,30 @@
     "minFaceArea": 1.5625007450559477e-05
    },
    "steps": {
-    "geometry / search structures": 1.976,
-    "octree (123982 leaves)": 1.008,
-    "polyhedral cells (149905 points)": 1.655,
-    "level sets and vertex snapping": 1.28,
-    "domain cut": 2.036,
-    "assembly and small-cell merging": 0.511,
-    "patches, zones, renumbering": 0.57,
-    "leak check": 0.155,
-    "write polyMesh": 0.557,
-    "quality check": 0.559
+    "geometry / search structures": 1.881,
+    "octree (123982 leaves)": 0.965,
+    "polyhedral cells (149905 points)": 1.707,
+    "level sets and vertex snapping": 1.324,
+    "domain cut": 2.178,
+    "assembly and small-cell merging": 0.544,
+    "patches, zones, renumbering": 0.629,
+    "leak check": 0.142,
+    "write polyMesh": 0.668,
+    "quality check": 0.604
+   },
+   "edge": {
+    "samples": 10246,
+    "mean": 0.01486345147345313,
+    "p95": 0.029182824060374202,
+    "max": 0.21323797796934477,
+    "over02": 9.759906304899473e-05
    },
    "images": [
     "overview.png",
     "cut.png"
    ],
-   "renderTime": 1.61,
-   "time": 11.916,
+   "renderTime": 1.96,
+   "time": 12.577,
    "peakMemMB": null,
    "warnings": [],
    "repairs": [],
@@ -1373,23 +1733,30 @@
     "minFaceArea": 1.0986113920807843e-06
    },
    "steps": {
-    "geometry / search structures": 2.499,
-    "octree (419928 leaves)": 2.921,
-    "polyhedral cells (546939 points)": 5.066,
-    "level sets and vertex snapping": 4.27,
-    "domain cut": 29.307,
-    "assembly and small-cell merging": 4.65,
-    "patches, zones, renumbering": 9.912,
-    "leak check": 0.88,
-    "write polyMesh": 4.042,
-    "quality check": 2.801
+    "geometry / search structures": 2.585,
+    "octree (419928 leaves)": 3.494,
+    "polyhedral cells (546939 points)": 7.008,
+    "level sets and vertex snapping": 4.577,
+    "domain cut": 31.99,
+    "assembly and small-cell merging": 5.847,
+    "patches, zones, renumbering": 11.308,
+    "leak check": 0.926,
+    "write polyMesh": 4.177,
+    "quality check": 3.159
+   },
+   "edge": {
+    "samples": 11000,
+    "mean": 0.035591531424053205,
+    "p95": 0.13801150390475048,
+    "max": 0.5572258083351359,
+    "over02": 0.042727272727272725
    },
    "images": [
     "overview.png",
     "cut.png"
    ],
-   "renderTime": 4.53,
-   "time": 67.726,
+   "renderTime": 5.2,
+   "time": 77.699,
    "peakMemMB": null,
    "warnings": [
     "WARNING: leak check: 518 cell-to-face lines cross a solid wall (fluid on both sides joined; refine there), e.g. at (0.399697 0.107825 0.29351), (0.399697 0.11043 0.29351), (0.399757 0.11849 0.293441), (0.399757 0.121094 0.293441), (0.399757 0.128906 0.293441)"
@@ -1463,23 +1830,30 @@
     "minFaceArea": 5.1633724732520626e-06
    },
    "steps": {
-    "geometry / search structures": 0.777,
-    "octree (79999 leaves)": 0.489,
-    "polyhedral cells (97120 points)": 0.794,
-    "level sets and vertex snapping": 0.848,
-    "domain cut": 1.293,
-    "assembly and small-cell merging": 0.547,
-    "patches, zones, renumbering": 0.254,
-    "leak check": 0.061,
-    "write polyMesh": 0.344,
-    "quality check": 0.332
+    "geometry / search structures": 0.79,
+    "octree (79999 leaves)": 0.474,
+    "polyhedral cells (97120 points)": 0.859,
+    "level sets and vertex snapping": 0.937,
+    "domain cut": 1.465,
+    "assembly and small-cell merging": 0.803,
+    "patches, zones, renumbering": 0.339,
+    "leak check": 0.091,
+    "write polyMesh": 0.552,
+    "quality check": 0.492
+   },
+   "edge": {
+    "samples": 3713,
+    "mean": 0.01764168009344394,
+    "p95": 0.02941176470587692,
+    "max": 0.813776468206662,
+    "over02": 0.009695663883652034
    },
    "images": [
     "overview.png",
     "cut.png"
    ],
-   "renderTime": 1.01,
-   "time": 7.053,
+   "renderTime": 1.49,
+   "time": 8.467,
    "peakMemMB": null,
    "warnings": [],
    "repairs": [],
@@ -1549,23 +1923,30 @@
     "minFaceArea": 1.3280138581564218e-05
    },
    "steps": {
-    "geometry / search structures": 1.479,
-    "octree (138346 leaves)": 0.497,
-    "polyhedral cells (167886 points)": 1.582,
-    "level sets and vertex snapping": 1.232,
-    "domain cut": 0.872,
-    "assembly and small-cell merging": 0.701,
-    "patches, zones, renumbering": 0.315,
-    "leak check": 0.136,
-    "write polyMesh": 0.804,
-    "quality check": 0.711
+    "geometry / search structures": 1.501,
+    "octree (138346 leaves)": 0.502,
+    "polyhedral cells (167886 points)": 2.198,
+    "level sets and vertex snapping": 1.356,
+    "domain cut": 1.084,
+    "assembly and small-cell merging": 0.709,
+    "patches, zones, renumbering": 0.406,
+    "leak check": 0.148,
+    "write polyMesh": 0.894,
+    "quality check": 0.848
+   },
+   "edge": {
+    "samples": 4941,
+    "mean": 0.013930224566237628,
+    "p95": 0.02941176470587692,
+    "max": 0.47696512195198565,
+    "over02": 0.009309856304391824
    },
    "images": [
     "overview.png",
     "cut.png"
    ],
-   "renderTime": 1.78,
-   "time": 9.847,
+   "renderTime": 2.17,
+   "time": 11.388,
    "peakMemMB": null,
    "warnings": [],
    "repairs": [],
@@ -1635,23 +2016,30 @@
     "minFaceArea": 1.0861973933571513e-05
    },
    "steps": {
-    "geometry / search structures": 7.209,
-    "octree (27496 leaves)": 0.226,
-    "polyhedral cells (35280 points)": 0.364,
-    "level sets and vertex snapping": 0.236,
-    "domain cut": 0.783,
-    "assembly and small-cell merging": 0.415,
-    "patches, zones, renumbering": 0.195,
-    "leak check": 0.039,
-    "write polyMesh": 0.31,
-    "quality check": 0.114
+    "geometry / search structures": 7.756,
+    "octree (27496 leaves)": 0.233,
+    "polyhedral cells (35280 points)": 0.399,
+    "level sets and vertex snapping": 0.275,
+    "domain cut": 0.889,
+    "assembly and small-cell merging": 0.51,
+    "patches, zones, renumbering": 0.206,
+    "leak check": 0.038,
+    "write polyMesh": 0.203,
+    "quality check": 0.129
+   },
+   "edge": {
+    "samples": 1200,
+    "mean": 0.018499880772310698,
+    "p95": 0.030922447229021658,
+    "max": 0.0397938571779616,
+    "over02": 0.0
    },
    "images": [
     "overview.png",
     "cut.png"
    ],
-   "renderTime": 0.89,
-   "time": 11.46,
+   "renderTime": 0.83,
+   "time": 12.141,
    "peakMemMB": null,
    "warnings": [],
    "repairs": [],
@@ -1721,23 +2109,24 @@
     "minFaceArea": 1.000876337178599e-05
    },
    "steps": {
-    "geometry / search structures": 0.919,
-    "octree (146600 leaves)": 0.411,
-    "polyhedral cells (189057 points)": 1.84,
-    "level sets and vertex snapping": 1.159,
-    "domain cut": 5.364,
-    "assembly and small-cell merging": 4.399,
-    "patches, zones, renumbering": 2.106,
-    "leak check": 0.242,
-    "write polyMesh": 1.025,
+    "geometry / search structures": 0.942,
+    "octree (146600 leaves)": 0.414,
+    "polyhedral cells (189057 points)": 1.962,
+    "level sets and vertex snapping": 1.25,
+    "domain cut": 6.098,
+    "assembly and small-cell merging": 4.658,
+    "patches, zones, renumbering": 2.104,
+    "leak check": 0.238,
+    "write polyMesh": 1.148,
     "quality check": 0.976
    },
+   "edge": null,
    "images": [
     "overview.png",
     "cut.png"
    ],
-   "renderTime": 1.53,
-   "time": 19.969,
+   "renderTime": 1.9,
+   "time": 21.291,
    "peakMemMB": null,
    "warnings": [],
    "repairs": [],
@@ -1807,23 +2196,24 @@
     "minFaceArea": 1.000876337178599e-05
    },
    "steps": {
-    "geometry / search structures": 0.978,
-    "octree (146600 leaves)": 0.43,
-    "polyhedral cells (189057 points)": 2.072,
-    "level sets and vertex snapping": 1.06,
-    "domain cut": 5.336,
-    "assembly and small-cell merging": 4.569,
-    "patches, zones, renumbering": 1.843,
-    "leak check": 0.239,
-    "write polyMesh": 1.109,
-    "quality check": 0.764
+    "geometry / search structures": 0.961,
+    "octree (146600 leaves)": 0.421,
+    "polyhedral cells (189057 points)": 1.97,
+    "level sets and vertex snapping": 1.169,
+    "domain cut": 6.563,
+    "assembly and small-cell merging": 4.681,
+    "patches, zones, renumbering": 2.189,
+    "leak check": 0.23,
+    "write polyMesh": 1.168,
+    "quality check": 1.042
    },
+   "edge": null,
    "images": [
     "overview.png",
     "cut.png"
    ],
-   "renderTime": 1.6,
-   "time": 19.936,
+   "renderTime": 1.96,
+   "time": 21.907,
    "peakMemMB": null,
    "warnings": [
     "WARNING: domain STL: 1040 edges where neighbouring triangles disagree on orientation (inside/outside does not depend on it; concave-edge detection and the volume check do) e.g. at (-0.497076 0.032433 -0.0200447), (-0.497068 0 -0.0381741)"
@@ -1896,23 +2286,24 @@
     "minFaceArea": 1.000876337178599e-05
    },
    "steps": {
-    "geometry / search structures": 0.971,
-    "octree (146600 leaves)": 0.43,
-    "polyhedral cells (189057 points)": 1.82,
-    "level sets and vertex snapping": 1.069,
-    "domain cut": 5.504,
-    "assembly and small-cell merging": 4.251,
-    "patches, zones, renumbering": 2.151,
-    "leak check": 0.23,
-    "write polyMesh": 1.086,
-    "quality check": 0.922
+    "geometry / search structures": 0.95,
+    "octree (146600 leaves)": 0.468,
+    "polyhedral cells (189057 points)": 1.993,
+    "level sets and vertex snapping": 1.244,
+    "domain cut": 6.472,
+    "assembly and small-cell merging": 4.702,
+    "patches, zones, renumbering": 2.233,
+    "leak check": 0.223,
+    "write polyMesh": 1.127,
+    "quality check": 1.023
    },
+   "edge": null,
    "images": [
     "overview.png",
     "cut.png"
    ],
-   "renderTime": 1.74,
-   "time": 19.869,
+   "renderTime": 1.85,
+   "time": 21.831,
    "peakMemMB": null,
    "warnings": [],
    "repairs": [
@@ -1986,23 +2377,30 @@
     "minFaceArea": 0.00010850694444444021
    },
    "steps": {
-    "geometry / search structures": 2.09,
-    "octree (232469 leaves)": 1.471,
-    "polyhedral cells (278226 points)": 3.464,
-    "level sets and vertex snapping": 1.629,
-    "domain cut": 0.278,
-    "assembly and small-cell merging": 0.794,
-    "patches, zones, renumbering": 0.7,
-    "leak check": 0.148,
-    "write polyMesh": 1.703,
-    "quality check": 1.339
+    "geometry / search structures": 2.105,
+    "octree (232469 leaves)": 1.612,
+    "polyhedral cells (278226 points)": 3.329,
+    "level sets and vertex snapping": 1.908,
+    "domain cut": 0.366,
+    "assembly and small-cell merging": 0.874,
+    "patches, zones, renumbering": 0.749,
+    "leak check": 0.157,
+    "write polyMesh": 1.433,
+    "quality check": 1.364
+   },
+   "edge": {
+    "samples": 5783,
+    "mean": 0.00642829614409781,
+    "p95": 0.02941176470587692,
+    "max": 0.02941176470588225,
+    "over02": 0.0
    },
    "images": [
     "overview.png",
     "cut.png"
    ],
-   "renderTime": 2.87,
-   "time": 15.194,
+   "renderTime": 2.92,
+   "time": 15.786,
    "peakMemMB": null,
    "warnings": [
     "WARNING: domain STL: 1 non-manifold edges (shared by more than two triangles) e.g. at (0.5 0.5 0.5)",
@@ -2077,23 +2475,30 @@
     "minFaceArea": 5.1230029839363906e-05
    },
    "steps": {
-    "geometry / search structures": 2.909,
-    "octree (239644 leaves)": 0.981,
-    "polyhedral cells (286512 points)": 3.518,
-    "level sets and vertex snapping": 0.602,
-    "domain cut": 0.718,
-    "assembly and small-cell merging": 1.081,
-    "patches, zones, renumbering": 0.473,
-    "leak check": 0.155,
-    "write polyMesh": 1.233,
-    "quality check": 1.409
+    "geometry / search structures": 2.833,
+    "octree (239644 leaves)": 1.007,
+    "polyhedral cells (286512 points)": 3.576,
+    "level sets and vertex snapping": 0.633,
+    "domain cut": 0.758,
+    "assembly and small-cell merging": 1.067,
+    "patches, zones, renumbering": 0.55,
+    "leak check": 0.179,
+    "write polyMesh": 1.484,
+    "quality check": 1.492
+   },
+   "edge": {
+    "samples": 4620,
+    "mean": 0.0061115355233023255,
+    "p95": 0.02941176470587692,
+    "max": 0.02941176470588258,
+    "over02": 0.0
    },
    "images": [
     "overview.png",
     "cut.png"
    ],
-   "renderTime": 2.73,
-   "time": 14.501,
+   "renderTime": 2.41,
+   "time": 15.561,
    "peakMemMB": null,
    "warnings": [
     "WARNING: domain STL: 4 open edges (the surface is not closed; inside/outside may be wrong near them) e.g. at (0 0.5 0), (0.5 0 0)",
@@ -2146,7 +2551,7 @@
     ]
    },
    "error": "ValueError: strictInput: the domain STL has 4 open and 0 non-manifold edges (see the log)",
-   "time": 0.871,
+   "time": 0.8,
    "peakMemMB": null,
    "warnings": [
     "WARNING: domain STL: 4 open edges (the surface is not closed; inside/outside may be wrong near them) e.g. at (0 0.5 0), (0.5 0 0)"
@@ -2218,23 +2623,24 @@
     "minFaceArea": 1.0090988884389924e-05
    },
    "steps": {
-    "geometry / search structures": 1.851,
-    "octree (128218 leaves)": 0.952,
-    "polyhedral cells (164887 points)": 1.973,
-    "level sets and vertex snapping": 1.056,
-    "domain cut": 5.366,
-    "assembly and small-cell merging": 3.607,
-    "patches, zones, renumbering": 1.633,
-    "leak check": 0.231,
-    "write polyMesh": 0.999,
-    "quality check": 0.628
+    "geometry / search structures": 1.928,
+    "octree (128218 leaves)": 0.996,
+    "polyhedral cells (164887 points)": 1.955,
+    "level sets and vertex snapping": 1.155,
+    "domain cut": 6.137,
+    "assembly and small-cell merging": 3.912,
+    "patches, zones, renumbering": 2.017,
+    "leak check": 0.233,
+    "write polyMesh": 0.955,
+    "quality check": 0.811
    },
+   "edge": null,
    "images": [
     "overview.png",
     "cut.png"
    ],
-   "renderTime": 1.52,
-   "time": 19.807,
+   "renderTime": 1.97,
+   "time": 21.647,
    "peakMemMB": null,
    "warnings": [
     "WARNING: the fluid has 2 separate regions (volumes 0.108, 0.108) - check for gaps closed by the mesh",

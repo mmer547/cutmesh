@@ -41,6 +41,10 @@ PASS したケースの polyMesh は削除します（`--keep` で残す）。�
 WARN なら可、黙って PASS したり INVALID になったりしたら不可）。合わないものは verdict が `UNEXPECTED` になります。
 face-triangle tets（checkMesh より厳しい tet 分解の判定）は記録だけして、`--strict` のときだけ WARN に数えます。
 
+特徴線（鋭角エッジ）の取れ具合も記録します（`edge > 0.2 hmin`）。STL の特徴線に沿って最小セルの 1/4 間隔で点を取り、
+最も近いメッシュの境界辺までの距離が最小セルの 0.2 倍を超える点の割合です（`tools/edge_check.py` と同じ測り方）。
+判定には使わず、基準との比較で 2 ポイント以上変わったときに `edges` の行で知らせます。
+
 ## よく使うオプション
 
 ```bash

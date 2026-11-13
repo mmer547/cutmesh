@@ -81,6 +81,42 @@ def _peak_memory_mb():
     return None
 
 
+def edge_capture(R, meshdict_path):
+    """How well the STL feature edges are kept: points along the feature edges (spacing
+    hmin/4), distance to the nearest boundary edge of the mesh, in units of hmin (as
+    tools/edge_check.py).  Returns {samples, mean, p95, max, over02} or None."""
+    import numpy as np
+    from scipy.spatial import cKDTree
+    from cutmesh.geometry import Surface, read_stl, sample_segments
+    from cutmesh.mesher import load_config, _rel
+    cfg = load_config(meshdict_path)
+    lv = [int(v) for v in cfg.get("surfaceRefinement", {}).values()]
+    if cfg.get("featureLevel") is not None:
+        lv.append(int(cfg["featureLevel"]))
+    hmin = float(cfg["baseCellSize"]) / 2 ** max(lv + [0])
+    seg = Surface(read_stl(_rel(cfg, cfg["domain"]))).feature_edges(cfg["featureAngle"])
+    if not len(seg):
+        return None
+    fs = sample_segments(seg, hmin / 4)
+    P = np.asarray(R["points"]); nn, vv = R["faces"]; nI = len(R["neighbour"])
+    ptr = np.concatenate([[0], np.cumsum(nn)])
+    a = vv[ptr[nI]:]
+    nxt = np.arange(len(a)) + 1
+    last = ptr[nI + 1:] - ptr[nI] - 1
+    nxt[last] = ptr[nI:-1] - ptr[nI]
+    e = np.unique(np.sort(np.stack([a, a[nxt]], 1), 1), axis=0)
+    mid = 0.5 * (P[e[:, 0]] + P[e[:, 1]])
+    half = 0.5 * np.linalg.norm(P[e[:, 1]] - P[e[:, 0]], axis=1)
+    near = cKDTree(fs).query(mid, distance_upper_bound=half.max() + 2 * hmin)[0] < np.inf
+    e = e[near]
+    if not len(e):
+        return None
+    d, _ = cKDTree(sample_segments(P[e], hmin / 16)).query(fs)
+    r = d / hmin
+    return dict(samples=int(len(r)), mean=float(r.mean()), p95=float(np.percentile(r, 95)),
+                max=float(r.max()), over02=float((r > 0.2).mean()))
+
+
 def worker(job_path):
     with open(job_path, encoding="utf-8") as f:
         job = json.load(f)
@@ -100,6 +136,10 @@ def worker(job_path):
         q = {k: v for k, v in R.get("quality", {}).items() if not k.startswith("_")}
         res["quality"] = q
         res["steps"] = {name: round(dt, 3) for name, dt in R["timer"].steps}
+        try:                              # a metric, never a reason to fail the case
+            res["edge"] = edge_capture(R, os.path.join(wd, "meshDict.json"))
+        except Exception as e:            # noqa: BLE001
+            res["edgeError"] = f"{type(e).__name__}: {e}"
         if job.get("images", True):
             try:                          # pictures must never turn a good case into an ERROR
                 from render_mesh import render
@@ -268,7 +308,7 @@ def input_summary(inp):
 
 
 CSV_COLS = ["name", "status", "verdict", "expect", "time", "cells", "maxNonOrth", "maxSkewness",
-            "nBadTetDecomp", "volErr", "peakMemMB", "input", "notes"]
+            "nBadTetDecomp", "volErr", "edgeOver02", "edgeMean", "peakMemMB", "input", "notes"]
 
 
 def row(r):
@@ -281,6 +321,8 @@ def row(r):
         "maxSkewness": round(q["maxSkewness"], 2) if "maxSkewness" in q else "",
         "nBadTetDecomp": q.get("nBadTetDecomp", ""),
         "volErr": f"{r['volErr']:+.3%}" if r.get("volErr") is not None else "",
+        "edgeOver02": f"{r['edge']['over02']:.1%}" if r.get("edge") else "",
+        "edgeMean": round(r["edge"]["mean"], 3) if r.get("edge") else "",
         "peakMemMB": round(r["peakMemMB"]) if r.get("peakMemMB") else "",
         "input": input_summary(r.get("input")),
         "notes": "; ".join(r.get("notes", [])),
@@ -303,6 +345,10 @@ def compare(results, baseline):
         qa, qb = o.get("quality") or {}, r.get("quality") or {}
         if qa.get("nCells") and qb.get("nCells") and qa["nCells"] != qb["nCells"]:
             out.append(f"cells  {r['name']}: {qa['nCells']} -> {qb['nCells']}")
+        ea, eb = o.get("edge"), r.get("edge")
+        if ea and eb and abs(eb["over02"] - ea["over02"]) > 0.02:
+            out.append(f"edges  {r['name']}: {ea['over02']:.1%} -> {eb['over02']:.1%} of the feature edge"
+                       f" farther than 0.2 hmin from the mesh edges")
         if o.get("time") and r.get("time") and o["time"] > 2 and r["time"] > 1.3 * o["time"]:
             out.append(f"slower {r['name']}: {o['time']:.1f}s -> {r['time']:.1f}s")
     return out
@@ -326,11 +372,11 @@ def write_reports(outdir, suite, results, args, cmp_lines):
           f"  |  unexpected {len(unexpected)}", ""]
     if cmp_lines:
         md += ["## vs baseline", ""] + [f"- {s}" for s in cmp_lines] + [""]
-    md += ["| case | status | verdict | cells | time [s] | max non-orth | max skew | vol err | input | notes |",
-           "|---|---|---|---|---|---|---|---|---|---|"]
+    md += ["| case | status | verdict | cells | time [s] | max non-orth | max skew | vol err | edge > 0.2 hmin | input | notes |",
+           "|---|---|---|---|---|---|---|---|---|---|---|"]
     for x in rows:
         md.append(f"| {x['name']} | {x['status']} | {x['verdict']} | {x['cells']} | {x['time']} | "
-                  f"{x['maxNonOrth']} | {x['maxSkewness']} | {x['volErr']} | {x['input']} | "
+                  f"{x['maxNonOrth']} | {x['maxSkewness']} | {x['volErr']} | {x['edgeOver02']} | {x['input']} | "
                   f"{x['notes'].replace('|', '/')} |")
     with open(os.path.join(outdir, "summary.md"), "w", encoding="utf-8") as f:
         f.write("\n".join(md) + "\n")

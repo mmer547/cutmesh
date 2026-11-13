@@ -1,6 +1,6 @@
 {
  "suite": "local",
- "date": "2026-11-13 11:04:35",
+ "date": "2026-11-13 15:37:05",
  "python": "3.14.7",
  "args": {
   "worker": null,
@@ -79,23 +79,30 @@
     "minFaceArea": 9.248835242155504e-07
    },
    "steps": {
-    "geometry / search structures": 4.965,
-    "octree (226351 leaves)": 1.518,
-    "polyhedral cells (279593 points)": 2.93,
-    "level sets and vertex snapping": 3.964,
-    "domain cut": 5.953,
-    "assembly and small-cell merging": 2.712,
+    "geometry / search structures": 5.258,
+    "octree (226351 leaves)": 1.647,
+    "polyhedral cells (279593 points)": 3.703,
+    "level sets and vertex snapping": 4.349,
+    "domain cut": 5.908,
+    "assembly and small-cell merging": 2.887,
     "patches, zones, renumbering": 0.456,
-    "leak check": 0.292,
-    "write polyMesh": 1.488,
-    "quality check": 1.385
+    "leak check": 0.273,
+    "write polyMesh": 1.543,
+    "quality check": 1.5
+   },
+   "edge": {
+    "samples": 5120,
+    "mean": 0.023410549140874103,
+    "p95": 0.047927108608102356,
+    "max": 0.3387869627796149,
+    "over02": 0.0140625
    },
    "images": [
     "overview.png",
     "cut.png"
    ],
-   "renderTime": 1.89,
-   "time": 27.117,
+   "renderTime": 2.53,
+   "time": 29.343,
    "peakMemMB": null,
    "warnings": [],
    "repairs": [],
@@ -165,23 +172,30 @@
     "minFaceArea": 1.1371702312558902e-09
    },
    "steps": {
-    "geometry / search structures": 5.065,
-    "octree (152183 leaves)": 1.315,
-    "polyhedral cells (193483 points)": 1.805,
-    "level sets and vertex snapping": 2.975,
-    "domain cut": 6.968,
-    "assembly and small-cell merging": 3.588,
-    "patches, zones, renumbering": 1.271,
-    "leak check": 0.256,
-    "write polyMesh": 0.967,
-    "quality check": 0.797
+    "geometry / search structures": 5.077,
+    "octree (152183 leaves)": 1.456,
+    "polyhedral cells (193483 points)": 2.467,
+    "level sets and vertex snapping": 3.19,
+    "domain cut": 7.066,
+    "assembly and small-cell merging": 3.72,
+    "patches, zones, renumbering": 1.365,
+    "leak check": 0.275,
+    "write polyMesh": 1.047,
+    "quality check": 0.848
+   },
+   "edge": {
+    "samples": 3253,
+    "mean": 0.04852456027270118,
+    "p95": 0.23317956661929407,
+    "max": 1.0358648418097636,
+    "over02": 0.06394097755917615
    },
    "images": [
     "overview.png",
     "cut.png"
    ],
-   "renderTime": 1.3,
-   "time": 26.376,
+   "renderTime": 1.58,
+   "time": 30.307,
    "peakMemMB": null,
    "warnings": [
     "WARNING: domain STL: 3 open edges (the surface is not closed; inside/outside may be wrong near them) e.g. at (0.0524305 0.013611 0.00765749), (0.0524306 0.013611 0.00765749)"
@@ -260,23 +274,30 @@
     "minFaceArea": 1.151512755067629e-09
    },
    "steps": {
-    "geometry / search structures": 0.443,
-    "octree (20456 leaves)": 0.1,
-    "polyhedral cells (26183 points)": 0.199,
-    "level sets and vertex snapping": 0.368,
-    "domain cut": 0.664,
-    "assembly and small-cell merging": 0.311,
-    "patches, zones, renumbering": 0.224,
-    "leak check": 0.032,
-    "write polyMesh": 0.195,
-    "quality check": 0.084
+    "geometry / search structures": 0.453,
+    "octree (20456 leaves)": 0.096,
+    "polyhedral cells (26183 points)": 0.197,
+    "level sets and vertex snapping": 0.381,
+    "domain cut": 0.653,
+    "assembly and small-cell merging": 0.307,
+    "patches, zones, renumbering": 0.233,
+    "leak check": 0.034,
+    "write polyMesh": 0.144,
+    "quality check": 0.108
+   },
+   "edge": {
+    "samples": 1519,
+    "mean": 0.03189378718018917,
+    "p95": 0.06112931125904595,
+    "max": 0.4375601375812075,
+    "over02": 0.019749835418038184
    },
    "images": [
     "overview.png",
     "cut.png"
    ],
-   "renderTime": 0.71,
-   "time": 4.155,
+   "renderTime": 0.86,
+   "time": 4.193,
    "peakMemMB": null,
    "warnings": [],
    "repairs": [],
