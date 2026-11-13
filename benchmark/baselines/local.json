@@ -1,0 +1,291 @@
+{
+ "suite": "local",
+ "date": "2026-11-13 11:04:35",
+ "python": "3.14.7",
+ "args": {
+  "worker": null,
+  "jobs": 3,
+  "only": null,
+  "timeout": 900,
+  "vol_tol": 0.01,
+  "set": [],
+  "cells_across": null,
+  "keep": false,
+  "no_images": false,
+  "strict": false,
+  "save_baseline": true
+ },
+ "results": [
+  {
+   "name": "stirred_tank",
+   "stl": "examples/stirred_tank/tank.stl",
+   "expect": "pass",
+   "input": {
+    "triangles": 960,
+    "vertices": 482,
+    "edges": 1440,
+    "euler": 2,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "inconsistentEdges": 0,
+    "degenerateTris": 0,
+    "duplicateTris": 0,
+    "components": 1,
+    "signedVolume": 0.021078660525238543,
+    "bbox": [
+     [
+      -0.1497307268,
+      -0.1497307268,
+      0.0
+     ],
+     [
+      0.1497307268,
+      0.1497307268,
+      0.3
+     ]
+    ],
+    "diag": 0.5189935687312993,
+    "closed": true,
+    "oriented": true,
+    "clean": true,
+    "solids": [
+     "tankWall",
+     "bottom",
+     "top",
+     "impeller",
+     "shaft"
+    ]
+   },
+   "quality": {
+    "nPoints": 166451,
+    "nCells": 122678,
+    "nFaces": 414862,
+    "nInternalFaces": 371638,
+    "upperTriangular": true,
+    "maxClosedness": 1.3895590581737886e-16,
+    "openCellEdges": 0,
+    "duplicateCellEdges": 0,
+    "minVol": 7.029209631840342e-09,
+    "maxVol": 1.953125000000009e-06,
+    "totalVol": 0.02107841506356793,
+    "nNegVol": 0,
+    "maxNonOrth": 63.69544128281223,
+    "avgNonOrth": 5.659857749242547,
+    "nNonOrth70": 0,
+    "maxSkewness": 2.8952634490954403,
+    "nSkew4": 0,
+    "nBadPyramids": 0,
+    "nBadTetDecomp": 77,
+    "minFaceArea": 9.248835242155504e-07
+   },
+   "steps": {
+    "geometry / search structures": 4.965,
+    "octree (226351 leaves)": 1.518,
+    "polyhedral cells (279593 points)": 2.93,
+    "level sets and vertex snapping": 3.964,
+    "domain cut": 5.953,
+    "assembly and small-cell merging": 2.712,
+    "patches, zones, renumbering": 0.456,
+    "leak check": 0.292,
+    "write polyMesh": 1.488,
+    "quality check": 1.385
+   },
+   "images": [
+    "overview.png",
+    "cut.png"
+   ],
+   "renderTime": 1.89,
+   "time": 27.117,
+   "peakMemMB": null,
+   "warnings": [],
+   "repairs": [],
+   "boundaryDistCells": 0.17,
+   "baseCellSize": 0.012499999999999999,
+   "volErr": -1.1645031728679811e-05,
+   "status": "PASS",
+   "notes": [],
+   "verdict": "ok"
+  },
+  {
+   "name": "bunny",
+   "stl": "run/bunny/bunny.stl",
+   "expect": "valid",
+   "input": {
+    "triangles": 112402,
+    "vertices": 56203,
+    "edges": 168603,
+    "euler": 1,
+    "openEdges": 3,
+    "nonManifoldEdges": 0,
+    "inconsistentEdges": 0,
+    "degenerateTris": 1,
+    "duplicateTris": 0,
+    "components": 1,
+    "signedVolume": 0.00027962829858020963,
+    "bbox": [
+     [
+      -0.023550819605588913,
+      -0.04200993850827217,
+      0.0052750855684280396
+     ],
+     [
+      0.08419611304998398,
+      0.04579184576869011,
+      0.11316683888435364
+     ]
+    ],
+    "diag": 0.17595222434651778,
+    "closed": false,
+    "oriented": false,
+    "clean": false,
+    "solids": [
+     "bunny"
+    ]
+   },
+   "quality": {
+    "nPoints": 97215,
+    "nCells": 70353,
+    "nFaces": 246142,
+    "nInternalFaces": 218538,
+    "upperTriangular": true,
+    "maxClosedness": 1.4999537027256418e-16,
+    "openCellEdges": 0,
+    "duplicateCellEdges": 0,
+    "minVol": 5.78108858344789e-11,
+    "maxVol": 6.400000000000036e-08,
+    "totalVol": 0.0002794723347176069,
+    "nNegVol": 0,
+    "maxNonOrth": 61.99542798456693,
+    "avgNonOrth": 9.068670214213862,
+    "nNonOrth70": 0,
+    "maxSkewness": 6.843615113109452,
+    "nSkew4": 3,
+    "nBadPyramids": 0,
+    "nBadTetDecomp": 126,
+    "minFaceArea": 1.1371702312558902e-09
+   },
+   "steps": {
+    "geometry / search structures": 5.065,
+    "octree (152183 leaves)": 1.315,
+    "polyhedral cells (193483 points)": 1.805,
+    "level sets and vertex snapping": 2.975,
+    "domain cut": 6.968,
+    "assembly and small-cell merging": 3.588,
+    "patches, zones, renumbering": 1.271,
+    "leak check": 0.256,
+    "write polyMesh": 0.967,
+    "quality check": 0.797
+   },
+   "images": [
+    "overview.png",
+    "cut.png"
+   ],
+   "renderTime": 1.3,
+   "time": 26.376,
+   "peakMemMB": null,
+   "warnings": [
+    "WARNING: domain STL: 3 open edges (the surface is not closed; inside/outside may be wrong near them) e.g. at (0.0524305 0.013611 0.00765749), (0.0524306 0.013611 0.00765749)"
+   ],
+   "repairs": [
+    "REPAIR: domain STL: removed 1 zero-area triangles (112402 -> 112401 triangles)"
+   ],
+   "boundaryDistCells": 0.44,
+   "baseCellSize": 0.004,
+   "status": "WARN",
+   "notes": [
+    "domain STL: 3 open edges (the surface is not closed; inside/outside may be wrong near them) e.g. at (0.0524305 0.013611 0.00765749), (0.0524306 0.013611 0.00765749)",
+    "3 faces skewness > 4",
+    "repaired: domain STL: removed 1 zero-area triangles (112402 -> 112401 triangles)"
+   ],
+   "verdict": "ok"
+  },
+  {
+   "name": "cyclone",
+   "stl": "run/cyclone/cyclone.stl",
+   "expect": "valid",
+   "input": {
+    "triangles": 712,
+    "vertices": 358,
+    "edges": 1068,
+    "euler": 2,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "inconsistentEdges": 0,
+    "degenerateTris": 0,
+    "duplicateTris": 0,
+    "components": 1,
+    "signedVolume": 1.8807457187456992e-05,
+    "bbox": [
+     [
+      -0.012699999846518,
+      -0.0126749305054545,
+      -0.0253999996930361
+     ],
+     [
+      0.0139699997380376,
+      0.0126749305054545,
+      0.0279399994760752
+     ]
+    ],
+    "diag": 0.06480015310532371,
+    "closed": true,
+    "oriented": true,
+    "clean": true,
+    "solids": [
+     "wall",
+     "inlet",
+     "outlet"
+    ]
+   },
+   "quality": {
+    "nPoints": 13401,
+    "nCells": 9429,
+    "nFaces": 32982,
+    "nInternalFaces": 28657,
+    "upperTriangular": true,
+    "maxClosedness": 1.2733171152017411e-16,
+    "openCellEdges": 0,
+    "duplicateCellEdges": 0,
+    "minVol": 1.0842034816204343e-10,
+    "maxVol": 8.443399068778908e-09,
+    "totalVol": 1.8769900338128774e-05,
+    "nNegVol": 0,
+    "maxNonOrth": 65.04832998940124,
+    "avgNonOrth": 8.150129913514442,
+    "nNonOrth70": 0,
+    "maxSkewness": 3.1381567878938545,
+    "nSkew4": 0,
+    "nBadPyramids": 0,
+    "nBadTetDecomp": 32,
+    "minFaceArea": 1.151512755067629e-09
+   },
+   "steps": {
+    "geometry / search structures": 0.443,
+    "octree (20456 leaves)": 0.1,
+    "polyhedral cells (26183 points)": 0.199,
+    "level sets and vertex snapping": 0.368,
+    "domain cut": 0.664,
+    "assembly and small-cell merging": 0.311,
+    "patches, zones, renumbering": 0.224,
+    "leak check": 0.032,
+    "write polyMesh": 0.195,
+    "quality check": 0.084
+   },
+   "images": [
+    "overview.png",
+    "cut.png"
+   ],
+   "renderTime": 0.71,
+   "time": 4.155,
+   "peakMemMB": null,
+   "warnings": [],
+   "repairs": [],
+   "boundaryDistCells": 0.13,
+   "baseCellSize": 0.002,
+   "volErr": -0.0019969126583079255,
+   "status": "PASS",
+   "notes": [],
+   "verdict": "ok"
+  }
+ ]
+}

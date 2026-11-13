@@ -1,0 +1,45 @@
+{
+ "name": "local",
+ "description": "Real geometry already in this checkout. run/ is git-ignored third-party data: missing files are skipped.",
+ "defaults": {
+  "cellsAcross": 24,
+  "meshDict": {
+   "surfaceRefinement": {
+    "default": 2
+   }
+  }
+ },
+ "cases": [
+  {
+   "name": "stirred_tank",
+   "stl": "../../examples/stirred_tank/tank.stl",
+   "expect": "pass",
+   "note": "example tank, no rotating zone"
+  },
+  {
+   "name": "bunny",
+   "stl": "../../run/bunny/bunny.stl",
+   "expect": "valid",
+   "note": "Stanford bunny (15 open edges in this copy)",
+   "meshDict": {
+    "baseCellSize": 0.004
+   }
+  },
+  {
+   "name": "cyclone",
+   "stl": "../../run/cyclone/cyclone.stl",
+   "expect": "valid",
+   "note": "cyclone separator",
+   "meshDict": {
+    "baseCellSize": 0.002,
+    "surfaceRefinement": {
+     "default": 1
+    },
+    "patchTypes": {
+     "inlet": "patch",
+     "outlet": "patch"
+    }
+   }
+  }
+ ]
+}
