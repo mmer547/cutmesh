@@ -26,13 +26,18 @@ The mesh is shrunk away from the walls and the gap is filled with prism layers:
 Thicknesses are relative to the local cell size (max extent of the cell at the wall)
 unless relativeSizes is false.
 """
+import itertools
 import time
 import numpy as np
 from scipy import sparse
 from scipy.spatial import cKDTree
 
 from . import quality
-from .geometry import paused_gc, unique, unique_rows
+from .geometry import _core, paused_gc, unique, unique_rows
+
+# Rust kernels (absent without the extension or in an older build of it)
+_jacobi_band = getattr(_core, "jacobi_band", None)
+_cells_bad_rs = getattr(_core, "cells_bad", None)
 
 DEFAULTS = {
     "patches": None,             # patch names with layers (default: all wall patches)
@@ -69,15 +74,51 @@ def _nonorth(C, Cf, Sf, own, nei):
     return np.degrees(np.arccos(np.clip(c, -1, 1)))
 
 
-def _cells_bad(P, nn, vv, own, nei, nC, max_no=None, max_sk=None):
+def _cells_bad(P, nn, vv, own, nei, nC, max_no=None, max_sk=None, fixed=None):
     """cells with non-positive volume or a non-positive face pyramid (checkMesh), or a
     face more non-orthogonal than max_no (scalar or per internal face) or more skewed
-    than allowed (max_sk = (face ids, limit per face))"""
+    than allowed (max_sk = (face ids, limit per face)).
+    The internal faces come first (nei: their neighbours), or nei is per face with -1
+    for the boundary faces, in any order (max_no then per face as well).
+    fixed = (mask, centres): cells whose centre is given instead of computed (cells of
+    which only some faces are in the list); their volume is not checked."""
+    nei = np.asarray(nei, np.int64)
+    if _cells_bad_rs is not None:
+        no = None if max_no is None else np.ascontiguousarray(np.broadcast_to(np.asarray(max_no, float), (len(nei),)))
+        sk = None
+        if max_sk is not None:
+            sk = np.full(len(nn), np.inf)
+            sk[np.asarray(max_sk[0], np.int64)] = max_sk[1]
+        fm, fc = (None, None) if fixed is None else (np.ascontiguousarray(fixed[0], bool),
+                                                     np.ascontiguousarray(fixed[1], float))
+        return _cells_bad_rs(np.ascontiguousarray(P, float), np.asarray(nn, np.int64), np.asarray(vv, np.int64),
+                             np.asarray(own, np.int64), nei, int(nC), no, sk, fm, fc)
+    if len(nei) == len(nn) and (nei < 0).any():
+        # per-face neighbours: internal faces first
+        intl = nei >= 0
+        od = np.concatenate([np.nonzero(intl)[0], np.nonzero(~intl)[0]])
+        ni = int(intl.sum())
+        inv = np.empty(len(od), np.int64); inv[od] = np.arange(len(od))
+        vv = np.asarray(vv)[_gather_idx(_ptr(nn), od)]
+        nn, own, nei = np.asarray(nn)[od], np.asarray(own)[od], nei[od[:ni]]
+        if max_no is not None and np.ndim(max_no):
+            max_no = np.asarray(max_no)[od[:ni]]
+        if max_sk is not None:
+            max_sk = (inv[np.asarray(max_sk[0], np.int64)], max_sk[1])
+    return _cells_bad_py(P, nn, vv, own, nei, nC, max_no, max_sk, fixed)
+
+
+def _cells_bad_py(P, nn, vv, own, nei, nC, max_no=None, max_sk=None, fixed=None):
+    """_cells_bad() in NumPy"""
     ff = quality.FlatFaces((nn, vv))
     Cf, Sf = quality.face_geometry(P, ff)
     C, V = quality.cell_geometry(nC, own, nei, Cf, Sf)
     nI = len(nei)
     bad = V <= 0
+    if fixed is not None:
+        fm, fc = fixed
+        C[fm] = fc[fm]
+        bad[fm] = False
     po = np.einsum("ij,ij->i", Sf, Cf - C[own]) <= 0
     pn = np.einsum("ij,ij->i", Sf[:nI], C[nei] - Cf[:nI]) <= 0
     bad[own[po]] = True
@@ -177,7 +218,7 @@ def _gap_width(X, dirn, h, R, PO, nO):
         for a in range(0, len(todo), step):
             c = todo[a:a + step]
             h_ = h[c]
-            dist, idx = tree.query(X[c], k=kq, distance_upper_bound=float(reach(R[c], h_).max()))
+            dist, idx = tree.query(X[c], k=kq, distance_upper_bound=float(reach(R[c], h_).max()), workers=-1)
             dist, idx = dist.reshape(len(c), kq), idx.reshape(len(c), kq)
             valid = idx < nPO
             idc = np.where(valid, idx, 0)
@@ -205,10 +246,10 @@ def _slide_pairs(PW, dirn, own_keys, CfL, mL, reach, hw, cos_max=0.84):
     Returns (w, f, s0, slide direction in the point's tangent plane, 1 / (direction . mL))."""
     nL = len(CfL)
     tree = cKDTree(CfL)
-    lists = tree.query_ball_point(PW, reach)
-    ln = np.array([len(l) for l in lists], np.int64)
+    lists = tree.query_ball_point(PW, reach, workers=-1)
+    ln = np.fromiter(map(len, lists), np.int64, count=len(lists))
     pw = np.repeat(np.arange(len(PW)), ln)
-    pf = np.concatenate([np.asarray(l, np.int64) for l in lists]) if len(pw) else np.zeros(0, np.int64)
+    pf = np.fromiter(itertools.chain.from_iterable(lists), np.int64, count=int(ln.sum()))
     keep = ~np.isin(pw * nL + pf, own_keys)
     pw, pf = pw[keep], pf[keep]
     m = mL[pf]
@@ -439,6 +480,7 @@ def add_layers(mesh, spec=None, log=print):
     lfv = vv[_gather_idx(ptr, Lf)]
     lpos = np.full(nF, -1, np.int64); lpos[Lf] = np.arange(len(Lf))
     lff = np.repeat(np.arange(len(Lf)), lfn)              # layer face index per vertex
+    nfv = nf_unit[Lf][lff]                                 # its unit normal
     W = unique(lfv)
     widx = np.full(nP0, -1, np.int64)
     widx[W] = np.arange(len(W))
@@ -452,13 +494,13 @@ def add_layers(mesh, spec=None, log=print):
     # far off one wall and too little off the other): where the faces lie in distinct
     # planes, use the offset corner x with n_i . x = 1 for every plane
     cfa = np.ones(nW)
-    np.minimum.at(cfa, lfw, np.einsum("ij,ij->i", npn[lfw], nf_unit[Lf][lff]))
+    np.minimum.at(cfa, lfw, np.einsum("ij,ij->i", npn[lfw], nfv))
     multi = np.nonzero(cfa < 0.97)[0]
     if len(multi):
         o = np.argsort(lfw, kind="stable")
         st = np.searchsorted(lfw[o], np.arange(nW + 1))
         for w in multi.tolist():
-            G = np.array(_plane_groups(list(nf_unit[Lf][lff[o[st[w]:st[w + 1]]]]), tol=0.97))
+            G = np.array(_plane_groups(list(nfv[o[st[w]:st[w + 1]]]), tol=0.97))
             if len(G) < 2:
                 continue
             x = np.linalg.lstsq(G, np.ones(len(G)), rcond=None)[0]
@@ -466,7 +508,7 @@ def add_layers(mesh, spec=None, log=print):
             if nx > 0 and np.all(G @ (x / nx) > 0):
                 npn[w] = x / nx
     cmin = np.ones(nW)
-    np.minimum.at(cmin, lfw, np.einsum("ij,ij->i", npn[lfw], nf_unit[Lf][lff]))
+    np.minimum.at(cmin, lfw, np.einsum("ij,ij->i", npn[lfw], nfv))
 
     # constraint surfaces: boundary faces without layers, face zones
     cfaces = [np.nonzero((bpatch >= 0) & ~is_lf)[0]]
@@ -490,7 +532,7 @@ def add_layers(mesh, spec=None, log=print):
     # at corners the point moves along the bisector: T / cos keeps the layer thickness T
     # normal to every face around it (the offset surface of the corner)
     cdir = np.ones(nW)
-    np.minimum.at(cdir, lfw, -np.einsum("ij,ij->i", dirn[lfw], nf_unit[Lf][lff]))
+    np.minimum.at(cdir, lfw, -np.einsum("ij,ij->i", dirn[lfw], nfv))
     stretch = 1.0 / np.clip(cdir, 0.5, 1.0) if s["cornerStretch"] else np.ones(nW)
 
     # local cell size: max extent of the cells at the wall (min over the point's faces)
@@ -572,7 +614,14 @@ def add_layers(mesh, spec=None, log=print):
         return m > 0
 
     band = np.nonzero(rings(isw, int(s["nRings"])) & ~isw)[0]
+    # the band rows split into the band columns (iterated) and the wall columns (fixed in
+    # one smoothing); the points beyond the band stay at zero
     adjB = adj[band]
+    A_bb = adjB[:, band].tocsr()
+    A_bw = adjB[:, W].tocsr()
+    del adjB
+    bb_ptr = A_bb.indptr.astype(np.int64)
+    bb_idx = A_bb.indices.astype(np.int64)
     degB = deg[band]
     bpos = np.full(nP0, -1, np.int64); bpos[band] = np.arange(len(band))
     cb = np.array([p for p in band.tolist() if p in cplanes], np.int64)
@@ -582,17 +631,20 @@ def add_layers(mesh, spec=None, log=print):
         f" {int((~ok_dir).sum())} collapsed (sharp edges), {len(band)} interior points displaced")
 
     def interior(Dw):
-        """Laplacian smoothing of the displacement in the band (Jacobi), wall fixed"""
-        Dall = np.zeros((nP0, 3))
-        Dall[W] = Dw
-        for _ in range(int(s["nSmooth"])):
-            DB = (adjB @ Dall) / degB[:, None]
+        """Laplacian smoothing of the displacement in the band (Jacobi, starting from
+        zero), wall fixed"""
+        cw = A_bw @ Dw
+        ns = int(s["nSmooth"])
+        if _jacobi_band is not None:
+            return _jacobi_band(bb_ptr, bb_idx, A_bb.data, cw, degB, cbB, projB, ns)
+        DB = np.zeros((len(band), 3))
+        for _ in range(ns):
+            DB = (A_bb @ DB + cw) / degB[:, None]
             if len(cb):
                 DB[cbB] = np.einsum("nij,nj->ni", projB, DB[cbB])
-            Dall[band] = DB
-        return Dall[band]
+        return DB
 
-    C0, _ = quality.cell_geometry(nC, own, nei, Cf, Sf)
+    C0, V0 = quality.cell_geometry(nC, own, nei, Cf, Sf)
     # non-orthogonality limit: maxNonOrtho, or for faces of the original mesh their own
     # value + 2 deg (only what the layers make worse counts)
     no0 = _nonorth(C0, Cf, Sf, own, nei) if nI else np.zeros(0)
@@ -608,10 +660,41 @@ def add_layers(mesh, spec=None, log=print):
     # skewness limit (checkMesh warns above 4): maxSkewness, or for faces of the original
     # mesh their own value + 0.2
     skmax = s["maxSkewness"]
+
+    # Only the cells with a point that can move (wall points, band) change shape.  The
+    # validity iterations evaluate those, the layer cells and the faces around them; the
+    # cells across those faces keep their centres.  The faces between two fixed cells
+    # keep their flags, evaluated here once.
+    moved0 = isw.copy(); moved0[band] = True
+    o_nei0 = np.concatenate([nei, np.full(nF - nI, -1)])
+    fmv = np.logical_or.reduceat(moved0[vv], ptr[:-1])
+    dyn = np.zeros(nC, bool)
+    dyn[own[fmv]] = True
+    dyn[o_nei0[fmv & (o_nei0 >= 0)]] = True
+    fdyn = dyn[own] | ((o_nei0 >= 0) & dyn[np.maximum(o_nei0, 0)])
+    Fd = np.nonzero(fdyn)[0]
+    bad_fixed = (V0 <= 0) & ~dyn
+    fx = np.nonzero(~fdyn)[0]
+    bad_fixed[own[fx[np.einsum("ij,ij->i", Sf[fx], Cf[fx] - C0[own[fx]]) <= 0]]] = True
+    fx = fx[fx < nI]
+    bad_fixed[nei[fx[np.einsum("ij,ij->i", Sf[fx], C0[nei[fx]] - Cf[fx]) <= 0]]] = True
+    hi = fx[no0[fx] > lim0[fx]]
+    bad_fixed[own[hi]] = True
+    bad_fixed[nei[hi]] = True
+    del fmv, fdyn, fx, hi, V0
+    Fd_faces = (Fd, nn[Fd], vv[_gather_idx(ptr, Fd)], own[Fd])
     if skmax is not None:
-        sk0 = np.maximum(float(skmax), quality.face_skewness(P0, ff, Cf, Sf, C0, own, nei) + 0.2)
-        moved0 = isw.copy(); moved0[band] = True
-    del C0
+        # (only the faces of the cells that can change are tested)
+        sk0 = np.full(nF, float(skmax))
+        sk0[Fd] = np.maximum(float(skmax), quality.face_skewness(P0, ff, Cf, Sf, C0, own, nei, Fd) + 0.2)
+    fixed_c = np.concatenate([C0, np.zeros((len(Lf) * N, 3))])     # up to all layer cells
+    # faces across the edges of the wall faces: boundary edges sorted by (a, b) key
+    bidx = np.arange(ptr[nI], ptr[nF])
+    bkey = vv[bidx] * (nP0 + 1) + vv[ff.nxt[bidx]]
+    bf_ = ff.fid[bidx]
+    o_ = np.argsort(bkey, kind="stable")
+    bkey_s, bf_s = bkey[o_], bf_[o_]
+    del bidx, bkey, bf_, o_
 
     zone_names = list(cell_zones.keys())
     czone = np.full(nC, -1, np.int64)
@@ -668,112 +751,97 @@ def add_layers(mesh, spec=None, log=print):
         A = np.nonzero(act)[0]
         nA = len(A)
         aidx = np.full(len(Lf), -1, np.int64); aidx[A] = np.arange(nA)
+        nCn = nC + nA * N                      # cells: original + layer cells of active faces
+        fa = Lf[A]
 
         def lcell(a, k):          # layer k (0 at the wall) of active face a
             return nC + a * N + (N - 1 - k)
 
-        F_n, F_v, F_own, F_nei, F_pat, F_zone, F_old = [], [], [], [], [], [], []
+        def build(sub=None):
+            """faces of the layered mesh: the original faces (all, or sub = (ids, sizes,
+            vertices, owners) of some; layer faces that are active become internal) and
+            all faces of the layer cells, unordered.
+            Returns (sizes, vertices, owner, neighbour (-1: boundary), patch, zone,
+            old face id)."""
+            F_n, F_v, F_own, F_nei, F_pat, F_zone, F_old = [], [], [], [], [], [], []
 
-        def add(n_, v_, o_, ne_, pa_, z_=None, old=None):
-            F_n.append(np.asarray(n_, np.int64)); F_v.append(np.asarray(v_, np.int64))
-            F_own.append(np.asarray(o_, np.int64)); F_nei.append(np.asarray(ne_, np.int64))
-            F_pat.append(np.asarray(pa_, np.int64))
-            F_zone.append(np.full(len(F_own[-1]), -1, np.int64) if z_ is None else np.asarray(z_, np.int64))
-            F_old.append(np.full(len(F_own[-1]), -1, np.int64) if old is None else np.asarray(old, np.int64))
+            def add(n_, v_, o_, ne_, pa_, z_=None, old=None):
+                F_n.append(np.asarray(n_, np.int64)); F_v.append(np.asarray(v_, np.int64))
+                F_own.append(np.asarray(o_, np.int64)); F_nei.append(np.asarray(ne_, np.int64))
+                F_pat.append(np.asarray(pa_, np.int64))
+                F_zone.append(np.full(len(F_own[-1]), -1, np.int64) if z_ is None else np.asarray(z_, np.int64))
+                F_old.append(np.full(len(F_own[-1]), -1, np.int64) if old is None else np.asarray(old, np.int64))
 
-        # original faces (layer faces that are active become internal)
-        oldf = np.arange(nF)
-        o_nei = np.concatenate([nei, np.full(nF - nI, -1)])
-        o_pat = bpatch.copy()
-        fa = Lf[A]
-        o_nei[fa] = lcell(np.arange(nA), N - 1)
-        o_pat[fa] = -1
-        add(nn, vv, own, o_nei, o_pat, old=oldf)
-        # level faces of the active layer faces
-        am = act[lff]
-        av = lfw[am]                                   # W index per vertex of active faces
-        an = lfn[A]
-        aa = np.repeat(np.arange(nA), an)
-        for k in range(N):
-            if k == 0:
-                add(an, lev[av, 0], lcell(np.arange(nA), 0), np.full(nA, -1), bpatch[fa])
+            o_nei = o_nei0.copy()
+            o_pat = bpatch.copy()
+            o_nei[fa] = lcell(np.arange(nA), N - 1)
+            o_pat[fa] = -1
+            if sub is None:
+                add(nn, vv, own, o_nei, o_pat, old=np.arange(nF))
             else:
-                add(an, lev[av, k], lcell(np.arange(nA), k), lcell(np.arange(nA), k - 1),
-                    np.full(nA, -1))
-        # side faces along the edges of the active faces
-        aptr = _ptr(an)
-        nxt = np.arange(len(av)) + 1
-        nxt[aptr[1:] - 1] = aptr[:-1]
-        wa, wb = av, av[nxt]
-        pa_, pb_ = W[wa], W[wb]
-        # face across each edge (any boundary face)
-        bidx = np.arange(ptr[nI], ptr[nF])
-        bnxt = ff.nxt[bidx]
-        bkey = vv[bidx] * (nP0 + 1) + vv[bnxt]
-        bf_ = ff.fid[bidx]
-        o_ = np.argsort(bkey, kind="stable"); bkey_s = bkey[o_]
-        rk = pb_ * (nP0 + 1) + pa_
-        pos_ = np.clip(np.searchsorted(bkey_s, rk), 0, len(bkey_s) - 1)
-        g = np.where(bkey_s[pos_] == rk, bf_[o_[pos_]], -1)
-        gl = np.where(g >= 0, lpos[np.maximum(g, 0)], -1)
-        ga = np.where(gl >= 0, aidx[np.maximum(gl, 0)], -1)      # active layer face across
-        fa_e = aa
-        both = ga >= 0
-        keep = ~both | (fa_e < ga)                      # each internal side once
-        for k in range(N):
-            q = np.stack([lev[wa, k], lev[wa, k + 1], lev[wb, k + 1], lev[wb, k]], 1)[keep]
-            c1 = lcell(fa_e[keep], k)
-            c2 = np.where(both[keep], lcell(np.maximum(ga[keep], 0), k), -1)
-            pat = np.where(both[keep], -1, np.where(g[keep] >= 0, bpatch[np.maximum(g[keep], 0)], -1))
-            # orientation: q points out of c1; internal faces are owned by the lower cell
-            flip = (c2 >= 0) & (c2 < c1)
-            q[flip] = q[flip][:, ::-1]
-            o2 = np.where(flip, c2, c1); n2 = np.where(flip, c1, c2)
-            # collapsed ends: drop repeated points (quad -> triangle), drop degenerate
-            ca = q[:, 0] == q[:, 1]
-            cb = q[:, 2] == q[:, 3]
-            # side faces between layer cells of different zones extend the interface
-            z2 = czone[own[Lf[A[fa_e[keep]]]]]
-            zg = np.where(both[keep], czone[own[Lf[A[np.maximum(ga[keep], 0)]]]], -1)
-            zone_side = np.where(both[keep] & (z2 != zg), np.maximum(z2, zg), -1)
-            for msk, cols in ((~ca & ~cb, [0, 1, 2, 3]), (ca & ~cb, [0, 2, 3]), (~ca & cb, [0, 1, 2])):
-                if not msk.any():
-                    continue
-                qq = q[msk][:, cols]
-                add(np.full(int(msk.sum()), len(cols)), qq.ravel(), o2[msk], n2[msk], pat[msk],
-                    z_=zone_side[msk])
-        n_all = np.concatenate(F_n); v_all = np.concatenate(F_v)
-        o_all = np.concatenate(F_own); ne_all = np.concatenate(F_nei)
-        p_all = np.concatenate(F_pat); z_all = np.concatenate(F_zone); old_all = np.concatenate(F_old)
-        # cells: original + layer cells of active faces
-        nCn = nC + nA * N
-        lz = np.repeat(czone[own[fa]], N)
-        cz = np.concatenate([czone, lz])
+                fsel, n_s, v_s, o_s = sub
+                add(n_s, v_s, o_s, o_nei[fsel], o_pat[fsel], old=fsel)
+            # level faces of the active layer faces
+            am = act[lff]
+            av = lfw[am]                                   # W index per vertex of active faces
+            an = lfn[A]
+            aa = np.repeat(np.arange(nA), an)
+            for k in range(N):
+                if k == 0:
+                    add(an, lev[av, 0], lcell(np.arange(nA), 0), np.full(nA, -1), bpatch[fa])
+                else:
+                    add(an, lev[av, k], lcell(np.arange(nA), k), lcell(np.arange(nA), k - 1),
+                        np.full(nA, -1))
+            # side faces along the edges of the active faces
+            aptr = _ptr(an)
+            nxt = np.arange(len(av)) + 1
+            nxt[aptr[1:] - 1] = aptr[:-1]
+            wa, wb = av, av[nxt]
+            pa_, pb_ = W[wa], W[wb]
+            # face across each edge (any boundary face)
+            rk = pb_ * (nP0 + 1) + pa_
+            pos_ = np.clip(np.searchsorted(bkey_s, rk), 0, len(bkey_s) - 1)
+            g = np.where(bkey_s[pos_] == rk, bf_s[pos_], -1)
+            gl = np.where(g >= 0, lpos[np.maximum(g, 0)], -1)
+            ga = np.where(gl >= 0, aidx[np.maximum(gl, 0)], -1)      # active layer face across
+            fa_e = aa
+            both = ga >= 0
+            keep = ~both | (fa_e < ga)                      # each internal side once
+            for k in range(N):
+                q = np.stack([lev[wa, k], lev[wa, k + 1], lev[wb, k + 1], lev[wb, k]], 1)[keep]
+                c1 = lcell(fa_e[keep], k)
+                c2 = np.where(both[keep], lcell(np.maximum(ga[keep], 0), k), -1)
+                pat = np.where(both[keep], -1, np.where(g[keep] >= 0, bpatch[np.maximum(g[keep], 0)], -1))
+                # orientation: q points out of c1; internal faces are owned by the lower cell
+                flip = (c2 >= 0) & (c2 < c1)
+                q[flip] = q[flip][:, ::-1]
+                o2 = np.where(flip, c2, c1); n2 = np.where(flip, c1, c2)
+                # collapsed ends: drop repeated points (quad -> triangle), drop degenerate
+                ca = q[:, 0] == q[:, 1]
+                cb = q[:, 2] == q[:, 3]
+                # side faces between layer cells of different zones extend the interface
+                z2 = czone[own[Lf[A[fa_e[keep]]]]]
+                zg = np.where(both[keep], czone[own[Lf[A[np.maximum(ga[keep], 0)]]]], -1)
+                zone_side = np.where(both[keep] & (z2 != zg), np.maximum(z2, zg), -1)
+                for msk, cols in ((~ca & ~cb, [0, 1, 2, 3]), (ca & ~cb, [0, 2, 3]), (~ca & cb, [0, 1, 2])):
+                    if not msk.any():
+                        continue
+                    qq = q[msk][:, cols]
+                    add(np.full(int(msk.sum()), len(cols)), qq.ravel(), o2[msk], n2[msk], pat[msk],
+                        z_=zone_side[msk])
+            return tuple(np.concatenate(x) for x in (F_n, F_v, F_own, F_nei, F_pat, F_zone, F_old))
 
-        # ------------------------------------------------------------ ordering
-        intl = ne_all >= 0
-        ii = np.nonzero(intl)[0]
-        ii = ii[np.lexsort((ne_all[ii], o_all[ii]))]
-        bb = np.nonzero(~intl)[0]
-        bb = bb[np.lexsort((o_all[bb], p_all[bb]))]
-        order = np.concatenate([ii, bb])
-        fptr = _ptr(n_all)
-        new_n = n_all[order]
-        new_v = v_all[_gather_idx(fptr, order)]
-        new_own = o_all[order]
-        new_nei = ne_all[ii]
-        oi = old_all[ii]
-        max_no = np.where(oi >= 0, lim0[np.maximum(oi, 0)], float(s["maxNonOrtho"]))
+        # ------------------------------------------------------------ validity
+        # the faces of the cells that can change (in any order)
+        n_d, v_d, o_d, ne_d, _, _, old_d = build(Fd_faces)
+        max_no = np.where(old_d >= 0, lim0[np.maximum(old_d, 0)], float(s["maxNonOrtho"]))
         max_sk = None
         if skmax is not None:
-            # only the faces of cells with moved or new points can have changed
-            mv = np.concatenate([moved0, np.ones(len(P) - nP0, bool)])[new_v]
-            fm = np.logical_or.reduceat(mv, _ptr(new_n)[:-1])
-            cm = np.zeros(nCn, bool); cm[new_own[fm]] = True; cm[new_nei[fm[:len(ii)]]] = True
-            fs = np.nonzero(cm[new_own] | np.concatenate([cm[new_nei], np.zeros(len(bb), bool)]))[0]
-            oa = old_all[order][fs]
-            max_sk = (fs, np.where(oa >= 0, sk0[np.maximum(oa, 0)], float(skmax)))
-        bad = _cells_bad(P, new_n, new_v, new_own, new_nei, nCn, max_no, max_sk)
+            max_sk = (np.arange(len(n_d)), np.where(old_d >= 0, sk0[np.maximum(old_d, 0)], float(skmax)))
+        fixed = (np.concatenate([~dyn, np.zeros(nCn - nC, bool)]), fixed_c[:nCn])
+        bad = _cells_bad(P, n_d, v_d, o_d, ne_d, nCn, max_no, max_sk, fixed)
+        bad[:nC] |= bad_fixed
+        del n_d, v_d, o_d, ne_d, old_d, fixed
         nbad = int(bad.sum())
         log(f"  iteration {it}: {ne}/{nW} points extruded, {nA} faces with layers,"
             f" {nbad} invalid cells")
@@ -803,6 +871,19 @@ def add_layers(mesh, spec=None, log=print):
             T[hit] = 0.0
 
     # ------------------------------------------------------------ result
+    n_all, v_all, o_all, ne_all, p_all, z_all, old_all = build()
+    lz = np.repeat(czone[own[fa]], N)
+    cz = np.concatenate([czone, lz])
+    intl = ne_all >= 0
+    ii = np.nonzero(intl)[0]
+    ii = ii[np.lexsort((ne_all[ii], o_all[ii]))]
+    bb = np.nonzero(~intl)[0]
+    bb = bb[np.lexsort((o_all[bb], p_all[bb]))]
+    order = np.concatenate([ii, bb])
+    new_n = n_all[order]
+    new_v = v_all[_gather_idx(_ptr(n_all), order)]
+    new_own = o_all[order]
+    new_nei = ne_all[ii]
     nb_new = np.bincount(p_all[bb], minlength=len(patches))
     out_p, start = [], len(ii)
     for k, p in enumerate(patches):

@@ -11,15 +11,16 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 mod cut;
+mod layers;
 
 pub(crate) type V3 = [f64; 3];
 
 #[inline]
-fn sub(a: V3, b: V3) -> V3 {
+pub(crate) fn sub(a: V3, b: V3) -> V3 {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 #[inline]
-fn dot(a: V3, b: V3) -> f64 {
+pub(crate) fn dot(a: V3, b: V3) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 #[inline]
@@ -645,7 +646,7 @@ fn cross(a: V3, b: V3) -> V3 {
 
 /// centre and area vector of one face (quality.face_geometry: fan around the vertex
 /// average, triangles weighted by their area projected on the face normal)
-fn face_cs(pts: &[V3], f: &[usize]) -> (V3, V3) {
+pub(crate) fn face_cs(pts: &[V3], f: &[usize]) -> (V3, V3) {
     let n = f.len() as f64;
     let mut e = [0.0; 3];
     for &v in f {
@@ -713,31 +714,20 @@ fn face_geometry<'py>(
     Ok((vec3_array(py, c)?, vec3_array(py, s)?))
 }
 
-/// cell_geometry(nC, owner[F], neighbour[nI], Cf[F, 3], Sf[F, 3]) -> (centres[nC, 3], volumes[nC])
-#[pyfunction]
-fn cell_geometry<'py>(
-    py: Python<'py>,
-    n_cells: usize,
-    owner: PyReadonlyArray1<'py, i64>,
-    neighbour: PyReadonlyArray1<'py, i64>,
-    cf: PyReadonlyArray2<'py, f64>,
-    sf: PyReadonlyArray2<'py, f64>,
-) -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<f64>>)> {
-    let own = owner.as_array();
-    let nei = neighbour.as_array();
-    let cf = points(&cf)?;
-    let sf = points(&sf)?;
+/// cell centres and volumes from the faces (quality.cell_geometry); faces from
+/// nei.len() on, and those with nei[f] == usize::MAX, are boundary faces
+pub(crate) fn cell_cv(n_cells: usize, own: &[usize], nei: &[usize], cf: &[V3], sf: &[V3]) -> (Vec<V3>, Vec<f64>) {
     let ni = nei.len();
     let mut est = vec![[0.0; 3]; n_cells];
     let mut cnt = vec![0usize; n_cells];
     for f in 0..cf.len() {
-        let o = own[f] as usize;
+        let o = own[f];
         for k in 0..3 {
             est[o][k] += cf[f][k];
         }
         cnt[o] += 1;
-        if f < ni {
-            let q = nei[f] as usize;
+        if f < ni && nei[f] != usize::MAX {
+            let q = nei[f];
             for k in 0..3 {
                 est[q][k] += cf[f][k];
             }
@@ -753,14 +743,14 @@ fn cell_geometry<'py>(
     let mut vol = vec![0.0; n_cells];
     let mut cc = vec![[0.0; 3]; n_cells];
     for f in 0..cf.len() {
-        let o = own[f] as usize;
+        let o = own[f];
         let po = dot(sf[f], sub(cf[f], est[o]));
         vol[o] += po;
         for k in 0..3 {
             cc[o][k] += po * (0.75 * cf[f][k] + 0.25 * est[o][k]);
         }
-        if f < ni {
-            let q = nei[f] as usize;
+        if f < ni && nei[f] != usize::MAX {
+            let q = nei[f];
             let pn = -dot(sf[f], sub(cf[f], est[q]));
             vol[q] += pn;
             for k in 0..3 {
@@ -775,6 +765,29 @@ fn cell_geometry<'py>(
         }
         vol[c] /= 3.0;
     }
+    (cc, vol)
+}
+
+/// cell_geometry(nC, owner[F], neighbour[nI], Cf[F, 3], Sf[F, 3]) -> (centres[nC, 3], volumes[nC])
+#[pyfunction]
+fn cell_geometry<'py>(
+    py: Python<'py>,
+    n_cells: usize,
+    owner: PyReadonlyArray1<'py, i64>,
+    neighbour: PyReadonlyArray1<'py, i64>,
+    cf: PyReadonlyArray2<'py, f64>,
+    sf: PyReadonlyArray2<'py, f64>,
+) -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<f64>>)> {
+    let own: Vec<usize> = owner.as_array().iter().map(|&v| v as usize).collect();
+    let nei: Vec<usize> = neighbour.as_array().iter().map(|&v| v as usize).collect();
+    let cf = points(&cf)?;
+    let sf = points(&sf)?;
+    if own.len() != cf.len() || sf.len() != cf.len() || nei.len() > cf.len()
+        || own.iter().chain(nei.iter()).any(|&c| c >= n_cells)
+    {
+        return Err(pyo3::exceptions::PyValueError::new_err("inconsistent cell data"));
+    }
+    let (cc, vol) = cell_cv(n_cells, &own, &nei, &cf, &sf);
     Ok((vec3_array(py, cc)?, vol.into_pyarray(py)))
 }
 
@@ -828,5 +841,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cell_geometry, m)?)?;
     m.add_function(wrap_pyfunction!(poly_cell, m)?)?;
     m.add_function(wrap_pyfunction!(cut::cut_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(layers::jacobi_band, m)?)?;
+    m.add_function(wrap_pyfunction!(layers::cells_bad, m)?)?;
     Ok(())
 }
