@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "cutmesh"
 version = "0.1.0"
-description = "Octree cut-cell mesher for OpenFOAM: STL interior + rotating (MRF) cylinder zones"
+description = "Octree cut-cell mesher for OpenFOAM: polyhedral meshes inside watertight STL surfaces"
 requires-python = ">=3.9"
 dependencies = ["numpy", "scipy"]
 
