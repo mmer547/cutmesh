@@ -264,15 +264,18 @@ def _slide(D, PW, T, cF, pairs, CfL, mL, radL, kap, proj, sweeps=6):
     return D
 
 
-def _merge_close_wall_points(mesh, names, tol, log):
+def _merge_close_wall_points(mesh, names, tol, log, max_rounds=10):
     """Merge wall points of the layer patches that are closer than tol x the longest wall
     edge at either of them into one point (the one with the most wall faces).  Cutting
     leaves such near-duplicates along concave edges (an octree vertex snapped onto the edge
     next to a cut point): the zero-length edge between them has no direction, and the
     layer side face on it, or a sliver wall face along it, flips or gets an arbitrary
     normal.  Faces left with fewer than 3 points (zero area after the merge) are removed;
-    points on other patches or face zones are not merged.  Nothing is merged where a face
-    would touch itself or a cell would keep fewer than 4 faces.
+    points on other patches or face zones are not merged.
+    A group of close points is left as it is where its merge would make a face touch
+    itself, leave a cell with fewer than 4 faces, or make a cell invalid (volume not
+    positive or below half of the original, a face pyramid not positive: a thin cell whose
+    short edges all lie on the wall would collapse); the other groups are checked again.
     Returns (mesh, number of points merged away, number of faces removed)."""
     P = np.asarray(mesh["points"], float)
     nn = np.asarray(mesh["faces"][0], np.int64)
@@ -281,6 +284,7 @@ def _merge_close_wall_points(mesh, names, tol, log):
     nei = np.asarray(mesh["neighbour"], np.int64)
     patches = mesh["patches"]
     nI, nF, nP = len(nei), len(nn), len(P)
+    nC = int(max(own.max(), nei.max() if nI else 0)) + 1
     ptr = _ptr(nn)
     fid = np.repeat(np.arange(nF), nn)
     nxt = np.arange(len(vv)) + 1
@@ -308,33 +312,69 @@ def _merge_close_wall_points(mesh, names, tol, log):
     _, lab = sparse.csgraph.connected_components(
         sparse.csr_matrix((np.ones(int(short.sum())), (a[short], b[short])), shape=(nP, nP)), directed=False)
     cnt = np.bincount(lab)
-    mem = np.nonzero(cnt[lab] > 1)[0]
     nwf = np.bincount(vv[lw], minlength=nP)
-    o = np.lexsort((-nwf[mem], lab[mem]))
-    lead = np.full(lab.max() + 1, -1, np.int64)
-    lead[lab[mem][o][::-1]] = mem[o][::-1]
-    repr_ = np.arange(nP)
-    repr_[mem] = lead[lab[mem]]
-    v2 = repr_[vv]
-    keepv = v2 != v2[nxt]
-    n2 = np.bincount(fid[keepv], minlength=nF)
-    fkeep = n2 >= 3
-    # a face must not touch itself, and every cell keeps at least 4 faces
-    touched = np.unique(fid[np.isin(vv, mem)])
-    for f in touched[fkeep[touched]].tolist():
-        q = v2[ptr[f]:ptr[f + 1]][keepv[ptr[f]:ptr[f + 1]]]
-        if len(np.unique(q)) != len(q):
-            log("addLayers: close wall points not merged (a face would touch itself)")
+    ok = cnt > 1                                      # groups still to be merged
+    nei_f = np.concatenate([nei, np.full(nF - nI, -1)])
+    ff0 = quality.FlatFaces((nn, vv))
+    V0 = quality.cell_geometry(nC, own, nei, *quality.face_geometry(P, ff0))[1]
+    n_rej = 0
+    for _ in range(max_rounds):
+        mem = np.nonzero(ok[lab])[0]
+        if not len(mem):
+            log(f"addLayers: {n_rej} groups of close wall points left as they are (merging would"
+                f" make a face or cell invalid)")
             return mesh, 0, 0
-    nC = int(max(own.max(), nei.max() if nI else 0)) + 1
-    nfc = np.bincount(own[fkeep], minlength=nC) + np.bincount(nei[fkeep[:nI]], minlength=nC)
-    if nfc.min() < 4:
-        log("addLayers: close wall points not merged (a cell would keep fewer than 4 faces)")
+        o = np.lexsort((-nwf[mem], lab[mem]))
+        lead = np.full(lab.max() + 1, -1, np.int64)
+        lead[lab[mem][o][::-1]] = mem[o][::-1]
+        repr_ = np.arange(nP)
+        repr_[mem] = lead[lab[mem]]
+        v2 = repr_[vv]
+        keepv = v2 != v2[nxt]
+        n2 = np.bincount(fid[keepv], minlength=nF)
+        fkeep = n2 >= 3
+        tf = np.unique(fid[ok[lab[vv]]])                  # faces with a merged point
+        badf = []
+        for f in tf[fkeep[tf]].tolist():                  # a face must not touch itself
+            q = v2[ptr[f]:ptr[f + 1]][keepv[ptr[f]:ptr[f + 1]]]
+            if len(np.unique(q)) != len(q):
+                badf.append(f)
+        nfc = np.bincount(own[fkeep], minlength=nC) + np.bincount(nei[fkeep[:nI]], minlength=nC)
+        # the cells around the merged points stay valid
+        cells = np.unique(np.concatenate([own[tf], nei_f[tf]]))
+        cells = cells[cells >= 0]
+        kv = keepv & fkeep[fid]
+        ff = quality.FlatFaces((n2[fkeep], v2[kv]))
+        Cf, Sf = quality.face_geometry(P, ff)
+        o2, ne2 = own[fkeep], nei[fkeep[:nI]]
+        C, V = quality.cell_geometry(nC, o2, ne2, Cf, Sf)
+        badc = np.zeros(nC, bool)
+        badc[nfc < 4] = True
+        sel = np.zeros(nC, bool); sel[cells] = True
+        badc |= sel & ((V <= 0) | (V < 0.5 * V0))
+        po = np.einsum("ij,ij->i", Sf, Cf - C[o2]) <= 0
+        pn = np.einsum("ij,ij->i", Sf[:len(ne2)], C[ne2] - Cf[:len(ne2)]) <= 0
+        badc[o2[po & sel[o2]]] = True
+        badc[ne2[pn & sel[ne2]]] = True
+        if not len(badf) and not badc.any():
+            break
+        # leave the groups at the faces and cells that fail as they are
+        fb = np.zeros(nF, bool)
+        fb[badf] = True
+        fb |= badc[own] | (badc[np.maximum(nei_f, 0)] & (nei_f >= 0))
+        drop = np.unique(lab[vv[fb[fid]]])
+        drop = drop[ok[drop]]
+        n_rej += len(drop)
+        ok[drop] = False
+    else:
+        log("addLayers: close wall points not merged (no valid merge found)")
         return mesh, 0, 0
+    if n_rej:
+        log(f"addLayers: {n_rej} groups of close wall points left as they are (merging would"
+            f" make a face or cell invalid)")
     # rebuild: drop degenerate faces (order and patches kept), then unused points
-    keepv &= fkeep[fid]
     newf = np.cumsum(fkeep) - 1
-    vv3 = v2[keepv]
+    vv3 = v2[kv]
     used = np.zeros(nP, bool); used[vv3] = True
     pmap = np.cumsum(used) - 1
     out_p = []
@@ -348,7 +388,7 @@ def _merge_close_wall_points(mesh, names, tol, log):
         fz[name] = (newf[fl[k]], flip[k])
     out = dict(mesh, points=P[used], faces=(n2[fkeep], pmap[vv3]), owner=own[fkeep],
                neighbour=nei[fkeep[:nI]], patches=out_p, face_zones=fz)
-    return out, int(len(mem) - (cnt > 1).sum()), int((~fkeep).sum())
+    return out, int(len(mem) - ok.sum()), int((~fkeep).sum())
 
 
 @paused_gc

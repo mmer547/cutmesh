@@ -146,5 +146,27 @@ class CloseWallPoints(unittest.TestCase):
         self.assertEqual(q1["openCellEdges"], 0)
 
 
+class MergeKeepsCellsValid(unittest.TestCase):
+    def test_thin_cell_not_collapsed(self):
+        # a thin box (1 x 1 x 0.05) with every face on the wall: its vertical edges are
+        # shorter than 0.1 x the longest wall edge, but merging them would flatten the cell
+        from cutmesh.layers import _merge_close_wall_points
+        t = 0.05
+        P = np.array([[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0],
+                      [0, 0, t], [1, 0, t], [1, 1, t], [0, 1, t]], float)
+        F = [[0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7],
+             [0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7]]
+        M = dict(points=P, faces=(np.array([len(f) for f in F]), np.array(sum(F, []))),
+                 owner=np.zeros(len(F), np.int64), neighbour=np.zeros(0, np.int64),
+                 patches=[dict(name="wall", type="wall", startFace=0, nFaces=len(F))])
+        msgs = []
+        out, nm, nf = _merge_close_wall_points(M, ["wall"], 0.1, msgs.append)
+        self.assertEqual((nm, nf), (0, 0))
+        self.assertIs(out, M)
+        self.assertTrue(any("left as they are" in m for m in msgs))
+        q = quality.check(out["points"], out["faces"], out["owner"], out["neighbour"], log=lambda s: None)
+        self.assertAlmostEqual(q["totalVol"], t)
+
+
 if __name__ == "__main__":
     unittest.main()
