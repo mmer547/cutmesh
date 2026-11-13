@@ -72,10 +72,8 @@ class LayersInGap(unittest.TestCase):
         h, gf = self.h, 0.3
         R = _split_patch(self.slot_mesh(), lambda c: c[1] < (self.y0 + self.y1) * h / 20)
         gap = (self.y1 - self.y0) * h / 10
-        P = np.asarray(R["points"])
         L = add_layers(R, {"patches": ["wall_a"], "nLayers": 3, "maxGapFraction": gf}, log=lambda s: None)
-        W, T = L["layer_thickness"]["points"], L["layer_thickness"]["T"]
-        X = P[W]
+        T, X = L["layer_thickness"]["T"], L["layer_thickness"]["X"]
         side = self._slot(X) & (np.abs(X[:, 1] - self.y0 * h / 10) < 1e-6)
         self.assertGreater(side.sum(), 5)
         self.assertLessEqual(T[side].max(), gf * gap * 1.05)
@@ -98,15 +96,13 @@ class LayersInGap(unittest.TestCase):
         h = self.h
         R = self.slot_mesh()
         gap = (self.y1 - self.y0) * h / 10
-        P = np.asarray(R["points"])
         kept = {}
         for gf in (0.3, 0.0):
             L = add_layers(R, {"nLayers": 3, "maxGapFraction": gf}, log=lambda s: None)
             q = quality.check(L["points"], L["faces"], L["owner"], L["neighbour"], log=lambda s: None)
             self.assertEqual(q["nNegVol"], 0)
             self.assertEqual(q["nBadPyramids"], 0)
-            W, T = L["layer_thickness"]["points"], L["layer_thickness"]["T"]
-            X = P[W]
+            T, X = L["layer_thickness"]["T"], L["layer_thickness"]["X"]
             slot = self._slot(X)
             self.assertGreater(slot.sum(), 10)
             kept[gf] = (T[slot] > 0).mean()

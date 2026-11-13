@@ -203,7 +203,7 @@ MRF円筒を置く）場合、隙間より細かいセルが必要ですが、`s
 ```bash
 # meshDict.json に "addLayers": {...} を書くと生成後に自動で追加
 python -m cutmesh meshDict.json
-# 例: examples/stirred_tank/meshDict_layers.json（3層、全壁）→ case_layers（約16万セル、壁節点の96%が目標厚さ）
+# 例: examples/stirred_tank/meshDict_layers.json（3層、全壁）→ case_layers（約16万セル、壁節点の98%が目標厚さ）
 cutmesh examples/stirred_tank/meshDict_layers.json
 # 既存ケースに追加（ASCII polyMesh。cutmesh 以外のメッシュでも可）
 python -m cutmesh.layers CASE [layerDict.json] [-out CASE2] [-noCheck]
@@ -224,11 +224,18 @@ python -m cutmesh.layers CASE [layerDict.json] [-out CASE2] [-noCheck]
 | `maxThicknessSlope` | 壁に沿った単位長さあたりの総厚の変化の上限（層の端を徐々に細らせる） | 0.5 |
 | `cornerStretch` | 角の節点を T/cos 動かし、角でも層厚 T を保つ | true |
 | `maxGapFraction` | 総厚を、向かい合う壁までの距離のこの割合以下に抑える（狭い隙間で両側の層がぶつからないように。0 で無効） | 0.3 |
+| `mergeWallPoints` | 層を付ける前に、壁上でこの値 × 周りの壁の辺長より近い節点どうしを1点にまとめる（0 で無効） | 0.1 |
 | `concaveSlide` | 凹の角で、もう一方の壁の層に食い込む節点を自分の壁に沿って滑らせる。元の距離 s0 の所にある節点を、もう一方の壁の層厚 c に対して c + k·s0 まで離す（k がこの値。`null` で無効） | 0.5 |
 | `nRings` / `nSmooth` | 内部節点を押し込む範囲（壁からの辺数）とラプラス平滑化の回数 | 6 / 60 |
 | `nIter` / `nCollapseIter` | 不正セルの所の厚さを半減する反復回数 / その後に層を止める反復回数 | 8 / 60 |
 
 手順:
+0. 凹のエッジ沿いには、カットでほぼ重なった壁節点（エッジ上へスナップした八分木の頂点と、そのすぐ横のカット点。
+   間隔はセルの数千分の1〜数百分の1）が残ることがある。その間の長さほぼ0の辺は向きが定まらず、その上の層の
+   側面や、エッジに沿った細い壁面が層を付けると裏返り、エッジに沿って層が止まる。そこで、`mergeWallPoints` ×
+   周りの壁の辺長より近い壁節点を、壁面の多い方（角の節点）にまとめる。点が3つ未満になる面（まとめた後は面積0）
+   は除く。他のパッチや faceZone 上の節点はまとめず、面が自分自身に触れる・セルの面が4つ未満になる場合は
+   何もしない。
 1. 壁節点を面積重み付き節点法線に沿って内側へ総厚 T だけ動かす。複数の平面にまたがる節点（エッジ・角）は、
    面積ではなく各平面から T 離れる位置（オフセット面の角。2平面なら二等分線上で T/cos(θ/2)）へ動かす
    （面積重み付きでは大きい面に引っ張られ、一方の壁から離れすぎ、もう一方からは足りなくなる）。
