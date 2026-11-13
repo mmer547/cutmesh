@@ -209,9 +209,14 @@ def run_case(c, outdir, args, overrides):
         return res
     try:
         inp = check_file(c["stl"])
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - unreadable / empty STL: this case is an ERROR
         inp = {"error": f"{type(e).__name__}: {e}"}
     res["input"] = inp
+    if "error" in inp:
+        msg = f"input diagnostics failed: {inp['error']}"
+        res.update(status="ERROR", error=msg, notes=[msg])
+        res["verdict"] = verdict(c.get("expect"), "ERROR")
+        return res
     md = dict(c["meshDict"])
     md.update(overrides)
     if "baseCellSize" not in md:
@@ -374,7 +379,13 @@ def main(argv=None):
     print(f"suite {suite['name']}: {len(cases)} cases -> {outdir}")
 
     def one(c):
-        r = run_case(c, outdir, args, overrides)
+        try:
+            r = run_case(c, outdir, args, overrides)
+        except Exception as e:            # noqa: BLE001 - one broken case never stops the suite
+            msg = f"benchmark driver: {type(e).__name__}: {e}"
+            r = {"name": c["name"], "stl": _relpath(c["stl"]), "expect": c.get("expect"),
+                 "status": "ERROR", "error": msg, "notes": [msg],
+                 "verdict": verdict(c.get("expect"), "ERROR")}
         q = r.get("quality") or {}
         print(f"  {r['status']:<8} {r.get('verdict', '-'):<10} {r['name']:<28} "
               f"{q.get('nCells', ''):>8} cells {r.get('time', 0):7.1f}s  {'; '.join(r.get('notes', []))[:110]}",

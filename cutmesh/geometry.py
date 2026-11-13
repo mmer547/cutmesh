@@ -266,16 +266,20 @@ def repair_triangles(tris, region):
     _, grp, cnt = np.unique(S, axis=0, return_inverse=True, return_counts=True)
     grp = grp.ravel()
     if (cnt > 1).any():
-        for g in np.nonzero(cnt > 1)[0]:
-            members = idx[grp == g]
-            ev = even[grp == g]
-            ne, no = int(ev.sum()), int((~ev).sum())
-            pairs = min(ne, no)
-            rep["membranes"] += pairs
-            keep[members] = False
-            if ne != no:                       # keep one copy of the majority orientation
-                keep[members[ev if ne > no else ~ev][0]] = True
-                rep["duplicates"] += abs(ne - no) - 1
+        # per group (all at once, linear in the number of triangles): copies of each
+        # orientation; coincident opposite pairs cancel, of the rest one copy is kept
+        ne = np.bincount(grp, even.astype(np.int64), len(cnt)).astype(np.int64)
+        no = cnt - ne
+        dup = cnt > 1
+        rep["membranes"] = int(np.minimum(ne, no)[dup].sum())
+        rest = dup & (ne != no)
+        rep["duplicates"] = int((np.abs(ne - no) - 1)[rest].sum())
+        member = dup[grp]
+        keep[idx[member]] = False
+        # the first copy (lowest index) of the majority orientation of each such group
+        cand = np.nonzero(rest[grp] & (even == (ne > no)[grp]))[0]
+        _, first = np.unique(grp[cand], return_index=True)
+        keep[idx[cand[first]]] = True
     tris, region, F = tris[keep], np.asarray(region)[keep], F[keep]
     rep["kept"] = len(tris)
     # edges of what is left

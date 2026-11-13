@@ -43,6 +43,17 @@ class TestRepair(unittest.TestCase):
         self.assertEqual(S.repair["membranes"], 1)
         self.assertTrue(any("zero-thickness membranes" in s for s in lines))
 
+    def test_mixed_copies_cancel_pairs_and_keep_majority(self):
+        # 3 copies of one face in its own orientation + 1 reversed: one pair cancels, one copy
+        # of the majority stays; a face duplicated once in each orientation goes completely
+        t = box()
+        extra = [t[:1], t[:1], t[:1, ::-1], t[1:2, ::-1]]
+        _, _, rep = repair_triangles(np.concatenate([t] + extra), np.zeros(16, int))
+        self.assertEqual(rep["membranes"], 2)
+        self.assertEqual(rep["duplicates"], 1)
+        self.assertEqual(rep["kept"], 11)
+        self.assertEqual(rep["openEdges"], 3)
+
     def test_zero_area_removed(self):
         t = box()
         S, lines = self.run_repair(np.concatenate([t, np.repeat(t[:2, :1], 3, 1)]))
