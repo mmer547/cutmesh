@@ -294,3 +294,10 @@ python -m cutmesh.layers CASE [layerDict.json] [-out CASE2] [-noCheck]
    独立なので並列化しやすい。交点を辺ごとに一括で求めてからセルごとに切る構造にする）、セル統合
 4. **AMI（スライディングメッシュ）への移行**: `<name>_interface` faceZone を `createBaffles` で
    切り離し、cyclicAMIにする手順はsnappyHexMeshのチュートリアルと同じ
+
+## 商標
+
+cutmesh は OpenFOAM の一部ではなく、OpenFOAM 用のメッシュ（`constant/polyMesh`）を書き出す独立したツールです。
+
+This offering is not approved or endorsed by OpenCFD Limited, producer and distributor of the
+OpenFOAM software via www.openfoam.com, and owner of the OPENFOAM® and OpenCFD® trade marks.
