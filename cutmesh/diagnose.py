@@ -67,7 +67,7 @@ def main(argv=None):
         return 0
     cfg = load_config(argv[0])
     case = argv[1] if len(argv) > 1 else _rel(cfg, cfg.get("case", "."))
-    dom = Surface(read_stl(_rel(cfg, cfg["domain"])))
+    dom = Surface(read_stl(_rel(cfg, cfg["domain"])), log=print, what="domain STL")
     m = read_mesh(case)
     n, X = through_wall(dom, m["points"], m["faces"], m["owner"], m["neighbour"])
     print(f"lines from cell centres to face centres through a solid wall: {n}")

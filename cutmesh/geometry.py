@@ -231,13 +231,120 @@ def _sample_triangles(tris, spacing):
 INSIDE_PERT = np.array([0.0, 3.14159265e-7, 2.71828183e-7])   # x L: ray origin shift of inside()
 
 
-class Surface:
-    """Closed (watertight) triangulated surface, possibly with several solids/regions."""
+def repair_triangles(tris, region):
+    """Remove triangles that break the ray-parity inside test, and check the rest.
 
-    def __init__(self, solids):
+    Removed: zero-area triangles; duplicated triangles (same three vertices: copies with
+    the same orientation keep one, coincident pairs with opposite orientation - a
+    zero-thickness membrane - are both removed).  A duplicate counts every ray crossing
+    twice and flips inside/outside along the rays through it.
+    Checked (not changed): open edges, non-manifold edges, edges whose two triangles
+    disagree on orientation, and the signed volume.
+    Returns (tris, region, report).  Vertices are welded on coordinates rounded to
+    1e-9 of the bounding-box diagonal."""
+    tris = np.asarray(tris, float)
+    n0 = len(tris)
+    rep = dict(input=n0, zeroArea=0, duplicates=0, membranes=0)
+    if n0 == 0:
+        rep.update(kept=0, openEdges=0, nonManifoldEdges=0, inconsistentEdges=0,
+                   volume=0.0, examples={})
+        return tris, region, rep
+    lo = tris.reshape(-1, 3).min(0)
+    L = max(float(np.linalg.norm(tris.reshape(-1, 3).max(0) - lo)), 1e-300)
+    q = np.round((tris.reshape(-1, 3) - lo) / L * 1e9).astype(np.int64)
+    _, vid = np.unique(q, axis=0, return_inverse=True)
+    F = vid.reshape(-1, 3)
+    area2 = np.linalg.norm(np.cross(tris[:, 1] - tris[:, 0], tris[:, 2] - tris[:, 0]), axis=1)
+    zero = (F[:, 0] == F[:, 1]) | (F[:, 1] == F[:, 2]) | (F[:, 2] == F[:, 0]) | (area2 <= 1e-14 * L * L)
+    rep["zeroArea"] = int(zero.sum())
+    keep = ~zero
+    # duplicates: same vertex set; orientation = parity of the permutation that sorts them
+    idx = np.nonzero(keep)[0]
+    S = np.sort(F[idx], 1)
+    a, b, c = F[idx, 0], F[idx, 1], F[idx, 2]
+    even = ((a == S[:, 0]) & (b == S[:, 1])) | ((b == S[:, 0]) & (c == S[:, 1])) | ((c == S[:, 0]) & (a == S[:, 1]))
+    _, grp, cnt = np.unique(S, axis=0, return_inverse=True, return_counts=True)
+    grp = grp.ravel()
+    if (cnt > 1).any():
+        for g in np.nonzero(cnt > 1)[0]:
+            members = idx[grp == g]
+            ev = even[grp == g]
+            ne, no = int(ev.sum()), int((~ev).sum())
+            pairs = min(ne, no)
+            rep["membranes"] += pairs
+            keep[members] = False
+            if ne != no:                       # keep one copy of the majority orientation
+                keep[members[ev if ne > no else ~ev][0]] = True
+                rep["duplicates"] += abs(ne - no) - 1
+    tris, region, F = tris[keep], np.asarray(region)[keep], F[keep]
+    rep["kept"] = len(tris)
+    # edges of what is left
+    ea = F.ravel()
+    eb = np.roll(F, -1, 1).ravel()
+    und = np.sort(np.stack([ea, eb], 1), 1)
+    key, inv, ecnt = np.unique(und, axis=0, return_inverse=True, return_counts=True)
+    inv = inv.ravel()
+    fwd = np.bincount(inv, (ea < eb).astype(float), len(key))
+    open_e, nonman = ecnt == 1, ecnt > 2
+    incons = (ecnt == 2) & (fwd != 1)
+    rep["openEdges"], rep["nonManifoldEdges"] = int(open_e.sum()), int(nonman.sum())
+    rep["inconsistentEdges"] = int(incons.sum())
+    first = {}
+    for name, m in (("open", open_e), ("nonManifold", nonman), ("inconsistent", incons)):
+        e = np.nonzero(m)[0][:3]
+        if len(e):
+            # midpoint of the edge: any directed occurrence of it
+            occ = np.searchsorted(np.sort(inv), e)
+            o = np.argsort(inv, kind="stable")[occ]
+            t, k = o // 3, o % 3
+            first[name] = [((tris[ti, ki] + tris[ti, (ki + 1) % 3]) / 2).tolist() for ti, ki in zip(t, k)]
+    rep["examples"] = first
+    rep["volume"] = float(np.einsum("ij,ij->i", tris[:, 0], np.cross(tris[:, 1], tris[:, 2])).sum() / 6.0)
+    return tris, region, rep
+
+
+def log_repair(rep, log, what="STL"):
+    """Log what repair_triangles() changed (always, when anything was removed) and found."""
+    if not log:
+        return
+    fixes = []
+    if rep["zeroArea"]:
+        fixes.append(f"{rep['zeroArea']} zero-area triangles")
+    if rep["duplicates"]:
+        fixes.append(f"{rep['duplicates']} duplicated triangles (one copy kept)")
+    if rep["membranes"]:
+        fixes.append(f"{rep['membranes']} pairs of coincident opposite triangles (zero-thickness membranes)")
+    if fixes:
+        log(f"REPAIR: {what}: removed " + ", ".join(fixes) + f" ({rep['input']} -> {rep['kept']} triangles)")
+    ex = rep.get("examples", {})
+    fmt = lambda k: (" e.g. at " + ", ".join("(" + " ".join(f"{x:.6g}" for x in p) + ")" for p in ex[k][:2])
+                     if ex.get(k) else "")
+    if rep["openEdges"]:
+        log(f"WARNING: {what}: {rep['openEdges']} open edges (the surface is not closed; inside/outside"
+            f" may be wrong near them){fmt('open')}")
+    if rep["nonManifoldEdges"]:
+        log(f"WARNING: {what}: {rep['nonManifoldEdges']} non-manifold edges (shared by more than two"
+            f" triangles){fmt('nonManifold')}")
+    if rep["inconsistentEdges"]:
+        log(f"WARNING: {what}: {rep['inconsistentEdges']} edges where neighbouring triangles disagree on"
+            f" orientation (inside/outside does not depend on it; concave-edge detection and the volume"
+            f" check do){fmt('inconsistent')}")
+    if not (fixes or rep["openEdges"] or rep["nonManifoldEdges"] or rep["inconsistentEdges"]):
+        log(f"{what} check: closed, consistently oriented, {rep['kept']} triangles")
+
+
+class Surface:
+    """Closed (watertight) triangulated surface, possibly with several solids/regions.
+    Zero-area and duplicated triangles are removed on construction (repair_triangles);
+    what was removed and what is still wrong is in self.repair and is logged when log
+    is given."""
+
+    def __init__(self, solids, log=None, what="STL"):
         self.names = [s[0] for s in solids]
-        self.tris = np.concatenate([s[1] for s in solids])
-        self.region = np.concatenate([np.full(len(s[1]), i) for i, s in enumerate(solids)])
+        tris = np.concatenate([s[1] for s in solids])
+        region = np.concatenate([np.full(len(s[1]), i) for i, s in enumerate(solids)])
+        self.tris, self.region, self.repair = repair_triangles(tris, region)
+        log_repair(self.repair, log, what)
         self.bbmin = self.tris.reshape(-1, 3).min(0)
         self.bbmax = self.tris.reshape(-1, 3).max(0)
         self.L = float(np.linalg.norm(self.bbmax - self.bbmin))

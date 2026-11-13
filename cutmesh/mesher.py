@@ -30,6 +30,8 @@ DEFAULTS = {
     "hangingSnap": "free",      # hanging nodes that cannot slide onto a surface: "free" projection or "constrained" (treated as on-surface)
     "fillThinGaps": 2,          # passes splitting cells with fluid inside but no fluid corner (Cartesian base; 0 = off)
     "checkLeaks": True,         # check the final mesh for fluid joined through a solid wall
+    "strictInput": False,       # stop on open / non-manifold STL edges instead of warning
+    "volumeCheckTolerance": 0.05,  # warn when the mesh volume differs more from the STL's
     "minRegionVolume": 1e-3,    # remove fluid regions cut off from the rest below this volume fraction
     "fillThinWalls": 3,         # passes splitting cells with solid inside but no solid corner (Cartesian base; 0 = off)
     "thinCutCells": 2,          # passes splitting cut cells keeping < thinCutFraction fluid next to finer cells (Cartesian base; 0 = off)
@@ -70,7 +72,7 @@ def _rel(cfg, p):
     return p if os.path.isabs(p) else os.path.join(cfg["_base"], p)
 
 
-def build_zones(cfg):
+def build_zones(cfg, log=None):
     zones = []
     for z in cfg["rotatingZones"]:
         if "cylinder" in z:
@@ -80,7 +82,7 @@ def build_zones(cfg):
             axis = (np.asarray(c["point2"], float) - np.asarray(c["point1"], float))
             axis = axis / np.linalg.norm(axis)
         else:
-            s = Surface(read_stl(_rel(cfg, z["stl"])))
+            s = Surface(read_stl(_rel(cfg, z["stl"])), log=log, what=f"rotating zone {z['name']!r} STL")
             g = SurfaceZone(s)
             origin = z.get("origin", [0, 0, 0])
             axis = z.get("axis", [0, 0, 1])
@@ -902,8 +904,12 @@ def _thin_gap(dom, p, into, tg, eps, max_steps=512):
 @paused_gc
 def generate(cfg, log=print):
     T = Timer(log)
-    dom = Surface(read_stl(_rel(cfg, cfg["domain"])))
-    zones = build_zones(cfg)
+    dom = Surface(read_stl(_rel(cfg, cfg["domain"])), log=log, what="domain STL")
+    rp = dom.repair
+    if cfg["strictInput"] and (rp["openEdges"] or rp["nonManifoldEdges"]):
+        raise ValueError(f"strictInput: the domain STL has {rp['openEdges']} open and "
+                         f"{rp['nonManifoldEdges']} non-manifold edges (see the log)")
+    zones = build_zones(cfg, log)
     h0 = float(cfg["baseCellSize"])
     sref = cfg.get("surfaceRefinement", {})
     default_level = int(sref.get("default", 0))
@@ -2005,7 +2011,20 @@ def generate(cfg, log=print):
     # ------------------------------------------------------------ patches
     bnn, bverts = gather(b_occ)
     ffb = quality.FlatFaces((bnn, bverts))
-    bC, _ = quality.face_geometry(P, ffb)
+    bC, bS = quality.face_geometry(P, ffb)
+    # volume check: the mesh volume (divergence theorem over the boundary) against the STL's
+    # signed volume.  A large mismatch means an open or self-intersecting STL (parity gives
+    # the wrong inside) or fluid lost to features thinner than the cells
+    vmesh = float(np.einsum("ij,ij->", bC, bS)) / 3.0
+    vstl = abs(dom.repair["volume"])
+    if dom.repair["inconsistentEdges"] or vstl <= 0:
+        log(f"volume check: skipped (STL orientation inconsistent); mesh volume {vmesh:.6g}")
+    else:
+        dv = vmesh / vstl - 1.0
+        log(f"volume check: mesh {vmesh:.6g}, STL {vstl:.6g} ({dv:+.2%})")
+        if abs(dv) > float(cfg["volumeCheckTolerance"]):
+            log(f"WARNING: mesh volume differs from the STL volume by {dv:+.1%} - the STL may be open or"
+                f" self-intersecting, or fluid thinner than the cells was cut off")
     _, dd, tid = dom.closest(bC)
     reg = dom.region[tid]
     log(f"boundary faces: max distance of face centre from STL {dd.max():.3g}"
