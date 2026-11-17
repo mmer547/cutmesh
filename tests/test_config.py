@@ -188,6 +188,13 @@ class TestZoneOverlap(unittest.TestCase):
         with self.assertRaises(ConfigError):
             check_zone_overlap([self.zone("a", 0, 1), self.zone("b", 0.2, 0.8, r=0.2)], 0.05)
 
+    def test_coincident(self):
+        # the same cylinder under two names: every surface sample lies on the other's
+        # surface, the insides are shared
+        with self.assertRaises(ConfigError) as cm:
+            check_zone_overlap([self.zone("a", 0, 1), self.zone("b", 0, 1)], 0.05)
+        self.assertIn("'a' and 'b' overlap", str(cm.exception))
+
     def test_touching_and_apart_ok(self):
         check_zone_overlap([self.zone("a", 0, 1), self.zone("b", 1, 2), self.zone("c", 0, 1, x=3)], 0.05)
 

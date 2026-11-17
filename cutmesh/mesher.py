@@ -110,14 +110,25 @@ def build_zones(cfg, log=None):
 
 def check_zone_overlap(zones, spacing):
     """ConfigError when two rotating zones overlap (one's surface passes through the
-    other's inside, or one contains the other).  Surfaces that only touch are allowed.
-    spacing: distance of the surface samples tested."""
+    other's inside, one contains the other, or they coincide).  Surfaces that only
+    touch are allowed.  spacing: distance of the surface samples tested."""
     probs = []
     for i, a in enumerate(zones):
         for b in zones[i + 1:]:
             tol = 1e-6 * max(a["geom"].L, b["geom"].L)
             for x, y in ((a, b), (b, a)):
                 p, _ = x["geom"].samples(spacing)
+                # also points inside x (a coarse grid over its box, off its surface):
+                # zones with the same surface have every surface sample on the other's
+                # surface, but share their inside
+                lo, hi = p.min(0), p.max(0)
+                g = np.linspace(0.0, 1.0, 12)[1:-1]
+                G = lo + (hi - lo) * np.stack(np.meshgrid(g, g, g, indexing="ij"), -1).reshape(-1, 3)
+                G = G[x["geom"].inside(G)]
+                if len(G):
+                    _, dx, _ = x["geom"].closest(G)
+                    G = G[dx > tol]
+                p = np.concatenate([p, G])
                 p = p[y["geom"].inside(p)]
                 if len(p):
                     _, d, _ = y["geom"].closest(p)
