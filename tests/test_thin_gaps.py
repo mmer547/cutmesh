@@ -99,12 +99,14 @@ class ThinGaps(unittest.TestCase):
         self.assertEqual(ncomp, 2)              # the slot is lost without the splitting
 
     def test_auto_gap_refinement(self):
-        # a slot a quarter of a cell wide: closed without, three cells across with it
+        # a slot a quarter of a cell wide: closed without any gap handling, three cells
+        # across with autoGapRefinement (fillThinGaps alone keeps it open too, since the
+        # snap guard counts hanging vertices about to be projected as lost)
         auto = {"autoGapRefinement": {"cellsAcross": 3, "maxLevel": 4}}
         ncomp, vr = self.mesh(2.5 * self.h, 0.25 * self.h, fill=2, extra=auto)
         self.assertEqual(ncomp, 1)
         self.assertAlmostEqual(vr, 1.0, delta=0.002)
-        ncomp, _ = self.mesh(2.5 * self.h, 0.25 * self.h, fill=2)
+        ncomp, _ = self.mesh(2.5 * self.h, 0.25 * self.h, fill=0)
         self.assertEqual(ncomp, 2)
 
     def test_isolated_region_removed(self):
@@ -250,6 +252,33 @@ class ThinWalls(unittest.TestCase):
         n, vr = self.mesh(0.15 * self.h, 2.4 * self.h, fill=3)
         self.assertEqual(n, 0)
         self.assertAlmostEqual(vr, 1.0, delta=0.002)
+
+
+class FinUnderCeiling(unittest.TestCase):
+    """A solid fin thinner than a cell, standing from floor to ceiling, from one side wall
+    to a free tip (benchmark thin_walls).  Where it meets the ceiling the cells have
+    corners in the solid above the ceiling, but fluid corners on both sides of the fin:
+    they must be split too, and the snap must not empty the cells at the tip (a hanging
+    vertex projected onto the fin's far face, next to a regular one)."""
+    h = 0.01
+
+    def test_no_leak_at_the_junction(self):
+        h, v = self.h, self.h / 20
+        G = np.ones((120, 120, 116), bool)                   # ceiling at 5.8 h, off the planes
+        G[44:52, 32:, :] = False                             # fin 0.4 h thick, tip at y = 1.6 h
+        with tempfile.TemporaryDirectory() as d:
+            voxel_stl(os.path.join(d, "f.stl"), G, v)
+            _write_json(os.path.join(d, "m.json"), {"domain": "f.stl", "baseCellSize": 4 * h,
+                                                    "surfaceRefinement": {"default": 2},
+                                                    "checkLeaks": False})
+            R = generate(load_config(os.path.join(d, "m.json")), log=lambda s: None)
+            dom = Surface(read_stl(os.path.join(d, "f.stl")))
+        q = quality.check(R["points"], R["faces"], R["owner"], R["neighbour"], log=lambda s: None)
+        self.assertEqual(q["nNegVol"], 0)
+        self.assertEqual(q["nBadPyramids"], 0)
+        n, _ = through_wall(dom, R["points"], R["faces"], R["owner"], R["neighbour"])
+        self.assertEqual(n, 0)
+        self.assertAlmostEqual(q["totalVol"] / (G.sum() * v ** 3), 1.0, delta=0.005)
 
 
 if __name__ == "__main__":
