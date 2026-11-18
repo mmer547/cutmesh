@@ -38,7 +38,6 @@ class CutContext:
         self.pinch_cache = {}
         self.pinch_min_area = 0.05    # each kept piece of a bent face, as a fraction of the kept part
         self.pinch_now = set()        # vertices the chords of the current cut bend through
-        self.plain_faces = set()      # faces cut without chord / pinch points (shared with cells cut otherwise)
         self.last_pinch = set()       # of the last cut: the line the kept side is pinched along
 
     # ------------------------------------------------------------------
@@ -80,7 +79,7 @@ class CutContext:
     def chord_point(self, fid, poly, a, b):
         """Feature point where a sharp edge pierces the face, inserted into the chord
         a-b.  Cached per (face, chord), so both cells sharing the face agree."""
-        if a == b or fid in self.plain_faces:
+        if a == b:
             return None
         key = (fid, a, b) if a < b else (fid, b, a)
         if key in self.chord_cache:
@@ -149,8 +148,6 @@ class CutContext:
         """Surface vertex of the kept part of the face beyond its chord a-b (the tip of a
         wedge of solid at a concave edge, the vertex on the edge): the chord bends
         through it, which splits the kept part in two.  Cached per (face, chord)."""
-        if fid in self.plain_faces:
-            return None
         key = (fid, a, b) if a < b else (fid, b, a)
         if key in self.pinch_cache:
             c = self.pinch_cache[key]

@@ -67,13 +67,11 @@ Thingi10K などは単位や大きさがばらばらなので、この方法で�
 | 三角形の質 | `sliver_cylinder`（縦横比 約300 の細長い三角形） |
 | 汚れた入力 | `dirty_flipped`, `dirty_mixed_orient`, `dirty_duplicates`, `dirty_edge_touch`, `dirty_open_box`, `dirty_overlap` |
 
-## 現在の結果（2026-11-17、凸エッジの厳密カットを入れた後）
+## 現在の結果（2026-11-13、入力 STL の自動修正を入れた後）
 
-synthetic: **PASS 20 / WARN 4 / INVALID 1 / ERROR 1**（ERROR は `dirty_open_box_strict` で期待どおり）、
-期待と違うもの 1（`dirty_open_box`）。`thin_walls` はリーク 0、`cube_rotated` は歪度 > 4 が 0 で PASS になり、
-傾いたエッジの欠けもなくなった（特徴線からのずれの最大 0.78 → 0.00 hmin）。
-local: stirred_tank は PASS。bunny は前回 WARN（歪度 > 4 が 3 面、開いた辺 3 本）。基準は `baselines/*.json`
-（2026-11-13 のまま。`thin_walls`・`cube_rotated` は基準との比較で "better" と出る）、修正の前の基準は `results/archive/` にある。
+synthetic: **PASS 18 / WARN 6 / INVALID 1 / ERROR 1**（ERROR は `dirty_open_box_strict` で期待どおり）、
+期待と違うもの 2（`cube_rotated` の歪度、`dirty_open_box`）。local: cyclone・stirred_tank は PASS、bunny は WARN
+（歪度 > 4 が 3 面、開いた辺 3 本）。基準は `baselines/*.json`、修正の前の基準は `results/archive/` にある。
 
 cutmesh が入力を自動で直したケースは、notes 欄に `repaired: ...` と出る（ログの `REPAIR:` の行）。
 残っている課題と進め方は [PLAN.md](PLAN.md)、これまでの修正とその前後の結果は PLAN.md の「修正履歴」にある。
