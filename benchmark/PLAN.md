@@ -151,3 +151,24 @@
 **ベンチマーク**: synthetic・local とも、基準との差なし（判定・セル数とも同じ）。テスト 65 件通過。
 
 **未対応（別件）**: cutmesh 本体も、空の STL を読むと分かりにくい `struct.error` を出す。
+
+### 2026-11-14 — 入力・設定の検証
+
+**変更内容**
+- `cutmesh/geometry.py`: `read_stl` が、空・途中で切れた・頂点の行が壊れた・三角形のない・座標が NaN の STL を、
+  ファイル名（ASCII は行番号）つきの `STLError` で止めるようにした（以前は `struct.error` などの分かりにくい例外）。
+  修正で三角形が残らない場合も `STLError`。
+- `cutmesh/config.py`（新規）: meshDict の検査。必須キー・ファイルの有無・型と範囲・回転ゾーンの名前と形状の指定を
+  検査し、問題をまとめて `ConfigError` にする。知らないキー（入れ子の中も）は `WARNING: meshDict:` で近いキー名を示す。
+  `surfaceRefinement`・`patchTypes`・`nonRotatingPatches`・`addLayers.patches` の名前が STL の solid にないときも警告。
+- `cutmesh/mesher.py`: 上の検査を `generate` の最初に入れた。回転ゾーンどうしの重なりを `ConfigError` にする
+  `check_zone_overlap` を追加（2026-11-18: 同じ形の回転ゾーンも重なりとして検出するよう修正。PR #27 のレビュー指摘）。JSON として読めない meshDict は `ConfigError`。`strictInput` のエラーは `STLError`。
+  `mergeMaxNonOrtho`・`mergeWallFaces`・`featureCaps`・`surfaceRefinement`・`refinementRegions` の既定値を `DEFAULTS` にまとめた。
+  内部面のないメッシュで `run()` が落ちる問題を直した。
+- `cutmesh/__main__.py`: `-case` の値がない・不明なオプション・引数の数の誤りを終了コード 2 で知らせる。
+  設定と STL のエラーはトレースバックなしで `ERROR: ...`（終了コード 1）。
+- `tests/test_config.py`: 追加（23 件）。README に「設定と入力の検査」と、表になかった `mergeWallFaces`・`padding` を追加。
+
+**ベンチマーク**（synthetic、Rust 拡張なしで実行）: 判定は基準と同じ（PASS 18 / WARN 6 / INVALID 1 / ERROR 1、
+期待と違うもの 2 は cube_rotated・dirty_open_box のまま）。セル数が数個ずれたケースと時間の増加は Rust 拡張がないため
+（変更前のコードを Rust なしで回しても cylinder は同じ 84425 セル）。

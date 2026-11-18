@@ -88,6 +88,7 @@ python run.py                         # 断面図も欲しい場合 → slice_z.
 | `concaveSnapMax` | 凹の鋭角エッジ（固体が流体側へ突き出した角）には、固体側にある節点をこの距離（セル辺長比）までエッジ上へ寄せる。隣のセルが壊れる・面の角が潰れる所は取り消す。`featureSnapMax` 以下で無効 | 0.75 |
 | `mergeRatio` | 元hex体積比でこれ未満のカットセルを隣接セルに統合 | 0.25 |
 | `mergeMaxNonOrtho` | 統合後の非直交角の上限 [deg]。満たす相手が無ければ統合しない | 65 |
+| `mergeWallFaces` | 1つのセルの壁面が、辺を共有するほぼ同一平面の断片に分かれている所を1つの面にまとめる（下記「アルゴリズム」6） | true |
 | `hangingSnap` | 辺/面に沿って表面へ届かないぶら下がり節点の扱い（`"free"`=表面へ直接投影、`"constrained"`=動かさず φ=0 とみなす） | `"free"` |
 | `fillThinGaps` | セルの中に流体があるのに角の頂点がどれも流体にない（格子の面の間を通る薄い隙間）セルを、最大レベルを1段超えて分割する回数。0 で無効。直交格子のベースのみ | 2 |
 | `fillThinWalls` | 中に固体の薄い壁（セルを貫く線上で、表と裏の面がセル内にある）があるのに、角の頂点がどれも固体にないセルを分割する回数（1回ごとに最大レベルを1段超える）。壁が消えて両側の流体がつながる（バイパス）のを防ぐ。0 で無効。直交格子のベースのみ | 3 |
@@ -98,11 +99,12 @@ python run.py                         # 断面図も欲しい場合 → slice_z.
 | `volumeCheckTolerance` | 完成したメッシュの体積と STL の符号付き体積の差がこの割合を超えたら警告する | 0.05 |
 | `minRegionVolume` | 流体の本体とつながっていない領域（鋭角の溝の先端がセルより細くなって切り離された断片など）のうち、体積が全体のこの割合未満のものを削除する。それ以上の領域は削除せず、警告を出す | 1e-3 |
 | `refinementRegions` | 体積細分化領域 `[{"cylinder": {...}, "level": n}]` | `[]` |
-| `featureCaps` | 凸の鋭角部でカット面を特徴線に沿わせる（`"domain"`/`"both"`/`false`。`"both"` は回転ゾーンにも適用） | `"domain"` |
+| `featureCaps` | 凸の鋭角部でカット面を特徴線に沿わせる（`"domain"`/`"zone"`/`"both"`/`false`。`"zone"` は回転ゾーンだけ、`"both"` は両方） | `"domain"` |
 | `patchTypes` | パッチ名→タイプ（`wall`,`patch`,…） | 全て `wall` |
 | `rotatingZones` | 回転ゾーンのリスト（下記「回転ゾーン」）。省略時はゾーンなし | `[]` |
 | `writeMRFProperties` | 回転ゾーンがあるとき `constant/MRFProperties` の雛形を書く | true |
 | `case` | 出力先ケースディレクトリ | `.` |
+| `padding` | STL の外接箱の周りに足すベースセルの数 | 1 |
 | `addLayers` | 境界層の設定（下記「境界層」）。省略時は層なし | なし |
 | `baseMesh` | ベースメッシュ（下記「円筒ベースメッシュ」）。省略時は直交格子 | 直交格子 |
 
@@ -323,6 +325,23 @@ python -m unittest discover -s tests  # Rust と Python の結果の一致を確
 
 `python -m cutmesh.diagnose meshDict.json [CASE]` は、既存のメッシュで流体が固体の壁を越えてつながっていないか
 （`checkLeaks` と同じ検査）を調べます。
+
+## 設定と入力の検査
+
+メッシュを作り始める前に `meshDict.json` を検査します（`cutmesh/config.py`）。
+
+- **エラーで止める**（見つかった問題をまとめて1つのエラーにする）: 必須キー（`domain`, `baseCellSize`）がない、
+  ファイル（`domain`、回転ゾーンの `stl`）が見つからない、値の型・範囲が不正（負のレベル、`mergeRatio` ≥ 1、
+  `hangingSnap` が `"free"`/`"constrained"` 以外など）、回転ゾーンの名前の重複・`cylinder` と `stl` の両方/どちらもなし、
+  回転ゾーンどうしの重なり（面が接するだけなら可）、JSON として読めない。
+- **警告（`WARNING: meshDict:`）**: 知らないキー（綴りの誤りで設定が黙って無視されるのを防ぐ。近いキー名を示す。
+  `addLayers`・回転ゾーン・`baseMesh` などの中のキーも対象）、`surfaceRefinement`・`patchTypes`・
+  `nonRotatingPatches`・`addLayers.patches` にある名前が STL の solid にない。
+- `_` または `//` で始まるキーはコメントとして扱い、検査しない。
+
+STL が空・途中で切れている・頂点の行が壊れている・三角形がない・座標が NaN のときは、ファイル名（ASCII では行番号）と
+内容を示すエラーで止まります。`cutmesh` コマンドはこれらのエラーをトレースバックなしで `ERROR: ...` と表示し、
+終了コード 1 を返します（不明なオプションや引数の誤りは終了コード 2）。
 
 ## 入力 STL の修正と検査
 

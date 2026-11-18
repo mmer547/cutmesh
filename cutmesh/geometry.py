@@ -78,43 +78,65 @@ def paused_gc(fn):
 # ----------------------------------------------------------------------------
 # STL I/O
 # ----------------------------------------------------------------------------
+class STLError(ValueError):
+    """An STL file that cannot be read (empty, truncated, malformed, no triangles)."""
+
+
 def read_stl(path):
-    """Return list of (solid_name, tris[n,3,3]). Supports ASCII (multi-solid) and binary."""
+    """Return list of (solid_name, tris[n,3,3]). Supports ASCII (multi-solid) and binary.
+    Raises STLError, naming the file and what is wrong, for an empty, truncated or
+    malformed file, a file without triangles and non-finite coordinates."""
     with open(path, "rb") as f:
         data = f.read()
+    if not data.strip():
+        raise STLError(f"{path}: empty STL file")
     is_binary = True
     if data[:5].lower() == b"solid":
-        if len(data) >= 84:
-            n = struct.unpack("<I", data[80:84])[0]
-            if 84 + 50 * n == len(data):
-                is_binary = True
-            else:
-                is_binary = False
-        else:
-            is_binary = False
+        # an ASCII file starts with "solid"; so do some binary headers: the size decides
+        is_binary = len(data) >= 84 and 84 + 50 * struct.unpack("<I", data[80:84])[0] == len(data)
     if is_binary:
+        if len(data) < 84:
+            raise STLError(f"{path}: not an STL file (binary STL needs an 84-byte header,"
+                           f" the file has {len(data)} bytes)")
         n = struct.unpack("<I", data[80:84])[0]
+        if 84 + 50 * n > len(data):
+            raise STLError(f"{path}: truncated binary STL (header says {n} triangles ="
+                           f" {84 + 50 * n} bytes, the file has {len(data)})")
         rec = np.frombuffer(data[84:84 + 50 * n], dtype=np.dtype([
             ("n", "<f4", 3), ("v", "<f4", (3, 3)), ("a", "<u2")]))
         name = data[:80].split(b"\0")[0].decode(errors="ignore").replace("solid", "").strip()
-        return [(name or "walls", rec["v"].astype(float))]
-    solids = []
-    name, verts = None, []
-    for line in data.decode(errors="ignore").splitlines():
-        t = line.strip().split()
-        if not t:
-            continue
-        key = t[0].lower()
-        if key == "solid":
-            name = t[1] if len(t) > 1 else "walls"
-            verts = []
-        elif key == "vertex":
-            verts.append([float(t[1]), float(t[2]), float(t[3])])
-        elif key == "endsolid":
-            solids.append((name, np.array(verts, float).reshape(-1, 3, 3)))
-            name, verts = None, []
-    if name is not None and verts:
-        solids.append((name, np.array(verts, float).reshape(-1, 3, 3)))
+        solids = [(name or "walls", rec["v"].astype(float))]
+    else:
+        solids = []
+        name, verts, start = None, [], 0
+        for ln, line in enumerate(data.decode(errors="ignore").splitlines(), 1):
+            t = line.strip().split()
+            if not t:
+                continue
+            key = t[0].lower()
+            if key == "solid":
+                name = t[1] if len(t) > 1 else "walls"
+                verts, start = [], ln
+            elif key == "vertex":
+                try:
+                    verts.append([float(t[1]), float(t[2]), float(t[3])])
+                except (IndexError, ValueError):
+                    raise STLError(f"{path}:{ln}: bad vertex line {line.strip()!r}") from None
+            elif key == "endsolid":
+                solids.append((name or "walls", verts, start))
+                name, verts = None, []
+        if name is not None and verts:
+            solids.append((name, verts, start))
+        for nm, v, ln in solids:
+            if len(v) % 3:
+                raise STLError(f"{path}:{ln}: solid {nm!r} has {len(v)} vertices, not a multiple"
+                               f" of 3 (a facet without 3 vertices)")
+        solids = [(nm, np.array(v, float).reshape(-1, 3, 3)) for nm, v, _ in solids]
+    if not sum(len(t) for _, t in solids):
+        raise STLError(f"{path}: no triangles in the STL file")
+    for nm, t in solids:
+        if not np.isfinite(t).all():
+            raise STLError(f"{path}: solid {nm!r} has non-finite (NaN / inf) coordinates")
     return solids
 
 
@@ -349,6 +371,8 @@ class Surface:
         region = np.concatenate([np.full(len(s[1]), i) for i, s in enumerate(solids)])
         self.tris, self.region, self.repair = repair_triangles(tris, region)
         log_repair(self.repair, log, what)
+        if not len(self.tris):
+            raise STLError(f"{what}: no triangles left after removing zero-area and duplicated ones")
         self.bbmin = self.tris.reshape(-1, 3).min(0)
         self.bbmax = self.tris.reshape(-1, 3).max(0)
         self.L = float(np.linalg.norm(self.bbmax - self.bbmin))

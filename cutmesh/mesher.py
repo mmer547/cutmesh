@@ -8,11 +8,12 @@ import numpy as np
 from scipy.spatial import cKDTree
 
 from .geometry import (Surface, Cylinder, SurfaceZone, FeatureSet, read_stl,
-                       sample_segments, cylinder_features, paused_gc, _core, LevelSet, unique)
+                       sample_segments, cylinder_features, paused_gc, _core, LevelSet, unique, STLError)
 from .octree import Octree
 from .cylbase import CylindricalBase
 from .cutcell import CutContext, split_components
 from .polymesh import write_polymesh
+from .config import validate_config, check_names, ConfigError  # noqa: F401
 from . import quality
 from . import diagnose
 
@@ -36,6 +37,11 @@ DEFAULTS = {
     "fillThinWalls": 3,         # passes splitting cells with solid inside but no solid corner (Cartesian base; 0 = off)
     "thinCutCells": 2,          # passes splitting cut cells keeping < thinCutFraction fluid next to finer cells (Cartesian base; 0 = off)
     "thinCutFraction": 0.35,
+    "mergeMaxNonOrtho": 65.0,   # [deg] a merge may not make a face more non-orthogonal than this
+    "mergeWallFaces": True,     # join coplanar wall pieces of one cell into one face
+    "featureCaps": "domain",    # bend the cut along convex feature edges: "domain", "zone", "both" or false
+    "surfaceRefinement": {},
+    "refinementRegions": [],
     "patchTypes": {},
     "rotatingZones": [],
     "writeMRFProperties": True,
@@ -61,7 +67,12 @@ class Timer:
 
 def load_config(path):
     with open(path, encoding="utf-8-sig") as f:      # editors on Windows may add a BOM
-        cfg = json.load(f)
+        try:
+            cfg = json.load(f)
+        except json.JSONDecodeError as e:
+            raise ConfigError(f"{path}: not valid JSON: {e}") from None
+    if not isinstance(cfg, dict):
+        raise ConfigError(f"{path}: a meshDict is a JSON object {{...}}, got {type(cfg).__name__}")
     base = os.path.dirname(os.path.abspath(path))
     full = dict(DEFAULTS); full.update(cfg)
     full["_base"] = base
@@ -93,6 +104,40 @@ def build_zones(cfg, log=None):
                           wallProximity=z.get("wallProximity"),
                           conforming=bool(z.get("conforming", True))))
     return zones
+
+
+def check_zone_overlap(zones, spacing):
+    """ConfigError when two rotating zones overlap (one's surface passes through the
+    other's inside, one contains the other, or they coincide).  Surfaces that only
+    touch are allowed.  spacing: distance of the surface samples tested."""
+    probs = []
+    for i, a in enumerate(zones):
+        for b in zones[i + 1:]:
+            tol = 1e-6 * max(a["geom"].L, b["geom"].L)
+            for x, y in ((a, b), (b, a)):
+                p, _ = x["geom"].samples(spacing)
+                # also points inside x (a coarse grid over its box, off its surface):
+                # zones with the same surface have every surface sample on the other's
+                # surface, but share their inside
+                lo, hi = p.min(0), p.max(0)
+                g = np.linspace(0.0, 1.0, 12)[1:-1]
+                G = lo + (hi - lo) * np.stack(np.meshgrid(g, g, g, indexing="ij"), -1).reshape(-1, 3)
+                G = G[x["geom"].inside(G)]
+                if len(G):
+                    _, dx, _ = x["geom"].closest(G)
+                    G = G[dx > tol]
+                p = np.concatenate([p, G])
+                p = p[y["geom"].inside(p)]
+                if len(p):
+                    _, d, _ = y["geom"].closest(p)
+                    p = p[d > tol]
+                if len(p):
+                    q = p[0]
+                    probs.append(f"rotating zones {x['name']!r} and {y['name']!r} overlap"
+                                 f" (e.g. at ({q[0]:.6g} {q[1]:.6g} {q[2]:.6g}))")
+                    break
+    if probs:
+        raise ConfigError("meshDict: " + "; ".join(probs) + " - rotating zones must not overlap")
 
 
 def _newell(P):
@@ -904,21 +949,23 @@ def _thin_gap(dom, p, into, tg, eps, max_steps=512):
 @paused_gc
 def generate(cfg, log=print):
     T = Timer(log)
+    validate_config(cfg, log)
     dom = Surface(read_stl(_rel(cfg, cfg["domain"])), log=log, what="domain STL")
+    check_names(cfg, dom.names, log)
     rp = dom.repair
     if cfg["strictInput"] and (rp["openEdges"] or rp["nonManifoldEdges"]):
-        raise ValueError(f"strictInput: the domain STL has {rp['openEdges']} open and "
+        raise STLError(f"strictInput: the domain STL has {rp['openEdges']} open and "
                          f"{rp['nonManifoldEdges']} non-manifold edges (see the log)")
     zones = build_zones(cfg, log)
     h0 = float(cfg["baseCellSize"])
-    sref = cfg.get("surfaceRefinement", {})
+    sref = cfg["surfaceRefinement"]
     default_level = int(sref.get("default", 0))
     region_level = np.array([int(sref.get(n, default_level)) for n in dom.names])
     flevel = cfg["featureLevel"]
     if flevel is None:
         flevel = int(region_level.max())
     regions = []
-    for r in cfg.get("refinementRegions", []):
+    for r in cfg["refinementRegions"]:
         c = r["cylinder"]
         regions.append((Cylinder(c["point1"], c["point2"], c["radius"]), int(r["level"])))
     Lmax = int(max([region_level.max(), flevel] + [max(z["surfaceLevel"], z["volumeLevel"]) for z in zones]
@@ -944,6 +991,7 @@ def generate(cfg, log=print):
     for z in zones:
         if isinstance(z["geom"], SurfaceZone):
             z["geom"].s.build_search(2 * hmin)
+    check_zone_overlap(zones, 2 * hmin)
     nbuf = int(cfg["bufferLayers"])
     ssrc, vsrc = [], []
     for r, name in enumerate(dom.names):
@@ -1137,7 +1185,7 @@ def generate(cfg, log=print):
 
     # ------------------------------------------------------------ level sets + snapping
     alpha = float(cfg["snapTolerance"])
-    free_hang = cfg.get("hangingSnap", "free") == "free"
+    free_hang = cfg["hangingSnap"] == "free"
     near = dom.approx_below(pts, np.sqrt(3) * vh_max + dom._rmax + hmin)
     phi_d = dom.sdf(pts, exact_mask=near, far_value=dom.L, exact_within=alpha * h0 + 2 * hmin)
     movable = ~hanging
@@ -1491,7 +1539,7 @@ def generate(cfg, log=print):
     cut_leaves = np.nonzero(cls == 0)[0]
     positions = pts.tolist()
     ctx = CutContext(positions, phi_d.tolist(), M_nkeys := int(f_key.max()) + 1)
-    fc = cfg.get("featureCaps", "domain")
+    fc = cfg["featureCaps"]
     hk = make_feature_hook(dom_feat, csize) if fc in ("both", "domain", True) else None
     if hk:
         ctx.chord_hook = make_chord_hook(dom_feat)
@@ -1830,7 +1878,7 @@ def generate(cfg, log=print):
             c = gcache[r] = cc
         return c
 
-    max_no = float(cfg.get("mergeMaxNonOrtho", 65.0))
+    max_no = float(cfg["mergeMaxNonOrtho"])
     cos_lim = np.cos(np.radians(max_no))
 
     def merge_score(fa, r_small, r_target, hcell):
@@ -2046,7 +2094,7 @@ def generate(cfg, log=print):
     neighbour = i_nei
     nn_, vv = gather(all_occ)
     del o_verts
-    if cfg.get("mergeWallFaces", True):
+    if cfg["mergeWallFaces"]:
         nn_, vv, owner, patches, nj = merge_coplanar_wall_faces(P, nn_, vv, owner, len(neighbour), patches)
         log(f"wall faces: {nj} coplanar pieces joined to their neighbour in the same cell")
 
@@ -2094,6 +2142,11 @@ def generate(cfg, log=print):
                 cell_zone=cell_zone, leaves=leaves_total)
 
 
+def _n_cells(R):
+    nei = R["neighbour"]
+    return int(max(R["owner"].max(), nei.max() if len(nei) else 0)) + 1
+
+
 def run(config_path, case_dir=None, log=print, check=True):
     cfg = load_config(config_path)
     case_dir = case_dir or _rel(cfg, cfg.get("case", "."))
@@ -2107,7 +2160,7 @@ def run(config_path, case_dir=None, log=print, check=True):
         fz = {k: v for k, v in R["face_zones"].items() if k[:-len("_interface")] not in nc}
         R = add_layers(dict(R, face_zones=fz), cfg["addLayers"], log=log)
         if nc:
-            nC = int(max(R["owner"].max(), R["neighbour"].max())) + 1
+            nC = _n_cells(R)
             nI = len(R["neighbour"])
             fz = dict(R["face_zones"])
             for name in nc:
@@ -2125,7 +2178,7 @@ def run(config_path, case_dir=None, log=print, check=True):
     if check:
         R["quality"] = quality.check(R["points"], R["faces"], R["owner"], R["neighbour"], log=log)
         T("quality check")
-    nC = int(max(R["owner"].max(), R["neighbour"].max())) + 1
+    nC = _n_cells(R)
     log(f"total {time.time() - T.t0:.1f}s, {nC} cells")
     return R
 
