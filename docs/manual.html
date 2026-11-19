@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>マニュアル — cutmesh</title>
+<meta name="description" content="cutmesh の使い方: インストール、meshDict.json の設定、回転ゾーン、円筒ベースメッシュ、境界層、書き出し形式、入力の検査">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header"><div class="inner">
+  <a class="brand" href="index.html">cut<span>mesh</span></a>
+  <nav class="site-nav">
+    <a href="manual.html" aria-current="page">マニュアル</a>
+    <a href="examples.html">実行例</a>
+    <a href="https://github.com/mmer547/cutmesh">GitHub</a>
+  </nav>
+</div></header>
+
+<main class="page doc">
+<nav class="toc" aria-label="目次">
+  <strong>目次</strong>
+  <ol>
+    <li><a href="#install">インストール</a></li>
+    <li><a href="#usage">使い方</a></li>
+    <li><a href="#meshdict">meshDict.json</a>
+      <ol>
+        <li><a href="#md-basic">基本</a></li>
+        <li><a href="#md-refine">細分化</a></li>
+        <li><a href="#md-snap">スナップと統合</a></li>
+        <li><a href="#md-thin">薄い形状</a></li>
+        <li><a href="#md-check">検査と出力</a></li>
+      </ol>
+    </li>
+    <li><a href="#zones">回転ゾーン</a></li>
+    <li><a href="#cylbase">円筒ベースメッシュ</a></li>
+    <li><a href="#layers">境界層</a></li>
+    <li><a href="#format">書き出し形式</a></li>
+    <li><a href="#rust">高速化（Rust 拡張）</a></li>
+    <li><a href="#checks">設定と入力の検査</a></li>
+    <li><a href="#tools">診断ツール</a></li>
+    <li><a href="#limits">既知の制約</a></li>
+  </ol>
+</nav>
+
+<article class="content">
+<h1>マニュアル</h1>
+<p>cutmesh は、水密な STL の<strong>内部</strong>に八分木ベースの多面体メッシュを作り、OpenFOAM の
+<code>constant/polyMesh</code> を直接書き出すメッシャーです。八分木のセルを STL で直接切断（カットセル）して壁面を作ります。
+設定はすべて 1 つの JSON ファイル（<code>meshDict.json</code>）に書きます。</p>
+<div class="warn">
+  <p>開発中のプロトタイプです。メッシュ品質は <code>checkMesh</code> と同じ式の自前チェックで確認していますが、OpenFOAM 本体での検証は限られています。
+  使う前に手元で <code>checkMesh</code> を実行してください。</p>
+</div>
+
+<h2 id="install">インストール</h2>
+<p>必要なもの: Python 3.9 以上、numpy、scipy（断面図を描くなら matplotlib）。メッシュ生成に OpenFOAM は要りません。</p>
+<pre><code>git clone https://github.com/mmer547/cutmesh.git
+cd cutmesh
+pip install -e .                      # オフライン環境では --no-build-isolation（要 wheel）
+python tools/build_rust.py            # 任意: Rust 拡張のビルド（約 4 倍速くなる）</code></pre>
+<p>インストールしない場合は、リポジトリの直下から <code>python -m cutmesh</code> で実行するか、<code>PYTHONPATH</code> にリポジトリのディレクトリを通してください。</p>
+
+<h2 id="usage">使い方</h2>
+<pre><code>cutmesh meshDict.json [-case DIR] [-noCheck]    # python -m cutmesh でも同じ</code></pre>
+<div class="table-wrap"><table>
+  <tr><th>オプション</th><th>意味</th></tr>
+  <tr><td><code>-case DIR</code></td><td>出力先のケースディレクトリ（meshDict の <code>case</code> より優先）</td></tr>
+  <tr><td><code>-noCheck</code></td><td>生成後の品質チェックを省く（大きなメッシュで約 1 割速くなる）</td></tr>
+</table></div>
+<p>最小限の <code>meshDict.json</code>（STL の内部だけのメッシュ）:</p>
+<pre><code>{
+  "domain": "model.stl",
+  "baseCellSize": 0.01,
+  "surfaceRefinement": { "default": 2 },
+  "patchTypes": { "inlet": "patch", "outlet": "patch" },
+  "case": "case"
+}</code></pre>
+<p><code>case/constant/polyMesh</code> が書き出され、続けて品質チェックの結果がログに出ます。パス（<code>domain</code> など）は
+meshDict.json のあるディレクトリからの相対パスです。STL の solid 名がそのままパッチ名になり、<code>patchTypes</code> に書かないパッチは <code>wall</code> になります。</p>
+<p>ログの見方:</p>
+<ul>
+  <li><code>[  63.15s] leak check (1.55s, peak 3.82 GB)</code> — 各段階の終了時刻・所要時間・メモリのピーク</li>
+  <li><code>REPAIR: ...</code> — 入力 STL を自動で直した内容（<a href="#checks">設定と入力の検査</a>）</li>
+  <li><code>WARNING: ...</code> — 直さずに見つけた問題（開いた辺、リーク、体積の不一致など）</li>
+  <li>最後の <code>checkMesh-style report</code> — 非直交性・歪度・体積などの品質</li>
+</ul>
+<p>攪拌槽の例題は <code>examples/stirred_tank</code> にあります。画像つきの説明は <a href="examples.html">実行例</a> を見てください。</p>
+<pre><code>cd examples/stirred_tank
+python make_geometry.py               # サンプル STL を生成
+cutmesh meshDict.json                 # → case/constant/polyMesh, case/constant/MRFProperties
+python run.py                         # 断面図も欲しい場合 → slice_z.png, slice_y.png</code></pre>
+
+<h2 id="meshdict">meshDict.json</h2>
+<p><code>_</code> または <code>//</code> で始まるキーはコメントとして無視されます。知らないキーは警告されます（綴りの誤りで設定が黙って無視されないように）。</p>
+
+<h3 id="md-basic">基本</h3>
+<div class="table-wrap"><table>
+  <tr><th>キー</th><th>意味</th><th>既定値</th></tr>
+  <tr><td><code>domain</code></td><td>流体領域の STL（閉曲面、複数 solid 可。solid 名がパッチ名）。ASCII・バイナリどちらも可</td><td>必須</td></tr>
+  <tr><td><code>baseCellSize</code></td><td>レベル 0 のセルの辺長 [m]。レベル L のセルは <code>baseCellSize / 2^L</code></td><td>必須</td></tr>
+  <tr><td><code>case</code></td><td>出力先のケースディレクトリ</td><td><code>.</code></td></tr>
+  <tr><td><code>patchTypes</code></td><td>パッチ名 → タイプ（<code>wall</code>, <code>patch</code> など）</td><td>すべて <code>wall</code></td></tr>
+  <tr><td><code>padding</code></td><td>STL の外接箱の周りに足すベースセルの数</td><td>1</td></tr>
+  <tr><td><code>rotatingZones</code></td><td>回転ゾーンのリスト（<a href="#zones">回転ゾーン</a>）</td><td><code>[]</code></td></tr>
+  <tr><td><code>baseMesh</code></td><td>ベースメッシュ（<a href="#cylbase">円筒ベースメッシュ</a>）</td><td>直交格子</td></tr>
+  <tr><td><code>addLayers</code></td><td>境界層の設定（<a href="#layers">境界層</a>）</td><td>なし</td></tr>
+</table></div>
+
+<h3 id="md-refine">細分化</h3>
+<div class="table-wrap"><table>
+  <tr><th>キー</th><th>意味</th><th>既定値</th></tr>
+  <tr><td><code>surfaceRefinement</code></td><td>solid 名 → 細分化レベル。<code>default</code> で既定値</td><td><code>{}</code></td></tr>
+  <tr><td><code>featureLevel</code></td><td>特徴線（鋭角エッジ）の近くの細分化レベル（<code>null</code> = 表面の最大レベル）</td><td><code>null</code></td></tr>
+  <tr><td><code>featureAngle</code></td><td>特徴線を抽出する角度 [deg]</td><td>30</td></tr>
+  <tr><td><code>refinementRegions</code></td><td>体積の細分化領域 <code>[{"cylinder": {...}, "level": n}]</code></td><td><code>[]</code></td></tr>
+  <tr><td><code>bufferLayers</code></td><td>レベルの遷移ごとのバッファセルの数。1 にするとセル数が減る</td><td>2</td></tr>
+  <tr><td><code>gapRefinement</code></td><td><code>{"thickness": t, "level": L}</code>: 流体の厚みが <code>t</code> 未満の所（スロットの先端、狭い流路）の壁を <code>L</code> まで細分化</td><td>なし</td></tr>
+  <tr><td><code>autoGapRefinement</code></td><td><code>{"cellsAcross": n, "maxLevel": L}</code>（<code>true</code> で既定値）: 壁から法線方向に向かいの壁までの隙間の幅 w を測り、隙間に <code>n</code> 個のセルが入るレベル（上限 <code>L</code>）まで壁を細分化する。厚さを指定せずに、溝・スリット・狭い隙間がつぶれるのを防ぐ</td><td><code>n</code> = 3、<code>L</code> = 表面レベルの最大 + 2</td></tr>
+</table></div>
+
+<h3 id="md-snap">スナップと統合</h3>
+<div class="table-wrap"><table>
+  <tr><th>キー</th><th>意味</th><th>既定値</th></tr>
+  <tr><td><code>snapTolerance</code></td><td>節点を表面へ寄せる距離（セル辺長比）。スライバーセルを防ぐ</td><td>0.3</td></tr>
+  <tr><td><code>featureSnapTolerance</code></td><td>特徴線（STL の鋭角エッジ・円筒の縁）へ寄せる距離（セル辺長比）</td><td>0.5</td></tr>
+  <tr><td><code>featureSnapMax</code></td><td>実験的: この距離まで特徴線へ寄せ、八分木セルが壊れる所だけ取り消す。一部のカットセルが反転するため既定では無効</td><td>0.5</td></tr>
+  <tr><td><code>concaveSnapMax</code></td><td>凹の鋭角エッジでは、固体側の節点をこの距離までエッジ上へ寄せる</td><td>0.75</td></tr>
+  <tr><td><code>hangingSnap</code></td><td>表面へ届かないぶら下がり節点の扱い（<code>"free"</code>: 表面へ直接投影、<code>"constrained"</code>: 動かさない）</td><td><code>"free"</code></td></tr>
+  <tr><td><code>featureCaps</code></td><td>凸の鋭角部でカット面を特徴線に沿わせる（<code>"domain"</code> / <code>"zone"</code> / <code>"both"</code> / <code>false</code>）</td><td><code>"domain"</code></td></tr>
+  <tr><td><code>mergeRatio</code></td><td>元の六面体の体積比でこれ未満のカットセルを隣のセルに統合する</td><td>0.25</td></tr>
+  <tr><td><code>mergeMaxNonOrtho</code></td><td>統合後の非直交角の上限 [deg]</td><td>65</td></tr>
+  <tr><td><code>mergeWallFaces</code></td><td>1 つのセルの、ほぼ同一平面の壁面の断片を 1 つの面にまとめる</td><td>true</td></tr>
+</table></div>
+
+<h3 id="md-thin">薄い形状</h3>
+<div class="table-wrap"><table>
+  <tr><th>キー</th><th>意味</th><th>既定値</th></tr>
+  <tr><td><code>fillThinGaps</code></td><td>中に流体があるのに角の頂点がどれも流体にないセル（格子の面の間を通る薄い隙間）を分割する回数。0 で無効（直交格子のみ）</td><td>2</td></tr>
+  <tr><td><code>fillThinWalls</code></td><td>中に固体の薄い壁があるのに角の頂点がどれも固体にないセルを分割する回数。壁が消えて両側の流体がつながるのを防ぐ（直交格子のみ）</td><td>3</td></tr>
+  <tr><td><code>thinCutCells</code></td><td>壁で切られて流体が少ししか残らず、隣に細かいセルがあるセルを分割する回数（直交格子のみ）</td><td>2</td></tr>
+  <tr><td><code>thinCutFraction</code></td><td><code>thinCutCells</code> の対象にする流体の割合</td><td>0.35</td></tr>
+  <tr><td><code>minRegionVolume</code></td><td>流体の本体とつながっていない領域のうち、体積が全体のこの割合未満のものを削除する（それ以上は警告）</td><td>1e-3</td></tr>
+</table></div>
+
+<h3 id="md-check">検査と出力</h3>
+<div class="table-wrap"><table>
+  <tr><th>キー</th><th>意味</th><th>既定値</th></tr>
+  <tr><td><code>checkLeaks</code></td><td>流体が固体の壁を越えてつながっていないかを検査し、見つかれば場所をログに出す</td><td>true</td></tr>
+  <tr><td><code>strictInput</code></td><td>STL に開いた辺・非多様体の辺があるとき、警告ではなくエラーで止める</td><td>false</td></tr>
+  <tr><td><code>volumeCheckTolerance</code></td><td>メッシュの体積と STL の体積の差がこの割合を超えたら警告する</td><td>0.05</td></tr>
+  <tr><td><code>writeFormat</code></td><td>polyMesh の形式: <code>"binary"</code> または <code>"ascii"</code>（<a href="#format">書き出し形式</a>）</td><td><code>"binary"</code></td></tr>
+  <tr><td><code>writeMRFProperties</code></td><td>回転ゾーンがあるとき <code>constant/MRFProperties</code> の雛形を書く</td><td>true</td></tr>
+</table></div>
+
+<h2 id="zones">回転ゾーン（<code>rotatingZones</code>）</h2>
+<p>MRF やスライディングメッシュ（AMI）用の回転領域を円筒で指定します。円筒は八分木のカットで切断されるので、
+<strong>円筒面そのものがメッシュの内部面</strong>になります（生成後にセル中心でゾーンを選ぶ方式ではありません）。
+界面は粗いセルでも厳密に円筒面上にあるので、界面のために細分化する必要がありません。</p>
+<pre><code>"rotatingZones": [
+  { "name": "rotor",
+    "cylinder": { "point1": [0, 0, 0.06], "point2": [0, 0, 0.14], "radius": 0.07 },
+    "surfaceLevel": 2, "volumeLevel": 2, "omega": 31.416, "nonRotatingPatches": [] }
+]</code></pre>
+<div class="table-wrap"><table>
+  <tr><th>キー</th><th>意味</th></tr>
+  <tr><td><code>name</code></td><td>ゾーン名（cellZone 名、faceZone は <code>&lt;name&gt;_interface</code>）</td></tr>
+  <tr><td><code>cylinder</code></td><td>円筒: 軸の両端 <code>point1</code>・<code>point2</code> と半径 <code>radius</code></td></tr>
+  <tr><td><code>stl</code>, <code>origin</code>, <code>axis</code></td><td>円筒の代わりに閉じた STL で与える（<code>examples/stirred_tank/meshDict_stlRotor.json</code>）</td></tr>
+  <tr><td><code>surfaceLevel</code> / <code>volumeLevel</code></td><td>ゾーンの面 / 内部の細分化レベル</td></tr>
+  <tr><td><code>omega</code></td><td>角速度 [rad/s]（MRFProperties に書く）</td></tr>
+  <tr><td><code>nonRotatingPatches</code></td><td>ゾーン内でも回転させないパッチ</td></tr>
+  <tr><td><code>wallProximity</code></td><td><code>{"distance": d, "level": L}</code>: ゾーンの面のうち STL から <code>d</code> 以内の部分だけを <code>L</code> まで細分化する。界面を壁すれすれに置く（狭い隙間の中に置く）場合に、ゾーン面全体を細かくせずに済む</td></tr>
+  <tr><td><code>conforming</code></td><td><code>false</code> にすると界面をメッシュに沿わせず、セル中心が円筒内にあるセルを cellZone にする（MRF 用。AMI には使えない）。界面が狭い隙間の中にあって沿わせられない場合に使う</td></tr>
+</table></div>
+<p>出力: <code>cellZones</code>（回転領域）、<code>faceZones</code>（<code>&lt;name&gt;_interface</code>: 円筒界面、向きつき）、
+<code>constant/MRFProperties</code> の雛形。複数のゾーンを置けます（重ならないこと）。</p>
+<div class="note">
+  <p><strong>狭い隙間の中に界面を置く場合</strong>（ローター・ステーターなど）: 界面と両側の壁の間にそれぞれ 1 セル以上入るよう、
+  <code>wallProximity</code> の <code>level</code> を「隙間の半分 ≧ セル寸法」になるように選びます。隙間が狭いほどセル数が急に増えます
+  （<a href="examples.html#stator">実行例: ローター・ステーター</a>）。</p>
+</div>
+
+<h2 id="cylbase">円筒ベースメッシュ（<code>baseMesh</code>）</h2>
+<p>回転機械向けに、八分木の根を直交格子の代わりに軸まわりの同心ブロックにできます。</p>
+<pre><code>"baseMesh": {
+  "type": "cylindrical",
+  "origin": [0, 0, 0], "axis": [0, 0, 1],
+  "nz": 24,
+  "core": { "halfWidth": 0.0375, "n": 6 },
+  "blocks": [
+    { "rOuter": 0.06, "nr": 2 },
+    { "rOuter": 0.10, "nr": 3, "nTheta": 38 },
+    { "rOuter": 0.155, "nr": 4 }
+  ]
+}</code></pre>
+<div class="table-wrap"><table>
+  <tr><th>キー</th><th>意味</th><th>既定値</th></tr>
+  <tr><td><code>origin</code>, <code>axis</code></td><td>回転軸（原点と方向）</td><td><code>[0,0,0]</code>, <code>[0,0,1]</code></td></tr>
+  <tr><td><code>zRange</code></td><td>軸方向の範囲 <code>[z0, z1]</code>（<code>origin</code> からの距離）</td><td>STL の範囲 ± <code>baseCellSize</code></td></tr>
+  <tr><td><code>nz</code> / <code>dz</code></td><td>軸方向の分割数 / 幅（全ブロック共通）</td><td><code>dz = baseCellSize</code></td></tr>
+  <tr><td><code>core</code></td><td>中心の正方形ブロック: 半幅 <code>halfWidth</code>、一辺の分割数 <code>n</code></td><td>必須</td></tr>
+  <tr><td><code>blocks</code></td><td>外側へ並ぶ同心ブロック: 外半径 <code>rOuter</code>、半径方向の分割数 <code>nr</code>、周方向の分割数 <code>nTheta</code></td><td>必須</td></tr>
+  <tr><td><code>maxSizeRatio</code></td><td>ブロック境界をまたぐセル寸法の比の上限</td><td>2.5</td></tr>
+</table></div>
+<ul>
+  <li>最初のブロックは正方形から円へつなぐ O グリッドで、<code>nTheta</code> は <code>4 × core.n</code> に固定。2 番目以降の <code>nTheta</code> は任意（隣のブロックの整数倍でなくてよい）。</li>
+  <li>ブロックの境界では両側の面を重ね合わせて共有の面に分けるので、分割数の比が任意でも適合した多面体メッシュになる（AMI 不要）。</li>
+  <li>細分化のレベル L は目標寸法 <code>baseCellSize / 2^L</code> として扱う。各ブロックのセルが立方体に近くなるように分割数を選ぶ。</li>
+  <li>最外ブロックの <code>rOuter</code> は STL の半径より大きくする（小さいと警告。STL は切り取られる）。</li>
+</ul>
+
+<h2 id="layers">境界層（<code>addLayers</code>）</h2>
+<p>壁パッチにプリズム層を追加します。meshDict に書くと生成後に自動で追加され、既存のメッシュに後から追加することもできます
+（cutmesh 以外で作った polyMesh でも可）。</p>
+<pre><code># meshDict.json に "addLayers": {...} を書く（例: examples/stirred_tank/meshDict_layers.json）
+cutmesh examples/stirred_tank/meshDict_layers.json
+# 既存のケースに追加
+python -m cutmesh.layers CASE [layerDict.json] [-out CASE2] [-noCheck] [-ascii | -binary]</code></pre>
+<div class="table-wrap"><table>
+  <tr><th>キー</th><th>意味</th><th>既定値</th></tr>
+  <tr><td><code>patches</code></td><td>層を付けるパッチ名のリスト</td><td>type が <code>wall</code> の全パッチ</td></tr>
+  <tr><td><code>nLayers</code></td><td>層の数</td><td>3</td></tr>
+  <tr><td><code>expansionRatio</code></td><td>壁から内側への層厚の比</td><td>1.2</td></tr>
+  <tr><td><code>finalLayerThickness</code></td><td>最も内側の層の厚さ（<code>relativeSizes</code> なら局所セル寸法比）</td><td>0.3</td></tr>
+  <tr><td><code>relativeSizes</code></td><td>厚さを局所セル寸法に対する比で与える</td><td>true</td></tr>
+  <tr><td><code>minThickness</code></td><td>総厚がこれ未満の所は層を付けない</td><td>0.05</td></tr>
+  <tr><td><code>maxNonOrtho</code></td><td>非直交角 [deg] がこれを超えるセルは不正とみなし、そこで層を薄くする</td><td>65</td></tr>
+  <tr><td><code>maxSkewness</code></td><td>歪度がこれを超える面のセルは不正とみなす（<code>null</code> で無効）</td><td>4</td></tr>
+  <tr><td><code>maxGapFraction</code></td><td>総厚を、向かい合う壁までの距離のこの割合以下に抑える（0 で無効）</td><td>0.3</td></tr>
+  <tr><td><code>maxThicknessSlope</code></td><td>壁に沿った総厚の変化の上限（層の端を徐々に細らせる）</td><td>0.5</td></tr>
+</table></div>
+<p>このほか <code>minNormalCos</code>, <code>wallNonOrthMargin</code>, <code>cornerStretch</code>, <code>mergeWallPoints</code>,
+<code>concaveSlide</code>, <code>nRings</code>, <code>nSmooth</code>, <code>nIter</code>, <code>nCollapseIter</code> があります（README の「境界層」）。
+<code>"addLayers": {}</code> は既定値で層を追加します。狭い隙間がある形状では <code>finalLayerThickness</code> を 0.15 程度にすると、
+目標の厚さに達する節点が大きく増えます。ログに、目標の厚さに達した壁節点・薄くなった節点・層なしの節点の割合が出ます。</p>
+
+<h2 id="format">書き出し形式（<code>writeFormat</code>）</h2>
+<p>polyMesh は既定でバイナリ（OpenFOAM の <code>writeFormat binary</code> と同じ形式）で書き出します。
+大きなファイル（<code>points</code>・<code>faces</code>・<code>owner</code>・<code>neighbour</code>）がバイナリになり、
+<code>boundary</code>・<code>cellZones</code>・<code>faceZones</code> は ASCII のままです。中身を目で確かめたいときや、
+ASCII しか読めないツールに渡すときは <code>"writeFormat": "ascii"</code> にします。</p>
+<div class="table-wrap"><table>
+  <tr><th>約 69 万セル</th><th class="num">ASCII</th><th class="num">バイナリ</th></tr>
+  <tr><td>書き出し</td><td class="num">4.3〜4.5 秒</td><td class="num">0.14〜0.19 秒</td></tr>
+  <tr><td>ファイルの大きさ</td><td class="num">122 MB</td><td class="num">80 MB</td></tr>
+  <tr><td>読み込み（cutmesh）</td><td class="num">3.1 秒</td><td class="num">0.18 秒</td></tr>
+</table></div>
+<ul>
+  <li>ヘッダーは <code>format binary;</code>、<code>arch "LSB;label=32;scalar=64";</code>。<code>faces</code> は <code>faceCompactList</code>。</li>
+  <li>ラベルが 32 ビットに収まらないメッシュは <code>label=64</code> で書く（64 ビットラベルでビルドした OpenFOAM が必要）。</li>
+  <li><code>python -m cutmesh.layers</code> は入力と同じ形式で書く（<code>-ascii</code> / <code>-binary</code> で指定もできる）。</li>
+</ul>
+<div class="warn">
+  <p>バイナリの形式は OpenFOAM のソースに合わせて書いていますが、OpenFOAM 本体で読めることはまだ確認していません。読めない場合は
+  <code>"writeFormat": "ascii"</code> にするか、OpenFOAM の <code>foamFormatConvert</code> で変換してください。</p>
+</div>
+
+<h2 id="rust">高速化（Rust 拡張）</h2>
+<p>最近点・内外判定・符号付き距離、カット、面とセルの重心と体積、境界層の平滑化などを Rust（BVH + rayon による並列化）で計算します。
+Rust ツールチェーン（cargo）があれば次でビルドされ、<code>cutmesh/_core</code> が置かれます。無ければ Python/NumPy の処理で動きます（結果は同じ）。</p>
+<pre><code>python tools/build_rust.py                          # cargo build --release + パッケージへコピー
+CUTMESH_NO_RUST=1 python -m cutmesh meshDict.json   # Python の処理を強制（比較用）</code></pre>
+<div class="table-wrap"><table>
+  <tr><th>例題</th><th class="num">Python</th><th class="num">Rust 拡張あり</th></tr>
+  <tr><td>examples/stirred_tank</td><td class="num">26 秒</td><td class="num">7 秒</td></tr>
+  <tr><td>別の実形状（55 万セル）</td><td class="num">162 秒</td><td class="num">41 秒</td></tr>
+  <tr><td>同、境界層の追加（3 層）</td><td class="num">51 秒</td><td class="num">27 秒</td></tr>
+</table></div>
+
+<h2 id="checks">設定と入力の検査</h2>
+<p>メッシュを作り始める前に <code>meshDict.json</code> を検査します。</p>
+<ul>
+  <li><strong>エラーで止める</strong>（見つかった問題をまとめて 1 つのエラーにする）: 必須キーがない、ファイルが見つからない、値の型・範囲が不正、
+  回転ゾーンの名前の重複・<code>cylinder</code> と <code>stl</code> の両方/どちらもなし、回転ゾーンどうしの重なり、JSON として読めない。</li>
+  <li><strong>警告</strong>（<code>WARNING: meshDict:</code>）: 知らないキー（近いキー名を示す）、<code>surfaceRefinement</code> などにある名前が STL の solid にない。</li>
+  <li><code>cutmesh</code> コマンドはこれらのエラーをトレースバックなしで <code>ERROR: ...</code> と表示し、終了コード 1 を返します（引数の誤りは 2）。</li>
+</ul>
+<p><strong>入力 STL の自動修正</strong>: cutmesh が入力を直したときは、必ずログに <code>REPAIR:</code> で始まる行を出します。黙って直すことはしません。</p>
+<div class="table-wrap"><table>
+  <tr><th>修正</th><th>理由</th></tr>
+  <tr><td>面積 0 の三角形を除く</td><td>法線が決まらず、特徴線や交点の計算を乱す</td></tr>
+  <tr><td>重複した三角形は 1 枚だけ残す</td><td>内外判定（光線の交差回数の偶奇）で交差が 2 回数えられ、内外が反転する</td></tr>
+  <tr><td>重なった逆向きの三角形の対（厚さ 0 の膜）は 2 枚とも除く</td><td>同上</td></tr>
+</table></div>
+<pre><code>REPAIR: domain STL: removed 20 zero-area triangles, 50 duplicated triangles (one copy kept) (1350 -> 1280 triangles)</code></pre>
+<p>直さずに <code>WARNING:</code> を出すもの: 開いた辺、非多様体の辺、向きの食い違う辺。問題がなければ
+<code>domain STL check: closed, consistently oriented, N triangles</code> と出ます。メッシュの完成後には、メッシュの体積を STL の体積と比べます
+（<code>volume check: mesh ..., STL ... (+x%)</code>）。</p>
+
+<h2 id="tools">診断ツール</h2>
+<div class="table-wrap"><table>
+  <tr><th>コマンド</th><th>内容</th></tr>
+  <tr><td><code>python -m cutmesh.diagnose meshDict.json [CASE]</code></td><td>既存のメッシュで、流体が固体の壁を越えてつながっていないかを調べる（<code>checkLeaks</code> と同じ検査）</td></tr>
+  <tr><td><code>python tools/edge_check.py meshDict.json [-case DIR]</code></td><td>STL の特徴線と円筒ゾーンの縁に沿って、最寄りのメッシュの辺までの距離を最小セル寸法比で表示する（捉えられていれば 0）</td></tr>
+  <tr><td><code>python benchmark/render_mesh.py CASE</code></td><td>メッシュの画像（壁面の 3D 図と、内部の断面図）を描く。品質の悪いセルは赤</td></tr>
+  <tr><td><code>python benchmark/run_bench.py SUITE</code></td><td>多数の STL をまとめて通し、失敗・警告・品質の低下と時間を一覧にする（<code>benchmark/README.md</code>）</td></tr>
+</table></div>
+
+<h2 id="limits">既知の制約</h2>
+<ul>
+  <li>STL は水密（閉じた・向きの揃った）である必要がある。開いた辺・自己交差は直さない（開いた辺は警告、自己交差は体積チェックの警告で分かることが多い）。</li>
+  <li>セルより薄い形状（薄翼・バッフル板）は、その厚さ程度まで細分化が必要。</li>
+  <li>壁と別の壁が交わる入隅、円筒の縁、格子に沿わない凸の鋭角エッジは、セル寸法程度で面取りされることがある。</li>
+  <li>歪度 &gt; 4 の境界面が少数残ることがある（checkMesh では 1 項目の失敗になる可能性がある）。</li>
+  <li>メモリは 100 万セルあたり約 5 GB 使う。狭い隙間の中に回転ゾーンの界面を置くと、セル数とメモリが急に増える。</li>
+  <li>幾何の問い合わせ以外（カット、セル統合、組み立て）の多くは Python のままで、時間の大半を占める。</li>
+</ul>
+</article>
+</main>
+
+<footer class="site-footer"><div class="inner">
+  cutmesh は OpenFOAM の一部ではなく、OpenFOAM 用のメッシュ（<code>constant/polyMesh</code>）を書き出す独立したツールです。
+  This offering is not approved or endorsed by OpenCFD Limited, producer and distributor of the OpenFOAM software via www.openfoam.com,
+  and owner of the OPENFOAM® and OpenCFD® trade marks.
+</div></footer>
+</body>
+</html>

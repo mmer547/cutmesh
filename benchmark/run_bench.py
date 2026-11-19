@@ -18,6 +18,12 @@ Suite file (paths relative to the suite file):
      "cases": [{"name": "sphere", "stl": "../data/synthetic/sphere.stl", "expect": "pass"},
                {"name": "cube_aligned", "stl": "...", "meshDict": {"baseCellSize": 0.0625}}]}
 
+A case may list "probes": [{"name", "from": [x, y, z], "to": [x, y, z], "minCells": n,
+"zone": name, "minZoneCells": n, "maxZoneCells": n}]: line segments (across a narrow gap)
+whose cells are counted (cell with the nearest centre at 400 points); fewer cells than
+minCells, or zone cells outside the limits, make the case WARN (a closed gap does not show
+in the volume or the leak check).
+
 cellsAcross sets baseCellSize = (longest bounding-box side) / cellsAcross unless the case's
 meshDict gives baseCellSize.  A case whose STL is missing is skipped (optional third-party data).
 
@@ -38,6 +44,7 @@ import csv
 import fnmatch
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -55,6 +62,35 @@ INVALID_WARNINGS = ("faces shared by more than two cells", "boundary faces far f
 
 
 # ------------------------------------------------------------------ worker (one case)
+def probe_cells(R, probes, n=400):
+    """Cells along line segments (e.g. across a narrow gap): each of n points on the segment
+    goes to the cell with the nearest centre (mean of its face centres), so a gap that
+    closed shows up as too few cells.  Returns [{name, cells, zoneCells}]."""
+    import numpy as np
+    from scipy.spatial import cKDTree
+    P = R["points"]; sizes, flat = R["faces"]; own, nei = R["owner"], R["neighbour"]
+    ptr = np.concatenate([[0], np.cumsum(sizes)])
+    fc = np.add.reduceat(P[flat], ptr[:-1]) / np.asarray(sizes)[:, None]
+    nC = int(max(own.max(), nei.max() if len(nei) else 0)) + 1
+    cc = np.zeros((nC, 3)); cnt = np.zeros(nC)
+    np.add.at(cc, own, fc); np.add.at(cnt, own, 1)
+    np.add.at(cc, nei, fc[:len(nei)]); np.add.at(cnt, nei, 1)
+    tree = cKDTree(cc / cnt[:, None])
+    out = []
+    for pr in probes:
+        a, b = np.asarray(pr["from"], float), np.asarray(pr["to"], float)
+        t = (np.arange(n) + 0.5) / n
+        _, c = tree.query(a + t[:, None] * (b - a))
+        cells = np.unique(c)
+        r = {"name": pr["name"], "cells": int(len(cells))}
+        z = pr.get("zone")
+        if z is not None and z in (R.get("cell_zones") or {}):
+            r["zoneCells"] = int(np.isin(cells, R["cell_zones"][z]).sum())
+        out.append(r)
+    return out
+
+
+
 def _peak_memory_mb():
     try:
         import resource
@@ -100,6 +136,8 @@ def worker(job_path):
         q = {k: v for k, v in R.get("quality", {}).items() if not k.startswith("_")}
         res["quality"] = q
         res["steps"] = {name: round(dt, 3) for name, dt in R["timer"].steps}
+        if job.get("probes"):
+            res["probes"] = probe_cells(R, job["probes"])
         if job.get("images", True):
             try:                          # pictures must never turn a good case into an ERROR
                 from render_mesh import render
@@ -142,6 +180,9 @@ def load_suite(path):
         c.setdefault("cellsAcross", d.get("cellsAcross", 24))
         md = json.loads(json.dumps(d.get("meshDict", {})))
         md.update(c.get("meshDict", {}))
+        for z in md.get("rotatingZones", []):     # zone STLs: relative to the suite file
+            if isinstance(z, dict) and isinstance(z.get("stl"), str):
+                z["stl"] = os.path.normpath(os.path.join(base, z["stl"]))
         c["meshDict"] = md
         c.setdefault("expect", d.get("expect"))
         c.setdefault("timeout", d.get("timeout"))
@@ -175,6 +216,15 @@ def classify(res, stl, vol_tol, strict=False):
         flags.append(f"{q['nSkew4']} faces skewness > 4")
     if q.get("nBadTetDecomp", 0) and strict:      # stricter than checkMesh: only with --strict
         flags.append(f"{q['nBadTetDecomp']} negative face-triangle tets")
+    for pr, spec in zip(res.get("probes", []), res.get("_probeSpecs", [])):
+        if pr["cells"] < spec.get("minCells", 1):
+            flags.append(f"probe {pr['name']}: {pr['cells']} cells < {spec.get('minCells', 1)}")
+        if "minZoneCells" in spec and pr.get("zoneCells", 0) < spec["minZoneCells"]:
+            flags.append(f"probe {pr['name']}: {pr.get('zoneCells', 0)} cells in zone {spec.get('zone')}"
+                         f" < {spec['minZoneCells']}")
+        if "maxZoneCells" in spec and pr.get("zoneCells", 0) > spec["maxZoneCells"]:
+            flags.append(f"probe {pr['name']}: {pr.get('zoneCells', 0)} cells in zone {spec.get('zone')}"
+                         f" > {spec['maxZoneCells']}")
     ve = res.get("volErr")
     if ve is not None and abs(ve) > vol_tol:
         flags.append(f"volume {ve:+.2%} vs STL")
@@ -226,7 +276,7 @@ def run_case(c, outdir, args, overrides):
     md["case"] = "case"
     with open(os.path.join(wd, "meshDict.json"), "w", encoding="utf-8") as f:
         json.dump(md, f, indent=1)
-    job = {"name": c["name"], "workdir": wd, "images": not args.no_images}
+    job = {"name": c["name"], "workdir": wd, "images": not args.no_images, "probes": c.get("probes")}
     jp = os.path.join(wd, "job.json")
     with open(jp, "w", encoding="utf-8") as f:
         json.dump(job, f)
@@ -251,7 +301,9 @@ def run_case(c, outdir, args, overrides):
     q = res.get("quality") or {}
     if q and inp.get("oriented") and inp.get("signedVolume"):
         res["volErr"] = q["totalVol"] / abs(inp["signedVolume"]) - 1.0
+    res["_probeSpecs"] = c.get("probes") or []
     status, notes = classify(res, inp, args.vol_tol, args.strict)
+    res.pop("_probeSpecs")
     notes = notes + [r.replace("REPAIR: ", "repaired: ") for r in res.get("repairs", [])]
     res["status"], res["notes"] = status, notes
     res["verdict"] = verdict(c.get("expect"), status)
@@ -267,8 +319,8 @@ def input_summary(inp):
     return summary(inp)
 
 
-CSV_COLS = ["name", "status", "verdict", "expect", "time", "cells", "maxNonOrth", "maxSkewness",
-            "nBadTetDecomp", "volErr", "peakMemMB", "input", "notes"]
+CSV_COLS = ["name", "status", "verdict", "expect", "time", "cells", "maxNonOrth", "nNonOrth70",
+            "maxSkewness", "nSkew4", "nBadTetDecomp", "volErr", "peakMemMB", "input", "notes"]
 
 
 def row(r):
@@ -279,6 +331,7 @@ def row(r):
         "cells": q.get("nCells", ""),
         "maxNonOrth": round(q["maxNonOrth"], 1) if "maxNonOrth" in q else "",
         "maxSkewness": round(q["maxSkewness"], 2) if "maxSkewness" in q else "",
+        "nNonOrth70": q.get("nNonOrth70", ""), "nSkew4": q.get("nSkew4", ""),
         "nBadTetDecomp": q.get("nBadTetDecomp", ""),
         "volErr": f"{r['volErr']:+.3%}" if r.get("volErr") is not None else "",
         "peakMemMB": round(r["peakMemMB"]) if r.get("peakMemMB") else "",
@@ -287,8 +340,32 @@ def row(r):
     }
 
 
+# quality counts compared with the baseline: more of these is a regression (WORSE) when the
+# count grows by more than COUNT_TOL and by at least COUNT_MIN faces / cells
+COUNTS = {"nSkew4": "faces skewness > 4", "nNonOrth70": "faces non-orth > 70",
+          "nNegVol": "non-positive volumes", "nBadPyramids": "bad pyramids"}
+COUNT_TOL, COUNT_MIN = 0.10, 5
+# time: slower than SLOW_LONG (cases over LONG_CASE s) or SLOW_SHORT (cases over 2 s)
+LONG_CASE, SLOW_LONG, SLOW_SHORT = 30.0, 1.05, 1.3
+STEP_MIN, STEP_SLOW = 1.0, 1.2          # steps of at least STEP_MIN s, slower by STEP_SLOW
+
+
+def step_name(name):
+    """Timer step without its counts: "octree (147272 leaves)" -> "octree"."""
+    return re.sub(r"\s*\([^()]*\)", "", name).strip()
+
+
+def steps_by_name(r):
+    out = {}
+    for k, v in (r.get("steps") or {}).items():
+        n = step_name(k)
+        out[n] = out.get(n, 0.0) + v
+    return out
+
+
 def compare(results, baseline):
-    """Lines describing cases that got worse (or better) than the baseline."""
+    """Lines describing cases that got worse (or better) than the baseline.
+    Lines starting with WORSE are regressions (exit code 1); the others are information."""
     old = {r["name"]: r for r in baseline.get("results", [])}
     out = []
     for r in results:
@@ -303,9 +380,48 @@ def compare(results, baseline):
         qa, qb = o.get("quality") or {}, r.get("quality") or {}
         if qa.get("nCells") and qb.get("nCells") and qa["nCells"] != qb["nCells"]:
             out.append(f"cells  {r['name']}: {qa['nCells']} -> {qb['nCells']}")
-        if o.get("time") and r.get("time") and o["time"] > 2 and r["time"] > 1.3 * o["time"]:
-            out.append(f"slower {r['name']}: {o['time']:.1f}s -> {r['time']:.1f}s")
+        for k, what in COUNTS.items():
+            if k not in qa or k not in qb or qa[k] == qb[k]:
+                continue
+            x, y = int(qa[k]), int(qb[k])
+            if y > x and y - x >= COUNT_MIN and y > x * (1 + COUNT_TOL):
+                out.append(f"WORSE  {r['name']}: {what} {x} -> {y}")
+            else:
+                out.append(f"{'more' if y > x else 'fewer'}   {r['name']}: {what} {x} -> {y}")
+        if qa.get("minVol") and qb.get("minVol") and qb["minVol"] < 0.1 * qa["minVol"]:
+            out.append(f"minVol {r['name']}: {qa['minVol']:.3g} -> {qb['minVol']:.3g}")
+        to, tn = o.get("time"), r.get("time")
+        if to and tn and to > 2:
+            lim = SLOW_LONG if to > LONG_CASE else SLOW_SHORT
+            if tn > lim * to:
+                out.append(f"slower {r['name']}: {to:.1f}s -> {tn:.1f}s ({tn / to - 1:+.0%})")
+            elif tn < to / lim:
+                out.append(f"faster {r['name']}: {to:.1f}s -> {tn:.1f}s ({tn / to - 1:+.0%})")
+        sa, sb = steps_by_name(o), steps_by_name(r)
+        for k, tb in sb.items():
+            ta = sa.get(k)
+            if ta is not None and max(ta, tb) >= STEP_MIN and tb > STEP_SLOW * ta:
+                out.append(f"slower {r['name']} / {k}: {ta:.1f}s -> {tb:.1f}s")
     return out
+
+
+def steps_table(results):
+    """Markdown table: seconds per step (counts dropped from the names) for each case."""
+    cols = []
+    for r in results:
+        for k in steps_by_name(r):
+            if k not in cols:
+                cols.append(k)
+    if not cols:
+        return []
+    md = ["## time per step [s]", "",
+          "| case | " + " | ".join(cols) + " | total |", "|---" * (len(cols) + 2) + "|"]
+    for r in results:
+        st = steps_by_name(r)
+        if st:
+            md.append(f"| {r['name']} | " + " | ".join(f"{st[k]:.2f}" if k in st else "" for k in cols)
+                      + f" | {r.get('time', '')} |")
+    return md + [""]
 
 
 def write_reports(outdir, suite, results, args, cmp_lines):
@@ -326,12 +442,15 @@ def write_reports(outdir, suite, results, args, cmp_lines):
           f"  |  unexpected {len(unexpected)}", ""]
     if cmp_lines:
         md += ["## vs baseline", ""] + [f"- {s}" for s in cmp_lines] + [""]
-    md += ["| case | status | verdict | cells | time [s] | max non-orth | max skew | vol err | input | notes |",
-           "|---|---|---|---|---|---|---|---|---|---|"]
+    md += ["| case | status | verdict | cells | time [s] | max non-orth | non-orth > 70 | max skew | skew > 4 "
+           "| vol err | input | notes |",
+           "|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for x in rows:
         md.append(f"| {x['name']} | {x['status']} | {x['verdict']} | {x['cells']} | {x['time']} | "
-                  f"{x['maxNonOrth']} | {x['maxSkewness']} | {x['volErr']} | {x['input']} | "
+                  f"{x['maxNonOrth']} | {x['nNonOrth70']} | {x['maxSkewness']} | {x['nSkew4']} | "
+                  f"{x['volErr']} | {x['input']} | "
                   f"{x['notes'].replace('|', '/')} |")
+    md += [""] + steps_table(results)
     with open(os.path.join(outdir, "summary.md"), "w", encoding="utf-8") as f:
         f.write("\n".join(md) + "\n")
     return payload, counts, unexpected

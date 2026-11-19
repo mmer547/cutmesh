@@ -7,6 +7,7 @@
 python benchmark/make_synthetic.py                              # 人工形状の STL を生成（ダウンロード不要）
 python benchmark/run_bench.py benchmark/suites/synthetic.json -j 4
 python benchmark/run_bench.py benchmark/suites/local.json       # 手元の実形状（無いファイルはスキップ）
+python benchmark/run_bench.py benchmark/suites/large.json -j 1  # 約 100 万セル・回転ゾーン（速さの確認。1 ケースずつ）
 python benchmark/stl_check.py some.stl                          # 入力 STL の診断だけ
 ```
 
@@ -51,6 +52,22 @@ run_bench.py SUITE --baseline benchmark/baselines/synthetic.json   # 基準と�
 run_bench.py SUITE --save-baseline                      # 基準を更新
 ```
 
+### 基準との比較（`--baseline`）
+
+`WORSE` で始まる行が悪化で、1 つでもあれば終了コード 1 になります。それ以外の行は参考情報です。
+
+| 行 | 条件 |
+|---|---|
+| `WORSE ... PASS -> WARN` など | 判定が悪くなった |
+| `WORSE ... faces skewness > 4 100 -> 586` | 歪度 > 4・非直交 > 70° の面、体積が 0 以下のセル、bad pyramid の数が、10% を超え、かつ 5 以上増えた（それ未満の増減は `more` / `fewer`） |
+| `cells` | セル数が変わった |
+| `minVol` | 最小セル体積が 1/10 未満になった |
+| `slower` / `faster` | 時間が、30 秒を超えるケースでは 5%、2 秒を超えるケースでは 30% を超えて変わった |
+| `slower <case> / <step>` | 1 秒以上かかる段階が 20% を超えて遅くなった（段階名の括弧内の件数は除いて突き合わせる） |
+
+時間は他のケースと並列に走らせると 10〜30% ぶれるので、時間を比べるときは `-j 1` にします。
+`summary.md` の末尾に、段階ごとの時間の表が出ます。
+
 `baseCellSize` を指定しないケースは「外接箱の最長辺 / `cellsAcross`」（既定 24）で決めます。
 Thingi10K などは単位や大きさがばらばらなので、この方法で揃えます。
 
@@ -66,6 +83,24 @@ Thingi10K などは単位や大きさがばらばらなので、この方法で�
 | 薄い形状 | `thin_channels`（幅 0.02 の流路）, `thin_walls`（厚さ 0.004 の固体の壁 < 最小セル）, `tapered_slot`（先端の幅が 0 になる溝）, `solid_spike` |
 | 三角形の質 | `sliver_cylinder`（縦横比 約300 の細長い三角形） |
 | 汚れた入力 | `dirty_flipped`, `dirty_mixed_orient`, `dirty_duplicates`, `dirty_edge_touch`, `dirty_open_box`, `dirty_overlap` |
+
+## 大きなケースのスイート（`suites/large.json`）
+
+速さ優先の方針（[PLAN.md](PLAN.md)）で、変更の良し悪しを実際の使い方に近い大きさで確かめるためのスイートです。
+`examples/stirred_tank` の攪拌槽（4 枚パドル翼＋シャフト）を使い、データのダウンロードは要りません。
+
+| ケース | 内容 |
+|---|---|
+| `tank_rotor_1m` | 円筒の回転ゾーン、約 100 万セル |
+| `tank_stl_rotor` | STL で与えた回転ゾーン |
+| `tank_layers` | 全壁に境界層 3 層 |
+| `tank_cylindrical` | 円筒ベースメッシュ |
+| `tank_stator_1mm` | ローター・ステーター: 翼の外側 1 mm に固定リング、回転ゾーンの界面は隙間の中央（実際に計算したい問題に近い形） |
+| `tank_stator_0p5mm` | 同、隙間 0.5 mm（約 200 万セル。15 GB のメモリでは足りず、今は ERROR になる。メモリ削減の目標） |
+
+ステーターの 2 ケースには `probes` を付けています。翼の先端の正面で隙間を横切る線分を内側半分と外側半分に分け、
+内側半分にセルがあって回転ゾーンに入っていること、外側半分にセルがあってゾーンに入っていないことを確かめます
+（隙間がつぶれても体積の差はわずかで、リーク検査にも出ないため）。足りなければ WARN になります。
 
 ## 現在の結果（2026-11-13、入力 STL の自動修正を入れた後）
 

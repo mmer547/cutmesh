@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>実行例 — cutmesh</title>
+<meta name="description" content="cutmesh で作ったメッシュの例: 攪拌槽（回転ゾーン、円筒ベースメッシュ、境界層）、ローター・ステーターの狭い隙間、形状のテスト集">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header"><div class="inner">
+  <a class="brand" href="index.html">cut<span>mesh</span></a>
+  <nav class="site-nav">
+    <a href="manual.html">マニュアル</a>
+    <a href="examples.html" aria-current="page">実行例</a>
+    <a href="https://github.com/mmer547/cutmesh">GitHub</a>
+  </nav>
+</div></header>
+
+<main class="page doc">
+<nav class="toc" aria-label="目次">
+  <strong>目次</strong>
+  <ol>
+    <li><a href="#tank">攪拌槽</a>
+      <ol>
+        <li><a href="#tank-zone">回転ゾーン</a></li>
+        <li><a href="#tank-cyl">円筒ベースメッシュ</a></li>
+        <li><a href="#tank-layers">境界層</a></li>
+      </ol>
+    </li>
+    <li><a href="#stator">ローター・ステーター</a></li>
+    <li><a href="#shapes">形状のテスト集</a></li>
+    <li><a href="#reproduce">画像の作り方</a></li>
+  </ol>
+</nav>
+
+<article class="content">
+<h1>実行例</h1>
+<p>どの図も、黒い線が STL の壁、赤い線が回転ゾーンの界面（faceZone）、灰色の線がセルの面です。
+セル数と時間は、Rust 拡張ありで 4 コアのマシンで測った値です（品質チェックを含む）。図をクリックすると原寸で開きます。</p>
+
+<h2 id="tank">攪拌槽（<code>examples/stirred_tank</code>）</h2>
+<p>直径 300 mm・高さ 300 mm の平底の槽に、直径 100 mm の 4 枚パドル翼（厚さ 6 mm）と、蓋まで伸びるシャフトを置いた形状です。
+STL は <code>python make_geometry.py</code> で作ります（solid: <code>tankWall</code>, <code>bottom</code>, <code>top</code>, <code>impeller</code>, <code>shaft</code>）。</p>
+
+<section class="example" id="tank-zone">
+<h3>回転ゾーン（<code>meshDict.json</code>）</h3>
+<ul class="stats"><li><span data-stat="tank.cells">102,433</span> セル</li><li><span data-stat="tank.seconds">13.2</span> 秒</li><li>直交格子 + 円筒の回転ゾーン</li></ul>
+<p>翼のまわりに半径 70 mm の円筒の回転ゾーンを置いた例です。円筒は八分木のカットで切断されるので、界面（赤）は粗いセルの所でも円筒面にぴったり乗ります。
+翼（レベル 3）・シャフト（レベル 2）・回転ゾーンの内部（レベル 2）だけを細かくし、槽の壁はレベル 1 です。</p>
+<figure>
+  <a class="img" href="images/tank_cut.png"><img src="images/tank_cut.png" alt="攪拌槽のメッシュ。手前半分のセルを取り除いた 3D 図と、x・y・z の断面" loading="lazy"></a>
+  <figcaption>x &lt; 0 のセルだけを残した 3D 図（切り口はベージュ）と、中央の 3 断面</figcaption>
+</figure>
+<figure>
+  <a class="img" href="images/tank_slices.png"><img src="images/tank_slices.png" alt="翼の中央の高さの水平断面と、翼を通る鉛直断面" loading="lazy"></a>
+  <figcaption>翼の中央の高さ（z = 0.10）の水平断面と、翼を通る鉛直断面（y = 0）</figcaption>
+</figure>
+<figure>
+  <a class="img" href="images/tank_overview.png"><img src="images/tank_overview.png" alt="壁面のメッシュを 2 方向から見た図。パッチごとに色分け" loading="lazy"></a>
+  <figcaption>壁面のメッシュ（パッチごとに色分け）</figcaption>
+</figure>
+<details>
+  <summary>meshDict.json</summary>
+<pre><code>{
+  "domain": "tank.stl",
+  "baseCellSize": 0.0125,
+  "surfaceRefinement": { "default": 1, "impeller": 3, "shaft": 2 },
+  "featureLevel": 2,
+  "bufferLayers": 2,
+  "snapTolerance": 0.3,
+  "mergeRatio": 0.25,
+  "rotatingZones": [
+    {
+      "name": "rotor",
+      "cylinder": { "point1": [0, 0, 0.06], "point2": [0, 0, 0.14], "radius": 0.07 },
+      "surfaceLevel": 2,
+      "volumeLevel": 2,
+      "omega": 31.416
+    }
+  ],
+  "patchTypes": { "top": "wall" },
+  "case": "case"
+}</code></pre>
+</details>
+</section>
+
+<section class="example" id="tank-cyl">
+<h3>円筒ベースメッシュ（<code>meshDict_cylindrical.json</code>）</h3>
+<ul class="stats"><li><span data-stat="cylindrical.cells">136,620</span> セル</li><li><span data-stat="cylindrical.seconds">22</span> 秒</li><li>同心ブロックのベースメッシュ</li></ul>
+<p>八分木の根を、軸まわりの同心ブロック（中心の正方形 + 3 つのリング）にした例です。セルが周方向に並ぶので、回転ゾーンの界面や槽の壁に沿ったメッシュになります。
+ブロックの境界では分割数の比が整数でなくても、面を重ね合わせて適合したメッシュにします。</p>
+<figure>
+  <a class="img" href="images/cylindrical_slices.png"><img src="images/cylindrical_slices.png" alt="円筒ベースメッシュの水平断面と、その中央の拡大" loading="lazy"></a>
+  <figcaption>翼の中央の高さの水平断面と、回転ゾーンのまわりの拡大</figcaption>
+</figure>
+<details>
+  <summary>baseMesh の設定</summary>
+<pre><code>"baseMesh": {
+  "type": "cylindrical",
+  "origin": [0, 0, 0],
+  "axis": [0, 0, 1],
+  "nz": 24,
+  "core": { "halfWidth": 0.0375, "n": 6 },
+  "blocks": [
+    { "rOuter": 0.06, "nr": 2 },
+    { "rOuter": 0.10, "nr": 3 },
+    { "rOuter": 0.155, "nr": 4 }
+  ]
+}</code></pre>
+</details>
+</section>
+
+<section class="example" id="tank-layers">
+<h3>境界層（<code>meshDict_layers.json</code>）</h3>
+<ul class="stats"><li><span data-stat="layers.cells">163,633</span> セル</li><li><span data-stat="layers.seconds">14.9</span> 秒</li><li>全壁に 3 層</li></ul>
+<p>回転ゾーンの例に、すべての壁パッチへ 3 層のプリズム層を加えた例です。回転ゾーンの界面にかかる所では、層の側面も界面の円筒面に乗ったままです。</p>
+<figure>
+  <a class="img" href="images/layers_slices.png"><img src="images/layers_slices.png" alt="境界層つきの鉛直断面と、槽の底と側壁の角の拡大" loading="lazy"></a>
+  <figcaption>鉛直断面（y = 0）と、槽の底と側壁の角の拡大</figcaption>
+</figure>
+<details>
+  <summary>addLayers の設定</summary>
+<pre><code>"addLayers": { "nLayers": 3, "expansionRatio": 1.2, "finalLayerThickness": 0.3 }</code></pre>
+</details>
+</section>
+
+<h2 id="stator">ローター・ステーター（狭い隙間の中の界面）</h2>
+<ul class="stats"><li><span data-stat="stator_1mm.cells">596,156</span> セル</li><li><span data-stat="stator_1mm.seconds">119</span> 秒</li><li>隙間 1 mm</li></ul>
+<p>攪拌槽の翼のすぐ外側に、固定リング（ステーター）を置いた形状です。リングの内面は翼の先端の角から 1 mm 外にあり、
+回転ゾーンの界面はその隙間の中央（翼から 0.5 mm）に置きます。界面と両側の壁の間にそれぞれセルが入るように、
+<code>wallProximity</code> で壁に近い部分の界面だけを細かくし、<code>autoGapRefinement</code> で隙間に面した壁を細かくします。</p>
+<p>STL は <code>python make_geometry.py --stator 1</code> で作ります。リングの内面は solid <code>statorInner</code>、それ以外は <code>stator</code> です。</p>
+<figure>
+  <a class="img" href="images/stator_gap.png"><img src="images/stator_gap.png" alt="翼と固定リングの水平断面、翼の先端の 2 mm 角の拡大、翼の上端の角の鉛直断面" loading="lazy"></a>
+  <figcaption>左: 翼の中央の高さの水平断面。中: 翼の先端の拡大（幅 2 mm）。右: 翼の先端の上端の角（鉛直断面）。界面（赤）の内側は回転ゾーン、外側は静止側</figcaption>
+</figure>
+<div class="note">
+  <p><strong>隙間が狭いほどセル数が急に増えます。</strong>界面と壁の間（隙間の半分）に 1 セル以上入れるため、隙間の半分程度のセルが界面の全周に並びます。
+  この形状では、隙間 1 mm で約 60 万セル、隙間 0.5 mm で約 200 万セル（15 GB のメモリでは足りない）になります。
+  MRF で計算するなら、<code>"conforming": false</code>（セル中心で回転ゾーンを選ぶ）にすれば界面のための細分化が要りません（AMI には使えません）。</p>
+</div>
+<details>
+  <summary>meshDict（隙間 1 mm）</summary>
+<pre><code>{
+  "domain": "tank_stator_1mm.stl",
+  "baseCellSize": 0.0125,
+  "surfaceRefinement": { "default": 1, "impeller": 3, "shaft": 2, "stator": 3, "statorInner": 3 },
+  "featureLevel": 2,
+  "bufferLayers": 2,
+  "snapTolerance": 0.3,
+  "mergeRatio": 0.25,
+  "autoGapRefinement": { "cellsAcross": 2, "maxLevel": 5 },
+  "rotatingZones": [
+    {
+      "name": "rotor",
+      "cylinder": { "point1": [0, 0, 0.074], "point2": [0, 0, 0.126], "radius": 0.05059 },
+      "surfaceLevel": 3,
+      "volumeLevel": 2,
+      "wallProximity": { "distance": 0.001, "level": 5 },
+      "omega": 31.416
+    }
+  ],
+  "patchTypes": { "top": "wall" },
+  "case": "case_stator"
+}</code></pre>
+<p>隙間 0.5 mm の設定は <code>examples/stirred_tank/meshDict_stator.json</code> にあります（<code>maxLevel</code>・<code>level</code> を 6 にする）。</p>
+</details>
+
+<h2 id="shapes">形状のテスト集（<code>benchmark/</code>）</h2>
+<p>ベンチマークの人工形状（<code>python benchmark/make_synthetic.py</code> で生成）から 5 つです。どれも外接箱の最長辺の 1/24 をベースセルにし、
+表面をレベル 2 まで細かくしています。各図は、手前半分のセルを取り除いた 3D 図と、中央の 3 断面です。</p>
+<div class="grid two">
+  <figure>
+    <a class="img" href="images/shape_sphere.png"><img src="images/shape_sphere.png" alt="球の内部のメッシュ" loading="lazy"></a>
+    <figcaption><strong>sphere</strong> — 滑らかな凸の曲面（<span data-stat="sphere.cells">75,612</span> セル、<span data-stat="sphere.seconds">13.3</span> 秒）</figcaption>
+  </figure>
+  <figure>
+    <a class="img" href="images/shape_cube_rotated.png"><img src="images/shape_cube_rotated.png" alt="格子に対して傾いた立方体の内部のメッシュ" loading="lazy"></a>
+    <figcaption><strong>cube_rotated</strong> — 格子に沿わない鋭いエッジ。エッジに沿って小さなギザギザが残る（既知の制約）（<span data-stat="cube_rotated.cells">53,536</span> セル、<span data-stat="cube_rotated.seconds">10.7</span> 秒）</figcaption>
+  </figure>
+  <figure>
+    <a class="img" href="images/shape_torus.png"><img src="images/shape_torus.png" alt="トーラスの内部のメッシュ" loading="lazy"></a>
+    <figcaption><strong>torus</strong> — 流体を貫く穴（<span data-stat="torus.cells">39,008</span> セル、<span data-stat="torus.seconds">7.3</span> 秒）</figcaption>
+  </figure>
+  <figure>
+    <a class="img" href="images/shape_thin_channels.png"><img src="images/shape_thin_channels.png" alt="幅の狭い流路のメッシュ" loading="lazy"></a>
+    <figcaption><strong>thin_channels</strong> — セル 2 個分の幅の流路（<span data-stat="thin_channels.cells">46,244</span> セル、<span data-stat="thin_channels.seconds">8.9</span> 秒）</figcaption>
+  </figure>
+  <figure>
+    <a class="img" href="images/shape_l_bracket.png"><img src="images/shape_l_bracket.png" alt="L 字形のメッシュ" loading="lazy"></a>
+    <figcaption><strong>l_bracket</strong> — 凹のエッジ（<span data-stat="l_bracket.cells">71,439</span> セル、<span data-stat="l_bracket.seconds">8.5</span> 秒）</figcaption>
+  </figure>
+</div>
+<p>このほかにも、薄い壁・汚れた STL（重複した三角形、開いた辺、向きの混在）など 26 の形状で、失敗・警告・品質の低下を一覧にできます
+（<a href="https://github.com/mmer547/cutmesh/tree/main/benchmark">benchmark/README.md</a>）。</p>
+
+<h2 id="reproduce">画像の作り方</h2>
+<p>このページの画像は、次のスクリプトで作り直せます（Rust 拡張ありで約 5 分）。</p>
+<pre><code>python tools/make_docs_images.py                 # すべて → docs/images/
+python tools/make_docs_images.py --only stator   # 一部だけ（tank, cylindrical, layers, stator, shapes）</code></pre>
+<p>手元のメッシュの画像は <code>python benchmark/render_mesh.py CASE</code>（3D 図と断面図）、または
+<code>examples/stirred_tank/run.py</code> の <code>cutmesh.viz.plot_slice</code>（断面図）で描けます。</p>
+</article>
+</main>
+
+<footer class="site-footer"><div class="inner">
+  cutmesh は OpenFOAM の一部ではなく、OpenFOAM 用のメッシュ（<code>constant/polyMesh</code>）を書き出す独立したツールです。
+  This offering is not approved or endorsed by OpenCFD Limited, producer and distributor of the OpenFOAM software via www.openfoam.com,
+  and owner of the OPENFOAM® and OpenCFD® trade marks.
+</div></footer>
+</body>
+</html>

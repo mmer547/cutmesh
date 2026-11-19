@@ -3,6 +3,11 @@ paddle impeller and a shaft running up to the lid.
 
 Solids (-> OpenFOAM patches): tankWall, bottom, top, impeller, shaft
 Units: metres.  Tank D=0.30, H=0.30, impeller D=0.10 at z=0.08..0.12.
+
+python make_geometry.py               -> tank.stl, rotor.stl
+python make_geometry.py --stator 0.5  -> tank_stator_0.5mm.stl: the same tank with a fixed ring
+    (solids statorInner = the face towards the impeller, stator = the rest) around the
+    impeller, leaving a gap of 0.5 mm to the outermost blade corners (rotor-stator mixer)
 """
 import sys
 import os
@@ -17,6 +22,9 @@ HALF_W = 0.003            # blade half thickness (6 mm blades)
 Z0, Z1 = 0.08, 0.12       # impeller bottom / top
 NBLADE = 4
 NARC = 16                 # points per hub arc between blades
+R_TIP = float(np.hypot(R_BLADE, HALF_W))   # outermost blade corner (50.09 mm)
+STATOR_T = 0.006          # stator ring: radial thickness
+STATOR_DZ = 0.003         # stator ring: reaches this far above / below the impeller
 
 
 def impeller_polygon():
@@ -90,6 +98,21 @@ def build():
             ("impeller", impeller), ("shaft", shaft)]
 
 
+def stator_ring(gap, n=360):
+    """Fixed ring around the impeller: inner radius R_TIP + gap (the polygon's edges lie
+    inside that circle by R(1 - cos(pi/n)) = 1.9 um at n=360, small next to the gap).
+    The ring is a hole in the fluid: normals point into the ring."""
+    ri, ro = R_TIP + gap, R_TIP + gap + STATOR_T
+    z0, z1 = Z0 - STATOR_DZ, Z1 + STATOR_DZ
+    ang = np.linspace(0, 2 * np.pi, n, endpoint=False)
+    i0, i1, o0, o1 = ring(ri, ang, z0), ring(ri, ang, z1), ring(ro, ang, z0), ring(ro, ang, z1)
+    inner = strip(i0, i1)                  # +r: away from the fluid inside the ring
+    outer = strip(o0, o1, flip=True)       # -r: into the ring
+    bot = strip(i0, o0, flip=True)         # +z: into the ring
+    top = strip(i1, o1)                    # -z: into the ring
+    return [("statorInner", inner), ("stator", np.concatenate([outer, bot, top]))]
+
+
 def rotor_cylinder(r=0.07, z0=0.06, z1=0.14, n=96):
     """Closed cylinder STL for the rotating zone (alternative to the analytic cylinder)."""
     ang = np.linspace(0, 2 * np.pi, n, endpoint=False)
@@ -102,6 +125,14 @@ def rotor_cylinder(r=0.07, z0=0.06, z1=0.14, n=96):
 
 if __name__ == "__main__":
     here = os.path.dirname(os.path.abspath(__file__))
+    if "--stator" in sys.argv:
+        gap_mm = float(sys.argv[sys.argv.index("--stator") + 1])
+        solids = build() + stator_ring(gap_mm * 1e-3)
+        name = f"tank_stator_{gap_mm:g}mm.stl"
+        write_stl_ascii(os.path.join(here, name), solids)
+        print(f"wrote {name}: stator ring {(R_TIP + gap_mm * 1e-3) * 1e3:.3f} mm inside radius,"
+              f" blade corners at {R_TIP * 1e3:.3f} mm")
+        sys.exit(0)
     solids = build()
     write_stl_ascii(os.path.join(here, "tank.stl"), solids)
     write_stl_ascii(os.path.join(here, "rotor.stl"), rotor_cylinder())

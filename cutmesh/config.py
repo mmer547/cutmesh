@@ -165,6 +165,8 @@ def validate_config(cfg, log=None, layer_keys=None):
         c.bool_(cfg[k], k)
     if cfg["hangingSnap"] not in ("free", "constrained"):
         c.err(f"hangingSnap must be \"free\" or \"constrained\", got {cfg['hangingSnap']!r}")
+    if cfg["writeFormat"] not in ("binary", "ascii"):
+        c.err(f"writeFormat must be \"binary\" or \"ascii\", got {cfg['writeFormat']!r}")
     if cfg["featureCaps"] not in ("domain", "zone", "both", True, False, None):
         c.err(f"featureCaps must be \"domain\", \"zone\", \"both\" or false, got {cfg['featureCaps']!r}")
 

@@ -1,0 +1,38 @@
+{
+ "tank": {
+  "cells": 102433,
+  "seconds": 13.2
+ },
+ "cylindrical": {
+  "cells": 136620,
+  "seconds": 22.0
+ },
+ "layers": {
+  "cells": 163633,
+  "seconds": 14.9
+ },
+ "stator_1mm": {
+  "cells": 596156,
+  "seconds": 119.2
+ },
+ "sphere": {
+  "cells": 75612,
+  "seconds": 13.3
+ },
+ "cube_rotated": {
+  "cells": 53536,
+  "seconds": 10.7
+ },
+ "torus": {
+  "cells": 39008,
+  "seconds": 7.3
+ },
+ "thin_channels": {
+  "cells": 46244,
+  "seconds": 8.9
+ },
+ "l_bracket": {
+  "cells": 71439,
+  "seconds": 8.5
+ }
+}

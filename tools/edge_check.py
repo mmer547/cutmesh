@@ -53,7 +53,7 @@ def main(argv):
     if case:
         from cutmesh.polymesh import write_polymesh
         write_polymesh(case, R["points"], R["faces"], R["owner"], R["neighbour"], R["patches"],
-                       R["cell_zones"], R["face_zones"])
+                       R["cell_zones"], R["face_zones"], fmt=cfg["writeFormat"])
     P = R["points"]; nn, vv = R["faces"]
     nI = len(R["neighbour"])
     nF = len(nn)

@@ -1,0 +1,598 @@
+{
+ "suite": "large",
+ "date": "2026-11-19 04:01:28",
+ "python": "3.13.18",
+ "args": {
+  "worker": null,
+  "jobs": 1,
+  "only": null,
+  "timeout": 900,
+  "vol_tol": 0.01,
+  "set": [],
+  "cells_across": null,
+  "keep": false,
+  "no_images": false,
+  "strict": false,
+  "save_baseline": false
+ },
+ "results": [
+  {
+   "name": "tank_rotor_1m",
+   "stl": "examples/stirred_tank/tank.stl",
+   "expect": "valid",
+   "input": {
+    "triangles": 960,
+    "vertices": 482,
+    "edges": 1440,
+    "euler": 2,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "inconsistentEdges": 0,
+    "degenerateTris": 0,
+    "duplicateTris": 0,
+    "components": 1,
+    "signedVolume": 0.021078660525238543,
+    "bbox": [
+     [
+      -0.1497307268,
+      -0.1497307268,
+      0.0
+     ],
+     [
+      0.1497307268,
+      0.1497307268,
+      0.3
+     ]
+    ],
+    "diag": 0.5189935687312993,
+    "closed": true,
+    "oriented": true,
+    "clean": true,
+    "solids": [
+     "tankWall",
+     "bottom",
+     "top",
+     "impeller",
+     "shaft"
+    ]
+   },
+   "quality": {
+    "nPoints": 1061788,
+    "nCells": 931432,
+    "nFaces": 2939739,
+    "nInternalFaces": 2831629,
+    "upperTriangular": true,
+    "maxClosedness": 1.3976231708084495e-16,
+    "openCellEdges": 0,
+    "duplicateCellEdges": 0,
+    "minVol": 7.356027903555538e-11,
+    "maxVol": 1.4887700000000303e-07,
+    "totalVol": 0.021077697494614234,
+    "nNegVol": 0,
+    "maxNonOrth": 63.12590759818972,
+    "avgNonOrth": 2.5053052887838927,
+    "nNonOrth70": 0,
+    "maxSkewness": 4.303042286143808,
+    "nSkew4": 7,
+    "nBadPyramids": 0,
+    "nBadTetDecomp": 364,
+    "minFaceArea": 7.78427718788699e-10
+   },
+   "steps": {
+    "geometry / search structures": 15.332,
+    "octree (1171477 leaves)": 17.276,
+    "polyhedral cells (1315571 points)": 12.982,
+    "level sets and vertex snapping": 15.285,
+    "domain cut": 16.527,
+    "zone cut 'rotor'": 1.23,
+    "assembly and small-cell merging": 10.087,
+    "patches, zones, renumbering": 1.308,
+    "leak check": 2.177,
+    "write polyMesh": 0.454,
+    "quality check": 10.62
+   },
+   "images": [
+    "overview.png",
+    "cut.png"
+   ],
+   "renderTime": 5.05,
+   "time": 104.656,
+   "peakMemMB": 5407.70703125,
+   "warnings": [],
+   "repairs": [],
+   "boundaryDistCells": 0.35,
+   "baseCellSize": 0.0053,
+   "volErr": -4.5687467813970706e-05,
+   "status": "WARN",
+   "notes": [
+    "7 faces skewness > 4"
+   ],
+   "verdict": "ok"
+  },
+  {
+   "name": "tank_stl_rotor",
+   "stl": "examples/stirred_tank/tank.stl",
+   "expect": "valid",
+   "input": {
+    "triangles": 960,
+    "vertices": 482,
+    "edges": 1440,
+    "euler": 2,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "inconsistentEdges": 0,
+    "degenerateTris": 0,
+    "duplicateTris": 0,
+    "components": 1,
+    "signedVolume": 0.021078660525238543,
+    "bbox": [
+     [
+      -0.1497307268,
+      -0.1497307268,
+      0.0
+     ],
+     [
+      0.1497307268,
+      0.1497307268,
+      0.3
+     ]
+    ],
+    "diag": 0.5189935687312993,
+    "closed": true,
+    "oriented": true,
+    "clean": true,
+    "solids": [
+     "tankWall",
+     "bottom",
+     "top",
+     "impeller",
+     "shaft"
+    ]
+   },
+   "quality": {
+    "nPoints": 638794,
+    "nCells": 554060,
+    "nFaces": 1753467,
+    "nInternalFaces": 1680879,
+    "upperTriangular": true,
+    "maxClosedness": 1.3187322289809607e-16,
+    "openCellEdges": 0,
+    "duplicateCellEdges": 0,
+    "minVol": 1.1746239153497735e-10,
+    "maxVol": 2.746250000000025e-07,
+    "totalVol": 0.021076732813454912,
+    "nNegVol": 0,
+    "maxNonOrth": 64.93787314857548,
+    "avgNonOrth": 2.767348628881935,
+    "nNonOrth70": 0,
+    "maxSkewness": 3.3219574376802714,
+    "nSkew4": 0,
+    "nBadPyramids": 0,
+    "nBadTetDecomp": 265,
+    "minFaceArea": 1.1985792751799333e-09
+   },
+   "steps": {
+    "geometry / search structures": 11.06,
+    "octree (707406 leaves)": 11.187,
+    "polyhedral cells (804721 points)": 7.641,
+    "level sets and vertex snapping": 9.882,
+    "domain cut": 9.407,
+    "zone cut 'rotor'": 0.633,
+    "assembly and small-cell merging": 4.995,
+    "patches, zones, renumbering": 0.752,
+    "leak check": 1.18,
+    "write polyMesh": 0.208,
+    "quality check": 5.897
+   },
+   "images": [
+    "overview.png",
+    "cut.png"
+   ],
+   "renderTime": 3.23,
+   "time": 63.397,
+   "peakMemMB": 3544.3203125,
+   "warnings": [],
+   "repairs": [],
+   "boundaryDistCells": 0.32,
+   "baseCellSize": 0.0065,
+   "volErr": -9.145323922854498e-05,
+   "status": "PASS",
+   "notes": [],
+   "verdict": "ok"
+  },
+  {
+   "name": "tank_layers",
+   "stl": "examples/stirred_tank/tank.stl",
+   "expect": "valid",
+   "input": {
+    "triangles": 960,
+    "vertices": 482,
+    "edges": 1440,
+    "euler": 2,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "inconsistentEdges": 0,
+    "degenerateTris": 0,
+    "duplicateTris": 0,
+    "components": 1,
+    "signedVolume": 0.021078660525238543,
+    "bbox": [
+     [
+      -0.1497307268,
+      -0.1497307268,
+      0.0
+     ],
+     [
+      0.1497307268,
+      0.1497307268,
+      0.3
+     ]
+    ],
+    "diag": 0.5189935687312993,
+    "closed": true,
+    "oriented": true,
+    "clean": true,
+    "solids": [
+     "tankWall",
+     "bottom",
+     "top",
+     "impeller",
+     "shaft"
+    ]
+   },
+   "quality": {
+    "nPoints": 515273,
+    "nCells": 454538,
+    "nFaces": 1428237,
+    "nInternalFaces": 1380237,
+    "upperTriangular": true,
+    "maxClosedness": 2.2651693172690753e-16,
+    "openCellEdges": 0,
+    "duplicateCellEdges": 0,
+    "minVol": 9.514034356285087e-12,
+    "maxVol": 5.120000000000024e-07,
+    "totalVol": 0.02107676681077897,
+    "nNegVol": 0,
+    "maxNonOrth": 63.542995711811066,
+    "avgNonOrth": 4.217363067852304,
+    "nNonOrth70": 0,
+    "maxSkewness": 3.3784166572341965,
+    "nSkew4": 0,
+    "nBadPyramids": 0,
+    "nBadTetDecomp": 128,
+    "minFaceArea": 7.639283162836414e-09
+   },
+   "steps": {
+    "geometry / search structures": 8.131,
+    "octree (412285 leaves)": 6.492,
+    "polyhedral cells (482839 points)": 4.227,
+    "level sets and vertex snapping": 5.398,
+    "domain cut": 4.436,
+    "zone cut 'rotor'": 0.355,
+    "assembly and small-cell merging": 2.696,
+    "patches, zones, renumbering": 0.452,
+    "leak check": 0.664,
+    "boundary layers": 6.949,
+    "write polyMesh": 0.084,
+    "quality check": 4.566
+   },
+   "images": [
+    "overview.png",
+    "cut.png"
+   ],
+   "renderTime": 2.97,
+   "time": 45.015,
+   "peakMemMB": 2901.03125,
+   "warnings": [],
+   "repairs": [],
+   "boundaryDistCells": 0.35,
+   "baseCellSize": 0.008,
+   "volErr": -8.984036045867061e-05,
+   "status": "PASS",
+   "notes": [],
+   "verdict": "ok"
+  },
+  {
+   "name": "tank_cylindrical",
+   "stl": "examples/stirred_tank/tank.stl",
+   "expect": "valid",
+   "input": {
+    "triangles": 960,
+    "vertices": 482,
+    "edges": 1440,
+    "euler": 2,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "inconsistentEdges": 0,
+    "degenerateTris": 0,
+    "duplicateTris": 0,
+    "components": 1,
+    "signedVolume": 0.021078660525238543,
+    "bbox": [
+     [
+      -0.1497307268,
+      -0.1497307268,
+      0.0
+     ],
+     [
+      0.1497307268,
+      0.1497307268,
+      0.3
+     ]
+    ],
+    "diag": 0.5189935687312993,
+    "closed": true,
+    "oriented": true,
+    "clean": true,
+    "solids": [
+     "tankWall",
+     "bottom",
+     "top",
+     "impeller",
+     "shaft"
+    ]
+   },
+   "quality": {
+    "nPoints": 747741,
+    "nCells": 644141,
+    "nFaces": 2036840,
+    "nInternalFaces": 1966160,
+    "upperTriangular": true,
+    "maxClosedness": 1.3023510060110239e-16,
+    "openCellEdges": 0,
+    "duplicateCellEdges": 0,
+    "minVol": 1.3420905321437188e-10,
+    "maxVol": 3.5403430231035657e-07,
+    "totalVol": 0.02107659200648817,
+    "nNegVol": 0,
+    "maxNonOrth": 61.129261638602706,
+    "avgNonOrth": 3.425236345537617,
+    "nNonOrth70": 0,
+    "maxSkewness": 3.7724572518000916,
+    "nSkew4": 0,
+    "nBadPyramids": 0,
+    "nBadTetDecomp": 112,
+    "minFaceArea": 1.329449921251276e-08
+   },
+   "steps": {
+    "geometry / search structures": 9.208,
+    "octree (767473 leaves)": 49.75,
+    "polyhedral cells (874013 points)": 19.477,
+    "level sets and vertex snapping": 10.212,
+    "domain cut": 6.36,
+    "zone cut 'rotor'": 0.54,
+    "assembly and small-cell merging": 3.346,
+    "patches, zones, renumbering": 0.521,
+    "leak check": 1.414,
+    "write polyMesh": 0.198,
+    "quality check": 7.042
+   },
+   "images": [
+    "overview.png",
+    "cut.png"
+   ],
+   "renderTime": 3.42,
+   "time": 108.555,
+   "peakMemMB": 3822.234375,
+   "warnings": [],
+   "repairs": [],
+   "boundaryDistCells": 0.16,
+   "baseCellSize": 0.0065,
+   "volErr": -9.813331107533241e-05,
+   "status": "PASS",
+   "notes": [],
+   "verdict": "ok"
+  },
+  {
+   "name": "tank_stator_1mm",
+   "stl": "examples/stirred_tank/tank_stator_1mm.stl",
+   "expect": "valid",
+   "input": {
+    "triangles": 3840,
+    "vertices": 1922,
+    "edges": 5760,
+    "euler": 2,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "inconsistentEdges": 0,
+    "degenerateTris": 0,
+    "duplicateTris": 0,
+    "components": 2,
+    "signedVolume": 0.02098486475946455,
+    "bbox": [
+     [
+      -0.1497307268,
+      -0.1497307268,
+      0.0
+     ],
+     [
+      0.1497307268,
+      0.1497307268,
+      0.3
+     ]
+    ],
+    "diag": 0.5189935687312993,
+    "closed": true,
+    "oriented": true,
+    "clean": true,
+    "solids": [
+     "tankWall",
+     "bottom",
+     "top",
+     "impeller",
+     "shaft",
+     "statorInner",
+     "stator"
+    ]
+   },
+   "quality": {
+    "nPoints": 738383,
+    "nCells": 596156,
+    "nFaces": 1969158,
+    "nInternalFaces": 1839194,
+    "upperTriangular": true,
+    "maxClosedness": 1.609947968928357e-16,
+    "openCellEdges": 0,
+    "duplicateCellEdges": 0,
+    "minVol": 7.067010066204416e-12,
+    "maxVol": 1.9531250000000115e-06,
+    "totalVol": 0.02097783411928717,
+    "nNegVol": 0,
+    "maxNonOrth": 64.28384883971913,
+    "avgNonOrth": 6.714679429198846,
+    "nNonOrth70": 0,
+    "maxSkewness": 4.96956763898356,
+    "nSkew4": 8,
+    "nBadPyramids": 0,
+    "nBadTetDecomp": 356,
+    "minFaceArea": 1.8287958848547213e-10
+   },
+   "steps": {
+    "geometry / search structures": 22.359,
+    "octree (764357 leaves)": 29.064,
+    "polyhedral cells (936995 points)": 10.109,
+    "level sets and vertex snapping": 15.0,
+    "domain cut": 16.219,
+    "zone cut 'rotor'": 2.297,
+    "assembly and small-cell merging": 17.937,
+    "patches, zones, renumbering": 1.205,
+    "leak check": 2.395,
+    "write polyMesh": 0.578,
+    "quality check": 6.433
+   },
+   "probes": [
+    {
+     "name": "in_0deg_z0.083",
+     "cells": 2,
+     "zoneCells": 2
+    },
+    {
+     "name": "out_0deg_z0.083",
+     "cells": 1,
+     "zoneCells": 0
+    },
+    {
+     "name": "in_0deg_z0.1",
+     "cells": 2,
+     "zoneCells": 2
+    },
+    {
+     "name": "out_0deg_z0.1",
+     "cells": 1,
+     "zoneCells": 0
+    },
+    {
+     "name": "in_0deg_z0.117",
+     "cells": 2,
+     "zoneCells": 2
+    },
+    {
+     "name": "out_0deg_z0.117",
+     "cells": 1,
+     "zoneCells": 0
+    },
+    {
+     "name": "in_90deg_z0.1",
+     "cells": 3,
+     "zoneCells": 3
+    },
+    {
+     "name": "out_90deg_z0.1",
+     "cells": 1,
+     "zoneCells": 0
+    },
+    {
+     "name": "in_180deg_z0.1",
+     "cells": 3,
+     "zoneCells": 3
+    },
+    {
+     "name": "out_180deg_z0.1",
+     "cells": 2,
+     "zoneCells": 0
+    },
+    {
+     "name": "in_270deg_z0.1",
+     "cells": 3,
+     "zoneCells": 3
+    },
+    {
+     "name": "out_270deg_z0.1",
+     "cells": 2,
+     "zoneCells": 0
+    }
+   ],
+   "images": [
+    "overview.png",
+    "cut.png"
+   ],
+   "renderTime": 3.82,
+   "time": 127.217,
+   "peakMemMB": 4869.125,
+   "warnings": [],
+   "repairs": [],
+   "boundaryDistCells": 1.44,
+   "baseCellSize": 0.0125,
+   "volErr": -0.0003350338569233502,
+   "status": "WARN",
+   "notes": [
+    "8 faces skewness > 4"
+   ],
+   "verdict": "ok"
+  },
+  {
+   "name": "tank_stator_0p5mm",
+   "stl": "examples/stirred_tank/tank_stator_0.5mm.stl",
+   "expect": "valid",
+   "input": {
+    "triangles": 3840,
+    "vertices": 1922,
+    "edges": 5760,
+    "euler": 2,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "inconsistentEdges": 0,
+    "degenerateTris": 0,
+    "duplicateTris": 0,
+    "components": 2,
+    "signedVolume": 0.020985731795005926,
+    "bbox": [
+     [
+      -0.1497307268,
+      -0.1497307268,
+      0.0
+     ],
+     [
+      0.1497307268,
+      0.1497307268,
+      0.3
+     ]
+    ],
+    "diag": 0.5189935687312993,
+    "closed": true,
+    "oriented": true,
+    "clean": true,
+    "solids": [
+     "tankWall",
+     "bottom",
+     "top",
+     "impeller",
+     "shaft",
+     "statorInner",
+     "stator"
+    ]
+   },
+   "error": "MemoryError: Unable to allocate 393. MiB for an array with shape (51567166,) and data type int64",
+   "time": 412.013,
+   "peakMemMB": 12397.3828125,
+   "warnings": [],
+   "repairs": [],
+   "baseCellSize": 0.0125,
+   "status": "ERROR",
+   "notes": [
+    "MemoryError: Unable to allocate 393. MiB for an array with shape (51567166,) and data type int64"
+   ],
+   "verdict": "UNEXPECTED"
+  }
+ ]
+}
