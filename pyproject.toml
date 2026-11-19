@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "cutmesh"
 version = "0.1.0"
-description = "Octree cut-cell mesher for OpenFOAM: polyhedral meshes inside watertight STL surfaces"
+description = "Octree cut-cell mesher for OpenFOAM: polyhedral meshes inside watertight STLs, with rotating zones cut into the mesh (cellZone + interface faceZone), cylindrical base meshes and boundary layers. Python, optional Rust extension (prototype)."
 requires-python = ">=3.9"
 dependencies = ["numpy", "scipy"]
 
