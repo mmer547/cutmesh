@@ -382,6 +382,217 @@
    "status": "PASS",
    "notes": [],
    "verdict": "ok"
+  },
+  {
+   "name": "tank_stator_1mm",
+   "stl": "examples/stirred_tank/tank_stator_1mm.stl",
+   "expect": "valid",
+   "input": {
+    "triangles": 3840,
+    "vertices": 1922,
+    "edges": 5760,
+    "euler": 2,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "inconsistentEdges": 0,
+    "degenerateTris": 0,
+    "duplicateTris": 0,
+    "components": 2,
+    "signedVolume": 0.02098486475946455,
+    "bbox": [
+     [
+      -0.1497307268,
+      -0.1497307268,
+      0.0
+     ],
+     [
+      0.1497307268,
+      0.1497307268,
+      0.3
+     ]
+    ],
+    "diag": 0.5189935687312993,
+    "closed": true,
+    "oriented": true,
+    "clean": true,
+    "solids": [
+     "tankWall",
+     "bottom",
+     "top",
+     "impeller",
+     "shaft",
+     "statorInner",
+     "stator"
+    ]
+   },
+   "quality": {
+    "nPoints": 738383,
+    "nCells": 596156,
+    "nFaces": 1969158,
+    "nInternalFaces": 1839194,
+    "upperTriangular": true,
+    "maxClosedness": 1.609947968928357e-16,
+    "openCellEdges": 0,
+    "duplicateCellEdges": 0,
+    "minVol": 7.067010066204416e-12,
+    "maxVol": 1.9531250000000115e-06,
+    "totalVol": 0.02097783411928717,
+    "nNegVol": 0,
+    "maxNonOrth": 64.28384883971913,
+    "avgNonOrth": 6.714679429198846,
+    "nNonOrth70": 0,
+    "maxSkewness": 4.96956763898356,
+    "nSkew4": 8,
+    "nBadPyramids": 0,
+    "nBadTetDecomp": 356,
+    "minFaceArea": 1.8287958848547213e-10
+   },
+   "steps": {
+    "geometry / search structures": 22.359,
+    "octree (764357 leaves)": 29.064,
+    "polyhedral cells (936995 points)": 10.109,
+    "level sets and vertex snapping": 15.0,
+    "domain cut": 16.219,
+    "zone cut 'rotor'": 2.297,
+    "assembly and small-cell merging": 17.937,
+    "patches, zones, renumbering": 1.205,
+    "leak check": 2.395,
+    "write polyMesh": 0.578,
+    "quality check": 6.433
+   },
+   "probes": [
+    {
+     "name": "in_0deg_z0.083",
+     "cells": 2,
+     "zoneCells": 2
+    },
+    {
+     "name": "out_0deg_z0.083",
+     "cells": 1,
+     "zoneCells": 0
+    },
+    {
+     "name": "in_0deg_z0.1",
+     "cells": 2,
+     "zoneCells": 2
+    },
+    {
+     "name": "out_0deg_z0.1",
+     "cells": 1,
+     "zoneCells": 0
+    },
+    {
+     "name": "in_0deg_z0.117",
+     "cells": 2,
+     "zoneCells": 2
+    },
+    {
+     "name": "out_0deg_z0.117",
+     "cells": 1,
+     "zoneCells": 0
+    },
+    {
+     "name": "in_90deg_z0.1",
+     "cells": 3,
+     "zoneCells": 3
+    },
+    {
+     "name": "out_90deg_z0.1",
+     "cells": 1,
+     "zoneCells": 0
+    },
+    {
+     "name": "in_180deg_z0.1",
+     "cells": 3,
+     "zoneCells": 3
+    },
+    {
+     "name": "out_180deg_z0.1",
+     "cells": 2,
+     "zoneCells": 0
+    },
+    {
+     "name": "in_270deg_z0.1",
+     "cells": 3,
+     "zoneCells": 3
+    },
+    {
+     "name": "out_270deg_z0.1",
+     "cells": 2,
+     "zoneCells": 0
+    }
+   ],
+   "images": [
+    "overview.png",
+    "cut.png"
+   ],
+   "renderTime": 3.82,
+   "time": 127.217,
+   "peakMemMB": 4869.125,
+   "warnings": [],
+   "repairs": [],
+   "boundaryDistCells": 1.44,
+   "baseCellSize": 0.0125,
+   "volErr": -0.0003350338569233502,
+   "status": "WARN",
+   "notes": [
+    "8 faces skewness > 4"
+   ],
+   "verdict": "ok"
+  },
+  {
+   "name": "tank_stator_0p5mm",
+   "stl": "examples/stirred_tank/tank_stator_0.5mm.stl",
+   "expect": "valid",
+   "input": {
+    "triangles": 3840,
+    "vertices": 1922,
+    "edges": 5760,
+    "euler": 2,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "inconsistentEdges": 0,
+    "degenerateTris": 0,
+    "duplicateTris": 0,
+    "components": 2,
+    "signedVolume": 0.020985731795005926,
+    "bbox": [
+     [
+      -0.1497307268,
+      -0.1497307268,
+      0.0
+     ],
+     [
+      0.1497307268,
+      0.1497307268,
+      0.3
+     ]
+    ],
+    "diag": 0.5189935687312993,
+    "closed": true,
+    "oriented": true,
+    "clean": true,
+    "solids": [
+     "tankWall",
+     "bottom",
+     "top",
+     "impeller",
+     "shaft",
+     "statorInner",
+     "stator"
+    ]
+   },
+   "error": "MemoryError: Unable to allocate 393. MiB for an array with shape (51567166,) and data type int64",
+   "time": 412.013,
+   "peakMemMB": 12397.3828125,
+   "warnings": [],
+   "repairs": [],
+   "baseCellSize": 0.0125,
+   "status": "ERROR",
+   "notes": [
+    "MemoryError: Unable to allocate 393. MiB for an array with shape (51567166,) and data type int64"
+   ],
+   "verdict": "UNEXPECTED"
   }
  ]
 }
