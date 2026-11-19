@@ -1,0 +1,67 @@
+{
+ "name": "large",
+ "description": "Large cases close to the real use (about 1M cells, rotating zone, layers, cylindrical base) built on examples/stirred_tank. Measures time and quality per step; run them one at a time (-j 1) when comparing times.",
+ "defaults": {
+  "meshDict": {
+   "surfaceRefinement": {"default": 1, "impeller": 3, "shaft": 2},
+   "featureLevel": 2,
+   "bufferLayers": 2,
+   "snapTolerance": 0.3,
+   "mergeRatio": 0.25,
+   "patchTypes": {"top": "wall"},
+   "rotatingZones": [
+    {
+     "name": "rotor",
+     "cylinder": {"point1": [0, 0, 0.06], "point2": [0, 0, 0.14], "radius": 0.07},
+     "surfaceLevel": 2,
+     "volumeLevel": 2,
+     "omega": 31.416
+    }
+   ]
+  },
+  "expect": "valid",
+  "timeout": 1800
+ },
+ "cases": [
+  {
+   "name": "tank_rotor_1m",
+   "stl": "../../examples/stirred_tank/tank.stl",
+   "note": "stirred tank, cylindrical rotating zone, about 1M cells",
+   "meshDict": {"baseCellSize": 0.0053}
+  },
+  {
+   "name": "tank_stl_rotor",
+   "stl": "../../examples/stirred_tank/tank.stl",
+   "note": "rotating zone given as an STL surface",
+   "meshDict": {
+    "baseCellSize": 0.0065,
+    "rotatingZones": [
+     {"name": "rotor", "stl": "../../examples/stirred_tank/rotor.stl", "origin": [0, 0, 0.1],
+      "axis": [0, 0, 1], "surfaceLevel": 2, "volumeLevel": 2, "omega": 31.416}
+    ]
+   }
+  },
+  {
+   "name": "tank_layers",
+   "stl": "../../examples/stirred_tank/tank.stl",
+   "note": "3 boundary layers on all walls",
+   "meshDict": {
+    "baseCellSize": 0.008,
+    "addLayers": {"nLayers": 3, "expansionRatio": 1.2, "finalLayerThickness": 0.3}
+   }
+  },
+  {
+   "name": "tank_cylindrical",
+   "stl": "../../examples/stirred_tank/tank.stl",
+   "note": "cylindrical base mesh",
+   "meshDict": {
+    "baseCellSize": 0.0065,
+    "baseMesh": {
+     "type": "cylindrical", "origin": [0, 0, 0], "axis": [0, 0, 1], "nz": 48,
+     "core": {"halfWidth": 0.0375, "n": 12},
+     "blocks": [{"rOuter": 0.06, "nr": 4}, {"rOuter": 0.10, "nr": 6}, {"rOuter": 0.155, "nr": 8}]
+    }
+   }
+  }
+ ]
+}

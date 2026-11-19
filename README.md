@@ -10,7 +10,7 @@
 - **鋭角エッジの保持**: 凸・凹の特徴線に沿ってカット面を折り曲げ、節点をエッジ上へ寄せる
 - **薄い形状への対処**: セルより薄い隙間・壁を検出して細分化し、流体の閉塞や壁の消失（リーク）を防ぐ。
   隙間の幅に合わせた自動細分化（`autoGapRefinement`）もある
-- **境界層**: 壁パッチにプリズム層を追加（cutmesh 以外で作った ASCII polyMesh にも使える）
+- **境界層**: 壁パッチにプリズム層を追加（cutmesh 以外で作った polyMesh にも使える）
 - **回転ゾーン（任意）**: 円筒（寸法または STL で指定）を**メッシュ生成の一部として**切断し、
   円筒面そのものを内部面にする。`cellZone`・向き付きの界面 `faceZone`・`MRFProperties` の雛形を出力する
 - **円筒ベースメッシュ（任意）**: 回転機械向けに、八分木の根を軸まわりの同心ブロックにできる
@@ -103,6 +103,7 @@ python run.py                         # 断面図も欲しい場合 → slice_z.
 | `patchTypes` | パッチ名→タイプ（`wall`,`patch`,…） | 全て `wall` |
 | `rotatingZones` | 回転ゾーンのリスト（下記「回転ゾーン」）。省略時はゾーンなし | `[]` |
 | `writeMRFProperties` | 回転ゾーンがあるとき `constant/MRFProperties` の雛形を書く | true |
+| `writeFormat` | polyMesh の書き出し形式: `"binary"` または `"ascii"`（下記「書き出し形式」） | `"binary"` |
 | `case` | 出力先ケースディレクトリ | `.` |
 | `padding` | STL の外接箱の周りに足すベースセルの数 | 1 |
 | `addLayers` | 境界層の設定（下記「境界層」）。省略時は層なし | なし |
@@ -185,8 +186,8 @@ MRF円筒を置く）場合、隙間より細かいセルが必要ですが、`s
 python -m cutmesh meshDict.json
 # 例: examples/stirred_tank/meshDict_layers.json（3層、全壁）→ case_layers（約16万セル、壁節点の98%が目標厚さ）
 cutmesh examples/stirred_tank/meshDict_layers.json
-# 既存ケースに追加（ASCII polyMesh。cutmesh 以外のメッシュでも可）
-python -m cutmesh.layers CASE [layerDict.json] [-out CASE2] [-noCheck]
+# 既存ケースに追加（cutmesh 以外のメッシュでも可。ASCII、またはバイナリで faces が faceCompactList のもの）
+python -m cutmesh.layers CASE [layerDict.json] [-out CASE2] [-noCheck] [-ascii | -binary]
 ```
 
 | キー | 意味 | 既定値 |
@@ -262,6 +263,31 @@ python -m unittest discover -s tests  # Rust と Python の結果の一致を確
 | examples/stirred_tank | 26 s | 7 s |
 | 別の実形状（55万セル） | 162 s | 41 s（節点スナップ 44→2 s、STL のカット 59→8 s、回転ゾーンのカット 10→1 s、セル統合 29→9 s） |
 | 同、境界層の追加（3層） | 51 s | 27 s |
+
+### 書き出し形式（`writeFormat`）
+
+polyMesh は既定でバイナリ（OpenFOAM の `writeFormat binary` と同じ形式）で書き出します。大きなファイル
+（`points`・`faces`・`owner`・`neighbour`）がバイナリになり、`boundary`・`cellZones`・`faceZones` は短いので
+ASCII のままです（形式はファイルごとのヘッダーで示すので、混在してよい）。中身を目で確かめたいときや、
+ASCII しか読めないツールに渡すときは `"writeFormat": "ascii"` にします。OpenFOAM の `foamFormatConvert` でも変換できます。
+形式は OpenFOAM のソース（`UListIO`・`CompactIOList`・`ISstream`）に合わせて書いていますが、OpenFOAM 本体で
+読み込めることはまだ確認していません。読めない場合は `"writeFormat": "ascii"` に戻してください。
+
+- ヘッダーは `format binary;`、`arch "LSB;label=32;scalar=64";`（ラベル 32 ビット、倍精度）。`faces` は OpenFOAM が
+  バイナリで使う `faceCompactList`（オフセットの列と頂点番号の列）。ラベルが 32 ビットに収まらないメッシュは
+  `label=64` で書く（64 ビットラベルでビルドした OpenFOAM が必要）。
+- 座標は丸めずに書く（ASCII は有効数字 12 桁）。
+- `python -m cutmesh.layers` は、入力のメッシュと同じ形式で書く（`-ascii` / `-binary` で指定もできる）。
+  `cutmesh.diagnose` とベンチマークの画像（`render_mesh.py`）も、どちらの形式も読める。
+
+| 約 69 万セル（examples/stirred_tank、`baseCellSize` 0.006） | ASCII | バイナリ |
+|---|---|---|
+| 書き出し | 4.3〜4.5 s | 0.14〜0.19 s |
+| ファイルの大きさ | 122 MB | 80 MB |
+| 読み込み（`cutmesh.readfoam`） | 3.1 s | 0.18 s |
+
+メッシュ生成全体（同じケースで約 70 s）に対しては 6% ほどの短縮です。OpenFOAM 側の読み込み（`checkMesh` や
+ソルバーの起動、並列計算の `decomposePar`）も、一般にバイナリの方が速くなります。
 
 ## アルゴリズム
 

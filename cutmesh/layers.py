@@ -922,10 +922,11 @@ def _gather_idx(ptr, faces):
 
 
 def main(argv=None):
-    """python -m cutmesh.layers CASE [layerDict.json] [-out CASE2] [-noCheck]
+    """python -m cutmesh.layers CASE [layerDict.json] [-out CASE2] [-noCheck] [-ascii | -binary]
 
-    Adds layers to CASE/constant/polyMesh (written by cutmesh or any ASCII polyMesh)
-    and writes the result to CASE2 (default: CASE, overwriting the mesh)."""
+    Adds layers to CASE/constant/polyMesh (written by cutmesh, or an OpenFOAM polyMesh in
+    ASCII or binary with faceCompactList faces) and writes the result to CASE2 (default:
+    CASE, overwriting the mesh), in the format of the input unless -ascii / -binary."""
     import json
     import sys
     from .readfoam import read_mesh
@@ -937,7 +938,8 @@ def main(argv=None):
     if "-out" in argv:
         i = argv.index("-out"); out = argv[i + 1]; del argv[i:i + 2]
     check = "-noCheck" not in argv
-    argv = [a for a in argv if a != "-noCheck"]
+    fmt = "ascii" if "-ascii" in argv else "binary" if "-binary" in argv else None
+    argv = [a for a in argv if a not in ("-noCheck", "-ascii", "-binary")]
     case = argv[0]
     spec = {}
     if len(argv) > 1:
@@ -947,7 +949,7 @@ def main(argv=None):
     m = read_mesh(case)
     L = add_layers(m, spec)
     write_polymesh(out or case, L["points"], L["faces"], L["owner"], L["neighbour"], L["patches"],
-                   L["cell_zones"], L["face_zones"])
+                   L["cell_zones"], L["face_zones"], fmt=fmt or m["format"])
     if check:
         quality.check(L["points"], L["faces"], L["owner"], L["neighbour"])
     return 0

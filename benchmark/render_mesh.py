@@ -2,7 +2,7 @@
 
     python benchmark/render_mesh.py CASE_DIR [-o OUT_DIR] [--title NAME]
 
-CASE_DIR holds constant/polyMesh (ASCII, as cutmesh writes it).  Writes into OUT_DIR
+CASE_DIR holds constant/polyMesh (binary or ASCII, as cutmesh writes it).  Writes into OUT_DIR
 (default: CASE_DIR's parent):
     overview.png  the wall faces seen from two sides (front/above and back/below), coloured
                   by patch, every cell face outlined

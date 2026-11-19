@@ -45,6 +45,7 @@ DEFAULTS = {
     "patchTypes": {},
     "rotatingZones": [],
     "writeMRFProperties": True,
+    "writeFormat": "binary",    # polyMesh points/faces/owner/neighbour: "binary" or "ascii"
 }
 
 
@@ -2171,7 +2172,7 @@ def run(config_path, case_dir=None, log=print, check=True):
             R["face_zones"] = fz
         T("boundary layers")
     write_polymesh(case_dir, R["points"], R["faces"], R["owner"], R["neighbour"], R["patches"],
-                   R["cell_zones"], R["face_zones"])
+                   R["cell_zones"], R["face_zones"], fmt=cfg["writeFormat"])
     if cfg["writeMRFProperties"] and R["zones"]:
         write_mrf(case_dir, R["zones"])
     T("write polyMesh")
