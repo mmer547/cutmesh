@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cutmesh — OpenFOAM 用の八分木カットセル・メッシャー</title>
+<meta name="description" content="水密な STL の内部に八分木ベースの多面体メッシュを作り、OpenFOAM の polyMesh を直接書き出すメッシャー。回転ゾーン、円筒ベースメッシュ、境界層に対応">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header"><div class="inner">
+  <a class="brand" href="index.html">cut<span>mesh</span></a>
+  <nav class="site-nav">
+    <a href="manual.html">マニュアル</a>
+    <a href="examples.html">実行例</a>
+    <a href="https://github.com/mmer547/cutmesh">GitHub</a>
+  </nav>
+</div></header>
+
+<main class="page">
+<section class="hero">
+  <div>
+    <h1>cutmesh</h1>
+    <p class="lead">水密な STL の内部に八分木ベースの多面体メッシュを作り、OpenFOAM の <code>constant/polyMesh</code> を直接書き出すメッシャーです。
+    八分木のセルを STL で直接切断（カットセル）して壁面を作り、攪拌槽のような回転機械の回転ゾーンもメッシュ生成の中で切り出します。</p>
+    <div class="actions">
+      <a class="btn primary" href="manual.html">マニュアル</a>
+      <a class="btn" href="examples.html">実行例を見る</a>
+      <a class="btn" href="https://github.com/mmer547/cutmesh">GitHub</a>
+    </div>
+  </div>
+  <figure>
+    <a class="img" href="examples.html#tank"><img src="images/tank_cut.png" alt="攪拌槽のメッシュの 3D 断面図。槽、シャフト、4 枚のパドル翼と、翼のまわりの細かいセル" width="996" height="908"></a>
+    <figcaption>攪拌槽の例題（回転ゾーンつき）。手前半分のセルを取り除いた図</figcaption>
+  </figure>
+</section>
+
+<h2>特徴</h2>
+<div class="cards">
+  <div class="card"><h3>STL の内部をそのままメッシュに</h3><p>solid 名ごとに壁パッチを作り、パッチ・特徴線・体積領域ごとに細分化レベルを指定できます。</p></div>
+  <div class="card"><h3>回転ゾーンをカットで切り出す</h3><p>円筒（寸法または STL）を切断して、円筒面そのものを内部面にします。cellZone・向きつきの faceZone・MRFProperties の雛形を出力します。</p></div>
+  <div class="card"><h3>狭い隙間と薄い壁</h3><p>セルより薄い隙間・壁を検出して細分化し、流体の閉塞や壁の消失（リーク）を防ぎます。隙間の幅に合わせた自動細分化もあります。</p></div>
+  <div class="card"><h3>境界層</h3><p>壁パッチにプリズム層を追加します。cutmesh 以外で作った polyMesh にも使えます。</p></div>
+  <div class="card"><h3>円筒ベースメッシュ</h3><p>回転機械向けに、八分木の根を軸まわりの同心ブロックにできます。</p></div>
+  <div class="card"><h3>依存が少ない</h3><p>Python 3.9+、numpy、scipy だけで動きます。メッシュ生成に OpenFOAM は不要です。Rust 拡張で約 4 倍速くなります。</p></div>
+</div>
+
+<h2>クイックスタート</h2>
+<pre><code>git clone https://github.com/mmer547/cutmesh.git
+cd cutmesh
+pip install -e .
+python tools/build_rust.py            # 任意: Rust 拡張（cargo が必要）
+
+cd examples/stirred_tank
+python make_geometry.py               # サンプルの STL を生成
+cutmesh meshDict.json                 # → case/constant/polyMesh</code></pre>
+<p>設定は 1 つの JSON ファイルに書きます。最小限の例:</p>
+<pre><code>{
+  "domain": "model.stl",
+  "baseCellSize": 0.01,
+  "surfaceRefinement": { "default": 2 },
+  "patchTypes": { "inlet": "patch", "outlet": "patch" },
+  "case": "case"
+}</code></pre>
+<p>設定項目の一覧と各機能の説明は <a href="manual.html">マニュアル</a> にあります。</p>
+
+<h2>実行例</h2>
+<div class="grid three">
+  <figure>
+    <a class="img" href="examples.html#tank"><img src="images/tank_slices.png" alt="攪拌槽の水平断面と鉛直断面。赤い線が回転ゾーンの界面" loading="lazy"></a>
+    <figcaption>攪拌槽: 回転ゾーンの界面（赤）は円筒面にぴったり乗る</figcaption>
+  </figure>
+  <figure>
+    <a class="img" href="examples.html#stator"><img src="images/stator_gap.png" alt="翼の先端と固定リングの間の 1 mm の隙間の拡大図" loading="lazy"></a>
+    <figcaption>ローター・ステーター: 1 mm の隙間の中央に界面を置く</figcaption>
+  </figure>
+  <figure>
+    <a class="img" href="examples.html#shapes"><img src="images/shape_cube_rotated.png" alt="格子に対して傾いた立方体のメッシュ" loading="lazy"></a>
+    <figcaption>形状のテスト集: 傾いた立方体、トーラス、薄い流路など</figcaption>
+  </figure>
+</div>
+
+<div class="note">
+  <p>開発中のプロトタイプです。メッシュ品質は <code>checkMesh</code> と同じ式の自前チェックで確認していますが、OpenFOAM 本体での検証は限られています。使う前に手元で <code>checkMesh</code> を実行してください。</p>
+</div>
+</main>
+
+<footer class="site-footer"><div class="inner">
+  cutmesh は OpenFOAM の一部ではなく、OpenFOAM 用のメッシュ（<code>constant/polyMesh</code>）を書き出す独立したツールです。
+  This offering is not approved or endorsed by OpenCFD Limited, producer and distributor of the OpenFOAM software via www.openfoam.com,
+  and owner of the OPENFOAM® and OpenCFD® trade marks.
+</div></footer>
+</body>
+</html>
