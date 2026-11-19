@@ -67,6 +67,7 @@ python run.py                         # 断面図も欲しい場合 → slice_z.
 | `meshDict_stlRotor.json` | 回転ゾーンを STL で指定 |
 | `meshDict_cylindrical.json` | 円筒ベースメッシュ |
 | `meshDict_layers.json` | 境界層（3層、全壁） |
+| `meshDict_stator.json` | ローター・ステーター: 翼の外側 0.5 mm に固定リング（`python make_geometry.py --stator 0.5` で `tank_stator_0.5mm.stl` を生成）、回転ゾーンの界面は隙間の中央。最小セル 0.195 mm が界面の全周に並ぶので約 200 万セルになり、15 GB のメモリでは足りない（1 mm の隙間なら約 60 万セル・2 分） |
 
 `rotatingZones` を消せば、同じ形状で回転ゾーンのないメッシュになります。
 
@@ -79,7 +80,7 @@ python run.py                         # 断面図も欲しい場合 → slice_z.
 | `surfaceRefinement` | solid名→細分化レベル。`default` で既定値 | `{}` |
 | `featureLevel` | 特徴線近傍の細分化レベル（`null`=表面最大レベル） | `null` |
 | `gapRefinement` | `{"thickness": t, "level": L}`: 流体の厚みが `t` 未満の所（スロットの鋭い先端、狭い流路）の壁を `L` まで細分化。セルより薄い部分が切り落とされるのを抑える | なし |
-| `autoGapRefinement` | `{"cellsAcross": n, "maxLevel": L}`（`true` で既定値）: STL の各所で流体側の隙間の幅 w を測り（壁から法線方向に向かいの壁まで）、隙間に `n` 個のセルが入るレベル（`baseCellSize / 2^level ≤ w / n`、上限 `L`）まで壁を細分化する。溝・スリット・狭い隙間が閉じたりつぶれたりするのを、厚さを指定せずに防ぐ。その面の表面レベルですでに `n` 個入る所は対象外。上限でも足りない所の数をログに出す | なし（`n` = 3、`L` = 表面レベルの最大 + 2）|
+| `autoGapRefinement` | `{"cellsAcross": n, "maxLevel": L}`（`true` で既定値）: STL の各所で流体側の隙間の幅 w を測り（壁から法線方向に向かいの壁まで）、隙間に `n` 個のセルが入るレベル（`baseCellSize / 2^level ≤ w / n`、上限 `L`）まで壁を細分化する。溝・スリット・狭い隙間が閉じたりつぶれたりするのを、厚さを指定せずに防ぐ。その面の表面レベルですでに `n` 個入る所は対象外。上限でも足りない所の数をログに出す。各壁をまずその壁のセル寸法の半分の間隔で調べ、狭い隙間がある三角形だけを最も細かい間隔で測り直す | なし（`n` = 3、`L` = 表面レベルの最大 + 2）|
 | `featureAngle` | 特徴線抽出の角度 [deg] | 30 |
 | `bufferLayers` | レベル遷移ごとのバッファセル数 | 2 |
 | `snapTolerance` | 節点スナップ距離（セル辺長比）。スライバー防止 | 0.3 |
