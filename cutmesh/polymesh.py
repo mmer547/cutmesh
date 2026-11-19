@@ -63,10 +63,13 @@ def _raw_list(f, arr, dtype):
         f.write(b")\n")
 
 
-def _write_binary(d, points, sizes, flat, owner, neighbour, note):
-    big = max(len(flat), len(sizes) + 1, len(points)) >= 2 ** 31 - 1
-    bits = 64 if big else 32
-    lab = "<i8" if big else "<i4"
+def _write_binary(d, points, sizes, flat, owner, neighbour, note, label_bits=None):
+    """label_bits: 32 or 64 (None: 64 only when a label does not fit in 32 bits)"""
+    if label_bits is None:
+        big = max(len(flat), len(sizes) + 1, len(points)) >= 2 ** 31 - 1
+        label_bits = 64 if big else 32
+    bits = label_bits
+    lab = "<i8" if bits == 64 else "<i4"
 
     def bopen(obj, cls, note=""):
         f = open(os.path.join(d, obj), "wb")

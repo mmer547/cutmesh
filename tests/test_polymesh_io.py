@@ -118,6 +118,49 @@ class RoundTrip(unittest.TestCase):
         self.assertEqual(len(m["neighbour"]), 0)
         self.assertEqual(len(m["faces"][0]), 6)
 
+    def test_arch_header_with_semicolons(self):
+        # the quoted arch value holds ';': it must not end the entry at the first one
+        from cutmesh.readfoam import _read_file, _dtypes
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "x")
+            with open(p, "wb") as f:
+                f.write(b'FoamFile\n{\n    version     2.0;\n    format      binary;\n'
+                        b'    arch        "LSB;label=64;scalar=32";\n    class       labelList;\n'
+                        b'    note        "nPoints:1  nCells:2";\n    object      owner;\n}\n0\n')
+            hdr, _, _ = _read_file(p)
+        self.assertEqual(hdr["arch"], "LSB;label=64;scalar=32")
+        self.assertEqual(hdr["note"], "nPoints:1  nCells:2")
+        self.assertEqual(hdr["format"], "binary")
+        lab, sca = _dtypes(hdr)
+        self.assertEqual((lab, sca), (np.dtype("<i8"), np.dtype("<f4")))
+
+    def test_binary_64bit_labels(self):
+        # meshes too large for 32-bit labels are written with label=64; they read back
+        from cutmesh.polymesh import _write_binary
+        P, F, own, nei, patches, cz, fz = hex_grid(2)
+        with tempfile.TemporaryDirectory() as d:
+            write_polymesh(d, P, F, own, nei, patches, cz, fz, fmt="binary")
+            pm = os.path.join(d, "constant", "polyMesh")
+            _write_binary(pm, P, F[0], F[1], own, nei, "", label_bits=64)
+            self.assertIn(b"label=64", open(os.path.join(pm, "owner"), "rb").read(400))
+            m = read_mesh(d)
+        np.testing.assert_array_equal(m["faces"][1], F[1])
+        np.testing.assert_array_equal(m["owner"], own)
+        np.testing.assert_array_equal(m["neighbour"], nei)
+
+    def test_binary_single_precision_points(self):
+        # OpenFOAM built with 32-bit scalars writes scalar=32
+        P, F, own, nei, patches, _, _ = hex_grid(1)
+        with tempfile.TemporaryDirectory() as d:
+            write_polymesh(d, P, F, own, nei, patches, fmt="binary")
+            p = os.path.join(d, "constant", "polyMesh", "points")
+            b = open(p, "rb").read()
+            head = b[:b.index(b"* //\n") + 5].replace(b"scalar=64", b"scalar=32")
+            with open(p, "wb") as f:
+                f.write(head + b"\n8\n(" + P.astype("<f4").tobytes() + b")\n")
+            m = read_mesh(d)
+        np.testing.assert_array_equal(m["points"], P)
+
     def test_truncated_binary(self):
         P, F, own, nei, patches, _, _ = hex_grid(2)
         with tempfile.TemporaryDirectory() as d:

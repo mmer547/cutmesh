@@ -36,7 +36,8 @@ def _read_file(path):
     if b.startswith(b"FoamFile", i):
         j = b.index(b"{", i)
         k = b.index(b"}", j)
-        for m in re.finditer(rb"(\w+)\s+([^;]*);", b[j + 1:k]):
+        # a quoted value may hold ';' (arch "LSB;label=32;scalar=64";)
+        for m in re.finditer(rb'(\w+)\s+("[^"]*"|[^;"]*);', b[j + 1:k]):
             hdr[m.group(1).decode()] = m.group(2).decode().strip().strip('"')
         i = k + 1
     return hdr, b, i
