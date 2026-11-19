@@ -3,16 +3,34 @@
  "description": "Large cases close to the real use (about 1M cells, rotating zone, layers, cylindrical base) built on examples/stirred_tank. Measures time and quality per step; run them one at a time (-j 1) when comparing times.",
  "defaults": {
   "meshDict": {
-   "surfaceRefinement": {"default": 1, "impeller": 3, "shaft": 2},
+   "surfaceRefinement": {
+    "default": 1,
+    "impeller": 3,
+    "shaft": 2
+   },
    "featureLevel": 2,
    "bufferLayers": 2,
    "snapTolerance": 0.3,
    "mergeRatio": 0.25,
-   "patchTypes": {"top": "wall"},
+   "patchTypes": {
+    "top": "wall"
+   },
    "rotatingZones": [
     {
      "name": "rotor",
-     "cylinder": {"point1": [0, 0, 0.06], "point2": [0, 0, 0.14], "radius": 0.07},
+     "cylinder": {
+      "point1": [
+       0,
+       0,
+       0.06
+      ],
+      "point2": [
+       0,
+       0,
+       0.14
+      ],
+      "radius": 0.07
+     },
      "surfaceLevel": 2,
      "volumeLevel": 2,
      "omega": 31.416
@@ -27,7 +45,9 @@
    "name": "tank_rotor_1m",
    "stl": "../../examples/stirred_tank/tank.stl",
    "note": "stirred tank, cylindrical rotating zone, about 1M cells",
-   "meshDict": {"baseCellSize": 0.0053}
+   "meshDict": {
+    "baseCellSize": 0.0053
+   }
   },
   {
    "name": "tank_stl_rotor",
@@ -36,8 +56,23 @@
    "meshDict": {
     "baseCellSize": 0.0065,
     "rotatingZones": [
-     {"name": "rotor", "stl": "../../examples/stirred_tank/rotor.stl", "origin": [0, 0, 0.1],
-      "axis": [0, 0, 1], "surfaceLevel": 2, "volumeLevel": 2, "omega": 31.416}
+     {
+      "name": "rotor",
+      "stl": "../../examples/stirred_tank/rotor.stl",
+      "origin": [
+       0,
+       0,
+       0.1
+      ],
+      "axis": [
+       0,
+       0,
+       1
+      ],
+      "surfaceLevel": 2,
+      "volumeLevel": 2,
+      "omega": 31.416
+     }
     ]
    }
   },
@@ -47,7 +82,11 @@
    "note": "3 boundary layers on all walls",
    "meshDict": {
     "baseCellSize": 0.008,
-    "addLayers": {"nLayers": 3, "expansionRatio": 1.2, "finalLayerThickness": 0.3}
+    "addLayers": {
+     "nLayers": 3,
+     "expansionRatio": 1.2,
+     "finalLayerThickness": 0.3
+    }
    }
   },
   {
@@ -57,11 +96,528 @@
    "meshDict": {
     "baseCellSize": 0.0065,
     "baseMesh": {
-     "type": "cylindrical", "origin": [0, 0, 0], "axis": [0, 0, 1], "nz": 48,
-     "core": {"halfWidth": 0.0375, "n": 12},
-     "blocks": [{"rOuter": 0.06, "nr": 4}, {"rOuter": 0.10, "nr": 6}, {"rOuter": 0.155, "nr": 8}]
+     "type": "cylindrical",
+     "origin": [
+      0,
+      0,
+      0
+     ],
+     "axis": [
+      0,
+      0,
+      1
+     ],
+     "nz": 48,
+     "core": {
+      "halfWidth": 0.0375,
+      "n": 12
+     },
+     "blocks": [
+      {
+       "rOuter": 0.06,
+       "nr": 4
+      },
+      {
+       "rOuter": 0.1,
+       "nr": 6
+      },
+      {
+       "rOuter": 0.155,
+       "nr": 8
+      }
+     ]
     }
    }
+  },
+  {
+   "name": "tank_stator_1mm",
+   "stl": "../../examples/stirred_tank/tank_stator_1mm.stl",
+   "note": "rotor-stator: fixed ring 1 mm outside the blade corners, rotor interface in the middle of the gap",
+   "meshDict": {
+    "baseCellSize": 0.0125,
+    "surfaceRefinement": {
+     "default": 1,
+     "impeller": 3,
+     "shaft": 2,
+     "stator": 3,
+     "statorInner": 3
+    },
+    "featureLevel": 2,
+    "bufferLayers": 2,
+    "snapTolerance": 0.3,
+    "mergeRatio": 0.25,
+    "autoGapRefinement": {
+     "cellsAcross": 2,
+     "maxLevel": 5
+    },
+    "rotatingZones": [
+     {
+      "name": "rotor",
+      "cylinder": {
+       "point1": [
+        0,
+        0,
+        0.074
+       ],
+       "point2": [
+        0,
+        0,
+        0.126
+       ],
+       "radius": 0.05059
+      },
+      "surfaceLevel": 3,
+      "volumeLevel": 2,
+      "wallProximity": {
+       "distance": 0.001,
+       "level": 5
+      },
+      "omega": 31.416
+     }
+    ],
+    "patchTypes": {
+     "top": "wall"
+    }
+   },
+   "probes": [
+    {
+     "name": "in_0deg_z0.083",
+     "from": [
+      0.0501099,
+      0.0,
+      0.083
+     ],
+     "to": [
+      0.0504899,
+      0.0,
+      0.083
+     ],
+     "zone": "rotor",
+     "minCells": 1,
+     "minZoneCells": 1
+    },
+    {
+     "name": "out_0deg_z0.083",
+     "from": [
+      0.0506899,
+      0.0,
+      0.083
+     ],
+     "to": [
+      0.0510699,
+      0.0,
+      0.083
+     ],
+     "zone": "rotor",
+     "minCells": 1,
+     "maxZoneCells": 0
+    },
+    {
+     "name": "in_0deg_z0.1",
+     "from": [
+      0.0501099,
+      0.0,
+      0.1
+     ],
+     "to": [
+      0.0504899,
+      0.0,
+      0.1
+     ],
+     "zone": "rotor",
+     "minCells": 1,
+     "minZoneCells": 1
+    },
+    {
+     "name": "out_0deg_z0.1",
+     "from": [
+      0.0506899,
+      0.0,
+      0.1
+     ],
+     "to": [
+      0.0510699,
+      0.0,
+      0.1
+     ],
+     "zone": "rotor",
+     "minCells": 1,
+     "maxZoneCells": 0
+    },
+    {
+     "name": "in_0deg_z0.117",
+     "from": [
+      0.0501099,
+      0.0,
+      0.117
+     ],
+     "to": [
+      0.0504899,
+      0.0,
+      0.117
+     ],
+     "zone": "rotor",
+     "minCells": 1,
+     "minZoneCells": 1
+    },
+    {
+     "name": "out_0deg_z0.117",
+     "from": [
+      0.0506899,
+      0.0,
+      0.117
+     ],
+     "to": [
+      0.0510699,
+      0.0,
+      0.117
+     ],
+     "zone": "rotor",
+     "minCells": 1,
+     "maxZoneCells": 0
+    },
+    {
+     "name": "in_90deg_z0.1",
+     "from": [
+      0.0,
+      0.0501099,
+      0.1
+     ],
+     "to": [
+      0.0,
+      0.0504899,
+      0.1
+     ],
+     "zone": "rotor",
+     "minCells": 1,
+     "minZoneCells": 1
+    },
+    {
+     "name": "out_90deg_z0.1",
+     "from": [
+      0.0,
+      0.0506899,
+      0.1
+     ],
+     "to": [
+      0.0,
+      0.0510699,
+      0.1
+     ],
+     "zone": "rotor",
+     "minCells": 1,
+     "maxZoneCells": 0
+    },
+    {
+     "name": "in_180deg_z0.1",
+     "from": [
+      -0.0501099,
+      0.0,
+      0.1
+     ],
+     "to": [
+      -0.0504899,
+      0.0,
+      0.1
+     ],
+     "zone": "rotor",
+     "minCells": 1,
+     "minZoneCells": 1
+    },
+    {
+     "name": "out_180deg_z0.1",
+     "from": [
+      -0.0506899,
+      0.0,
+      0.1
+     ],
+     "to": [
+      -0.0510699,
+      0.0,
+      0.1
+     ],
+     "zone": "rotor",
+     "minCells": 1,
+     "maxZoneCells": 0
+    },
+    {
+     "name": "in_270deg_z0.1",
+     "from": [
+      -0.0,
+      -0.0501099,
+      0.1
+     ],
+     "to": [
+      -0.0,
+      -0.0504899,
+      0.1
+     ],
+     "zone": "rotor",
+     "minCells": 1,
+     "minZoneCells": 1
+    },
+    {
+     "name": "out_270deg_z0.1",
+     "from": [
+      -0.0,
+      -0.0506899,
+      0.1
+     ],
+     "to": [
+      -0.0,
+      -0.0510699,
+      0.1
+     ],
+     "zone": "rotor",
+     "minCells": 1,
+     "maxZoneCells": 0
+    }
+   ]
+  },
+  {
+   "name": "tank_stator_0p5mm",
+   "stl": "../../examples/stirred_tank/tank_stator_0.5mm.stl",
+   "note": "rotor-stator: fixed ring 0.5 mm outside the blade corners, rotor interface in the middle of the gap",
+   "meshDict": {
+    "baseCellSize": 0.0125,
+    "surfaceRefinement": {
+     "default": 1,
+     "impeller": 3,
+     "shaft": 2,
+     "stator": 3,
+     "statorInner": 3
+    },
+    "featureLevel": 2,
+    "bufferLayers": 2,
+    "snapTolerance": 0.3,
+    "mergeRatio": 0.25,
+    "autoGapRefinement": {
+     "cellsAcross": 2,
+     "maxLevel": 6
+    },
+    "rotatingZones": [
+     {
+      "name": "rotor",
+      "cylinder": {
+       "point1": [
+        0,
+        0,
+        0.074
+       ],
+       "point2": [
+        0,
+        0,
+        0.126
+       ],
+       "radius": 0.05034
+      },
+      "surfaceLevel": 3,
+      "volumeLevel": 2,
+      "wallProximity": {
+       "distance": 0.0005,
+       "level": 6
+      },
+      "omega": 31.416
+     }
+    ],
+    "patchTypes": {
+     "top": "wall"
+    }
+   },
+   "probes": [
+    {
+     "name": "in_0deg_z0.083",
+     "from": [
+      0.0500999,
+      0.0,
+      0.083
+     ],
+     "to": [
+      0.0502899,
+      0.0,
+      0.083
+     ],
+     "zone": "rotor",
+     "minCells": 1,
+     "minZoneCells": 1
+    },
+    {
+     "name": "out_0deg_z0.083",
+     "from": [
+      0.0503899,
+      0.0,
+      0.083
+     ],
+     "to": [
+      0.0505799,
+      0.0,
+      0.083
+     ],
+     "zone": "rotor",
+     "minCells": 1,
+     "maxZoneCells": 0
+    },
+    {
+     "name": "in_0deg_z0.1",
+     "from": [
+      0.0500999,
+      0.0,
+      0.1
+     ],
+     "to": [
+      0.0502899,
+      0.0,
+      0.1
+     ],
+     "zone": "rotor",
+     "minCells": 1,
+     "minZoneCells": 1
+    },
+    {
+     "name": "out_0deg_z0.1",
+     "from": [
+      0.0503899,
+      0.0,
+      0.1
+     ],
+     "to": [
+      0.0505799,
+      0.0,
+      0.1
+     ],
+     "zone": "rotor",
+     "minCells": 1,
+     "maxZoneCells": 0
+    },
+    {
+     "name": "in_0deg_z0.117",
+     "from": [
+      0.0500999,
+      0.0,
+      0.117
+     ],
+     "to": [
+      0.0502899,
+      0.0,
+      0.117
+     ],
+     "zone": "rotor",
+     "minCells": 1,
+     "minZoneCells": 1
+    },
+    {
+     "name": "out_0deg_z0.117",
+     "from": [
+      0.0503899,
+      0.0,
+      0.117
+     ],
+     "to": [
+      0.0505799,
+      0.0,
+      0.117
+     ],
+     "zone": "rotor",
+     "minCells": 1,
+     "maxZoneCells": 0
+    },
+    {
+     "name": "in_90deg_z0.1",
+     "from": [
+      0.0,
+      0.0500999,
+      0.1
+     ],
+     "to": [
+      0.0,
+      0.0502899,
+      0.1
+     ],
+     "zone": "rotor",
+     "minCells": 1,
+     "minZoneCells": 1
+    },
+    {
+     "name": "out_90deg_z0.1",
+     "from": [
+      0.0,
+      0.0503899,
+      0.1
+     ],
+     "to": [
+      0.0,
+      0.0505799,
+      0.1
+     ],
+     "zone": "rotor",
+     "minCells": 1,
+     "maxZoneCells": 0
+    },
+    {
+     "name": "in_180deg_z0.1",
+     "from": [
+      -0.0500999,
+      0.0,
+      0.1
+     ],
+     "to": [
+      -0.0502899,
+      0.0,
+      0.1
+     ],
+     "zone": "rotor",
+     "minCells": 1,
+     "minZoneCells": 1
+    },
+    {
+     "name": "out_180deg_z0.1",
+     "from": [
+      -0.0503899,
+      0.0,
+      0.1
+     ],
+     "to": [
+      -0.0505799,
+      0.0,
+      0.1
+     ],
+     "zone": "rotor",
+     "minCells": 1,
+     "maxZoneCells": 0
+    },
+    {
+     "name": "in_270deg_z0.1",
+     "from": [
+      -0.0,
+      -0.0500999,
+      0.1
+     ],
+     "to": [
+      -0.0,
+      -0.0502899,
+      0.1
+     ],
+     "zone": "rotor",
+     "minCells": 1,
+     "minZoneCells": 1
+    },
+    {
+     "name": "out_270deg_z0.1",
+     "from": [
+      -0.0,
+      -0.0503899,
+      0.1
+     ],
+     "to": [
+      -0.0,
+      -0.0505799,
+      0.1
+     ],
+     "zone": "rotor",
+     "minCells": 1,
+     "maxZoneCells": 0
+    }
+   ]
   }
  ]
 }

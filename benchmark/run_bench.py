@@ -18,6 +18,12 @@ Suite file (paths relative to the suite file):
      "cases": [{"name": "sphere", "stl": "../data/synthetic/sphere.stl", "expect": "pass"},
                {"name": "cube_aligned", "stl": "...", "meshDict": {"baseCellSize": 0.0625}}]}
 
+A case may list "probes": [{"name", "from": [x, y, z], "to": [x, y, z], "minCells": n,
+"zone": name, "minZoneCells": n, "maxZoneCells": n}]: line segments (across a narrow gap)
+whose cells are counted (cell with the nearest centre at 400 points); fewer cells than
+minCells, or zone cells outside the limits, make the case WARN (a closed gap does not show
+in the volume or the leak check).
+
 cellsAcross sets baseCellSize = (longest bounding-box side) / cellsAcross unless the case's
 meshDict gives baseCellSize.  A case whose STL is missing is skipped (optional third-party data).
 
@@ -56,6 +62,35 @@ INVALID_WARNINGS = ("faces shared by more than two cells", "boundary faces far f
 
 
 # ------------------------------------------------------------------ worker (one case)
+def probe_cells(R, probes, n=400):
+    """Cells along line segments (e.g. across a narrow gap): each of n points on the segment
+    goes to the cell with the nearest centre (mean of its face centres), so a gap that
+    closed shows up as too few cells.  Returns [{name, cells, zoneCells}]."""
+    import numpy as np
+    from scipy.spatial import cKDTree
+    P = R["points"]; sizes, flat = R["faces"]; own, nei = R["owner"], R["neighbour"]
+    ptr = np.concatenate([[0], np.cumsum(sizes)])
+    fc = np.add.reduceat(P[flat], ptr[:-1]) / np.asarray(sizes)[:, None]
+    nC = int(max(own.max(), nei.max() if len(nei) else 0)) + 1
+    cc = np.zeros((nC, 3)); cnt = np.zeros(nC)
+    np.add.at(cc, own, fc); np.add.at(cnt, own, 1)
+    np.add.at(cc, nei, fc[:len(nei)]); np.add.at(cnt, nei, 1)
+    tree = cKDTree(cc / cnt[:, None])
+    out = []
+    for pr in probes:
+        a, b = np.asarray(pr["from"], float), np.asarray(pr["to"], float)
+        t = (np.arange(n) + 0.5) / n
+        _, c = tree.query(a + t[:, None] * (b - a))
+        cells = np.unique(c)
+        r = {"name": pr["name"], "cells": int(len(cells))}
+        z = pr.get("zone")
+        if z is not None and z in (R.get("cell_zones") or {}):
+            r["zoneCells"] = int(np.isin(cells, R["cell_zones"][z]).sum())
+        out.append(r)
+    return out
+
+
+
 def _peak_memory_mb():
     try:
         import resource
@@ -101,6 +136,8 @@ def worker(job_path):
         q = {k: v for k, v in R.get("quality", {}).items() if not k.startswith("_")}
         res["quality"] = q
         res["steps"] = {name: round(dt, 3) for name, dt in R["timer"].steps}
+        if job.get("probes"):
+            res["probes"] = probe_cells(R, job["probes"])
         if job.get("images", True):
             try:                          # pictures must never turn a good case into an ERROR
                 from render_mesh import render
@@ -179,6 +216,15 @@ def classify(res, stl, vol_tol, strict=False):
         flags.append(f"{q['nSkew4']} faces skewness > 4")
     if q.get("nBadTetDecomp", 0) and strict:      # stricter than checkMesh: only with --strict
         flags.append(f"{q['nBadTetDecomp']} negative face-triangle tets")
+    for pr, spec in zip(res.get("probes", []), res.get("_probeSpecs", [])):
+        if pr["cells"] < spec.get("minCells", 1):
+            flags.append(f"probe {pr['name']}: {pr['cells']} cells < {spec.get('minCells', 1)}")
+        if "minZoneCells" in spec and pr.get("zoneCells", 0) < spec["minZoneCells"]:
+            flags.append(f"probe {pr['name']}: {pr.get('zoneCells', 0)} cells in zone {spec.get('zone')}"
+                         f" < {spec['minZoneCells']}")
+        if "maxZoneCells" in spec and pr.get("zoneCells", 0) > spec["maxZoneCells"]:
+            flags.append(f"probe {pr['name']}: {pr.get('zoneCells', 0)} cells in zone {spec.get('zone')}"
+                         f" > {spec['maxZoneCells']}")
     ve = res.get("volErr")
     if ve is not None and abs(ve) > vol_tol:
         flags.append(f"volume {ve:+.2%} vs STL")
@@ -230,7 +276,7 @@ def run_case(c, outdir, args, overrides):
     md["case"] = "case"
     with open(os.path.join(wd, "meshDict.json"), "w", encoding="utf-8") as f:
         json.dump(md, f, indent=1)
-    job = {"name": c["name"], "workdir": wd, "images": not args.no_images}
+    job = {"name": c["name"], "workdir": wd, "images": not args.no_images, "probes": c.get("probes")}
     jp = os.path.join(wd, "job.json")
     with open(jp, "w", encoding="utf-8") as f:
         json.dump(job, f)
@@ -255,7 +301,9 @@ def run_case(c, outdir, args, overrides):
     q = res.get("quality") or {}
     if q and inp.get("oriented") and inp.get("signedVolume"):
         res["volErr"] = q["totalVol"] / abs(inp["signedVolume"]) - 1.0
+    res["_probeSpecs"] = c.get("probes") or []
     status, notes = classify(res, inp, args.vol_tol, args.strict)
+    res.pop("_probeSpecs")
     notes = notes + [r.replace("REPAIR: ", "repaired: ") for r in res.get("repairs", [])]
     res["status"], res["notes"] = status, notes
     res["verdict"] = verdict(c.get("expect"), status)

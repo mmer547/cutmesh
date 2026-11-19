@@ -8,7 +8,8 @@ import numpy as np
 from scipy.spatial import cKDTree
 
 from .geometry import (Surface, Cylinder, SurfaceZone, FeatureSet, read_stl,
-                       sample_segments, cylinder_features, paused_gc, _core, LevelSet, unique, STLError)
+                       sample_segments, cylinder_features, paused_gc, _core, LevelSet, unique, STLError,
+                       subdivide_triangles)
 from .octree import Octree
 from .cylbase import CylindricalBase
 from .cutcell import CutContext, split_components
@@ -881,21 +882,23 @@ def _fluid_side(dom, p, nrm, eps):
     return np.where(flip[:, None], -nrm, nrm)
 
 
-def _auto_gap_samples(dom, h0, region_level, nacross, lmax):
-    """Wall samples of gaps too narrow for nacross cells of the wall's surface level:
-    from each sample a line goes into the fluid along the normal; the first wall it hits
-    gives the gap width w, and the level whose cells fit nacross times into w is the
-    target (capped at lmax).  Returns ([(level, samples, n_unresolved)], n_unresolved):
-    n_unresolved samples would need more than lmax."""
-    p, ti = dom.samples(h0 / 2 ** lmax)
+def _interior_samples(tris, spacing):
+    """Centroids of a longest-edge bisection of the triangles (every edge <= spacing): one
+    point per piece and none on an edge (a point on an edge shared with another wall
+    measures a zero-width gap along that wall).  Returns (pts, tri_index)."""
+    T, par = subdivide_triangles(tris, spacing)
+    return T.mean(1), par
+
+
+def _gap_widths(dom, p, ti, lw, h0, nacross, eps):
+    """Gap width w at wall samples p (on triangles ti, surface level lw): from each sample a
+    line goes into the fluid along the normal, and the first wall it hits within nacross
+    cells of level lw gives w (inf: no wall that close)."""
     T = dom.tris[ti]
     nrm = np.cross(T[:, 1] - T[:, 0], T[:, 2] - T[:, 0])
     nrm /= np.maximum(np.linalg.norm(nrm, axis=1), 1e-300)[:, None]
-    lw = region_level[dom.region[ti]]                       # surface level of the wall
-    hw = h0 / 2.0 ** lw
-    eps = 1e-3 * h0 / 2 ** lmax
     into = _fluid_side(dom, p, nrm, eps)
-    wmax = nacross * hw                                     # wider gaps are resolved anyway
+    wmax = nacross * h0 / 2.0 ** lw                         # wider gaps are resolved anyway
     a = p + eps * into
     b = p + wmax[:, None] * into
     seg, t, _ = dom.segment_hits(a, b)
@@ -904,6 +907,51 @@ def _auto_gap_samples(dom, h0, region_level, nacross, lmax):
         first = np.ones(len(seg), bool)
         first[1:] = seg[1:] != seg[:-1]
         w[seg[first]] = eps + t[first] * (wmax[seg[first]] - eps)
+    return w
+
+
+def _tri_neighbours(dom, tri):
+    """tri plus the triangles sharing a vertex with one of them."""
+    V = dom.tris.reshape(-1, 3)
+    tol = 1e-9 * max(dom.L, 1e-300)
+    _, vid = np.unique(np.round(V / tol), axis=0, return_inverse=True)
+    vid = vid.reshape(-1, 3)
+    mark = np.zeros(vid.max() + 1, bool)
+    mark[vid[tri].ravel()] = True
+    return np.nonzero(mark[vid].any(1))[0]
+
+
+def _auto_gap_samples(dom, h0, region_level, nacross, lmax):
+    """Wall samples of gaps too narrow for nacross cells of the wall's surface level:
+    the gap width w at a sample is measured along the wall normal into the fluid (first
+    wall hit), and the level whose cells fit nacross times into w is the target (capped
+    at lmax).  Returns ([(level, samples, n_unresolved)], n_unresolved): n_unresolved
+    samples would need more than lmax.
+
+    Two passes, so that only the walls at a narrow gap are sampled finely: every wall at
+    half its own cell size first (a gap narrower than nacross of those cells marks its
+    triangle), then the marked triangles and their neighbours at the finest spacing
+    h0 / 2^lmax.  Sampling the whole STL that finely took 110 million samples (7 GB) on a
+    0.3 m tank with lmax 5."""
+    eps = 1e-3 * h0 / 2 ** lmax
+    tri_level = region_level[dom.region]
+    cand = []
+    for lv in np.unique(tri_level):
+        if lv >= lmax:
+            continue
+        sel = np.nonzero(tri_level == lv)[0]
+        p, ids = _interior_samples(dom.tris[sel], h0 / 2.0 ** lv / 2)
+        ti = sel[ids]
+        w = _gap_widths(dom, p, ti, tri_level[ti], h0, nacross, eps)
+        cand.append(np.unique(ti[w < nacross * h0 / 2.0 ** lv]))
+    cand = np.concatenate(cand) if cand else np.zeros(0, np.int64)
+    if not len(cand):
+        return [], 0
+    cand = _tri_neighbours(dom, np.unique(cand))
+    p, ids = _interior_samples(dom.tris[cand], h0 / 2 ** lmax)
+    ti = cand[ids]
+    lw = tri_level[ti]
+    w = _gap_widths(dom, p, ti, lw, h0, nacross, eps)
     with np.errstate(divide="ignore"):
         need = np.ceil(np.log2(nacross * h0 / w)).astype(float)
     need = np.where(np.isfinite(w), need, -1)
