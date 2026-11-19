@@ -216,6 +216,7 @@ def main(argv=None):
     R = read_mesh(a.case)
     out = a.out or os.path.dirname(os.path.abspath(a.case))
     title = a.title or os.path.basename(out)
+    os.makedirs(out, exist_ok=True)
     for p in render(R, out, title):
         print(p)
     return 0

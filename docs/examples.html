@@ -48,6 +48,17 @@ STL は <code>python make_geometry.py</code> で作ります（solid: <code>tank
 <ul class="stats"><li><span data-stat="tank.cells">102,433</span> セル</li><li><span data-stat="tank.seconds">13.2</span> 秒</li><li>直交格子 + 円筒の回転ゾーン</li></ul>
 <p>翼のまわりに半径 70 mm の円筒の回転ゾーンを置いた例です。円筒は八分木のカットで切断されるので、界面（赤）は粗いセルの所でも円筒面にぴったり乗ります。
 翼（レベル 3）・シャフト（レベル 2）・回転ゾーンの内部（レベル 2）だけを細かくし、槽の壁はレベル 1 です。</p>
+<p class="cmd-label">実行コマンド</p>
+<pre><code>cd examples/stirred_tank
+python make_geometry.py                     # tank.stl と rotor.stl を生成（リポジトリにも入っている）
+cutmesh meshDict.json                       # → case/constant/polyMesh、case/constant/MRFProperties</code></pre>
+<p class="cmd-label">よく使うオプションと確認の道具</p>
+<pre><code>cutmesh meshDict.json -case case_test       # 出力先を変える（meshDict の "case" より優先）
+cutmesh meshDict.json -noCheck              # 最後の品質チェックを省く（大きなメッシュで約 1 割速い）
+python run.py meshDict.json                 # メッシュを作って断面図 slice_z.png・slice_y.png を描く
+python ../../benchmark/render_mesh.py case -o case_pictures    # 3D 図 overview.png・cut.png を描く
+python -m cutmesh.diagnose meshDict.json case                  # 壁越しのリークがないかを検査する
+python ../../tools/edge_check.py meshDict.json                 # 特徴線・円筒の縁を捉えられているか測る</code></pre>
 <figure>
   <a class="img" href="images/tank_cut.png"><img src="images/tank_cut.png" alt="攪拌槽のメッシュ。手前半分のセルを取り除いた 3D 図と、x・y・z の断面" loading="lazy"></a>
   <figcaption>x &lt; 0 のセルだけを残した 3D 図（切り口はベージュ）と、中央の 3 断面</figcaption>
@@ -90,6 +101,10 @@ STL は <code>python make_geometry.py</code> で作ります（solid: <code>tank
 <ul class="stats"><li><span data-stat="cylindrical.cells">136,620</span> セル</li><li><span data-stat="cylindrical.seconds">22</span> 秒</li><li>同心ブロックのベースメッシュ</li></ul>
 <p>八分木の根を、軸まわりの同心ブロック（中心の正方形 + 3 つのリング）にした例です。セルが周方向に並ぶので、回転ゾーンの界面や槽の壁に沿ったメッシュになります。
 ブロックの境界では分割数の比が整数でなくても、面を重ね合わせて適合したメッシュにします。</p>
+<p class="cmd-label">実行コマンド</p>
+<pre><code>cd examples/stirred_tank
+cutmesh meshDict_cylindrical.json           # → case_cylindrical/
+python run.py meshDict_cylindrical.json     # 断面図も描く場合</code></pre>
 <figure>
   <a class="img" href="images/cylindrical_slices.png"><img src="images/cylindrical_slices.png" alt="円筒ベースメッシュの水平断面と、その中央の拡大" loading="lazy"></a>
   <figcaption>翼の中央の高さの水平断面と、回転ゾーンのまわりの拡大</figcaption>
@@ -115,6 +130,15 @@ STL は <code>python make_geometry.py</code> で作ります（solid: <code>tank
 <h3>境界層（<code>meshDict_layers.json</code>）</h3>
 <ul class="stats"><li><span data-stat="layers.cells">163,633</span> セル</li><li><span data-stat="layers.seconds">14.9</span> 秒</li><li>全壁に 3 層</li></ul>
 <p>回転ゾーンの例に、すべての壁パッチへ 3 層のプリズム層を加えた例です。回転ゾーンの界面にかかる所では、層の側面も界面の円筒面に乗ったままです。</p>
+<p class="cmd-label">実行コマンド</p>
+<pre><code>cd examples/stirred_tank
+cutmesh meshDict_layers.json                # 生成のあとに層を追加 → case_layers/</code></pre>
+<p class="cmd-label">層だけを後から付ける場合（既存のメッシュに）</p>
+<pre><code>cutmesh meshDict.json                       # 層のないメッシュ → case/
+python -m cutmesh.layers case meshDict_layers.json -out case_layers_later
+    # 2 つ目の引数のファイルの "addLayers" を使う（省略すると既定値: 3 層）
+    # -out: 書き出し先（省略すると入力のメッシュを上書き）
+    # -noCheck: 品質チェックを省く / -ascii・-binary: 書き出し形式（既定は入力と同じ）</code></pre>
 <figure>
   <a class="img" href="images/layers_slices.png"><img src="images/layers_slices.png" alt="境界層つきの鉛直断面と、槽の底と側壁の角の拡大" loading="lazy"></a>
   <figcaption>鉛直断面（y = 0）と、槽の底と側壁の角の拡大</figcaption>
@@ -131,6 +155,14 @@ STL は <code>python make_geometry.py</code> で作ります（solid: <code>tank
 回転ゾーンの界面はその隙間の中央（翼から 0.5 mm）に置きます。界面と両側の壁の間にそれぞれセルが入るように、
 <code>wallProximity</code> で壁に近い部分の界面だけを細かくし、<code>autoGapRefinement</code> で隙間に面した壁を細かくします。</p>
 <p>STL は <code>python make_geometry.py --stator 1</code> で作ります。リングの内面は solid <code>statorInner</code>、それ以外は <code>stator</code> です。</p>
+<p class="cmd-label">実行コマンド</p>
+<pre><code>cd examples/stirred_tank
+python make_geometry.py --stator 1          # tank_stator_1mm.stl を生成（--stator の後は隙間の幅 [mm]）
+cutmesh meshDict_stator_1mm.json            # → case_stator_1mm/（約 60 万セル、約 2 分、メモリ 約 5 GB）
+python -m cutmesh.diagnose meshDict_stator_1mm.json case_stator_1mm   # 隙間で壁越しにつながっていないか</code></pre>
+<p class="cmd-label">隙間 0.5 mm の場合</p>
+<pre><code>python make_geometry.py --stator 0.5        # tank_stator_0.5mm.stl
+cutmesh meshDict_stator.json                # 約 200 万セル。15 GB を超えるメモリが必要</code></pre>
 <figure>
   <a class="img" href="images/stator_gap.png"><img src="images/stator_gap.png" alt="翼と固定リングの水平断面、翼の先端の 2 mm 角の拡大、翼の上端の角の鉛直断面" loading="lazy"></a>
   <figcaption>左: 翼の中央の高さの水平断面。中: 翼の先端の拡大（幅 2 mm）。右: 翼の先端の上端の角（鉛直断面）。界面（赤）の内側は回転ゾーン、外側は静止側</figcaption>
@@ -141,7 +173,7 @@ STL は <code>python make_geometry.py</code> で作ります（solid: <code>tank
   MRF で計算するなら、<code>"conforming": false</code>（セル中心で回転ゾーンを選ぶ）にすれば界面のための細分化が要りません（AMI には使えません）。</p>
 </div>
 <details>
-  <summary>meshDict（隙間 1 mm）</summary>
+  <summary>meshDict_stator_1mm.json</summary>
 <pre><code>{
   "domain": "tank_stator_1mm.stl",
   "baseCellSize": 0.0125,
@@ -162,7 +194,7 @@ STL は <code>python make_geometry.py</code> で作ります（solid: <code>tank
     }
   ],
   "patchTypes": { "top": "wall" },
-  "case": "case_stator"
+  "case": "case_stator_1mm"
 }</code></pre>
 <p>隙間 0.5 mm の設定は <code>examples/stirred_tank/meshDict_stator.json</code> にあります（<code>maxLevel</code>・<code>level</code> を 6 にする）。</p>
 </details>
@@ -170,6 +202,19 @@ STL は <code>python make_geometry.py</code> で作ります（solid: <code>tank
 <h2 id="shapes">形状のテスト集（<code>benchmark/</code>）</h2>
 <p>ベンチマークの人工形状（<code>python benchmark/make_synthetic.py</code> で生成）から 5 つです。どれも外接箱の最長辺の 1/24 をベースセルにし、
 表面をレベル 2 まで細かくしています。各図は、手前半分のセルを取り除いた 3D 図と、中央の 3 断面です。</p>
+<p class="cmd-label">実行コマンド（リポジトリの直下で）</p>
+<pre><code>python benchmark/make_synthetic.py          # 人工形状の STL を benchmark/data/synthetic/ に生成
+python benchmark/run_bench.py benchmark/suites/synthetic.json --only sphere --only torus --keep --out benchmark/results/shapes
+    # --only: ケース名で絞る（ワイルドカード可: "thin_*"） / --keep: 合格したケースの polyMesh も残す
+    # --out: 出力先 → benchmark/results/shapes/cases/sphere/ に case/constant/polyMesh、
+    #        meshDict.json（使った設定）、overview.png・cut.png（画像）、log.txt（cutmesh のログ）
+    #        benchmark/results/shapes/summary.md に判定・セル数・品質・時間の一覧</code></pre>
+<p class="cmd-label">ほかのオプション</p>
+<pre><code>python benchmark/run_bench.py benchmark/suites/synthetic.json -j 4                  # 26 形状すべてを 4 並列で
+python benchmark/run_bench.py benchmark/suites/synthetic.json --cells-across 48 --only cube_rotated   # 解像度を 2 倍に
+python benchmark/run_bench.py benchmark/suites/synthetic.json --set addLayers='{"nLayers": 3}'      # 全ケースに境界層
+python benchmark/run_bench.py benchmark/suites/synthetic.json --baseline benchmark/baselines/synthetic.json  # 基準と比べる
+python benchmark/stl_check.py benchmark/data/synthetic/torus.stl                    # STL の診断だけ（開いた辺など）</code></pre>
 <div class="grid two">
   <figure>
     <a class="img" href="images/shape_sphere.png"><img src="images/shape_sphere.png" alt="球の内部のメッシュ" loading="lazy"></a>

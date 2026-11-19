@@ -38,7 +38,15 @@
     <li><a href="#format">書き出し形式</a></li>
     <li><a href="#rust">高速化（Rust 拡張）</a></li>
     <li><a href="#checks">設定と入力の検査</a></li>
-    <li><a href="#tools">診断ツール</a></li>
+    <li><a href="#tools">コマンドとオプション</a>
+      <ol>
+        <li><a href="#cmd-cutmesh">cutmesh</a></li>
+        <li><a href="#cmd-layers">境界層の追加</a></li>
+        <li><a href="#cmd-check">メッシュの確認</a></li>
+        <li><a href="#cmd-bench">ベンチマーク</a></li>
+        <li><a href="#cmd-misc">そのほか</a></li>
+      </ol>
+    </li>
     <li><a href="#limits">既知の制約</a></li>
   </ol>
 </nav>
@@ -288,13 +296,68 @@ CUTMESH_NO_RUST=1 python -m cutmesh meshDict.json   # Python の処理を強制�
 <code>domain STL check: closed, consistently oriented, N triangles</code> と出ます。メッシュの完成後には、メッシュの体積を STL の体積と比べます
 （<code>volume check: mesh ..., STL ... (+x%)</code>）。</p>
 
-<h2 id="tools">診断ツール</h2>
+<h2 id="tools">コマンドとオプション</h2>
+<p>パスはリポジトリの直下から実行する場合のものです。<code>pip install -e .</code> をすれば <code>cutmesh</code> と <code>python -m cutmesh.*</code> はどこからでも使えます。</p>
+
+<h3 id="cmd-cutmesh">メッシュの生成: <code>cutmesh</code></h3>
+<pre><code>cutmesh meshDict.json [-case DIR] [-noCheck]      # python -m cutmesh でも同じ</code></pre>
+<div class="table-wrap"><table>
+  <tr><th>オプション</th><th>意味</th></tr>
+  <tr><td><code>-case DIR</code></td><td>出力先のケースディレクトリ（meshDict の <code>case</code> より優先）</td></tr>
+  <tr><td><code>-noCheck</code></td><td>生成後の品質チェックを省く</td></tr>
+  <tr><td><code>-h</code>, <code>--help</code></td><td>使い方を表示する</td></tr>
+</table></div>
+<p>終了コード: 0 = 成功、1 = 設定や STL のエラー（<code>ERROR: ...</code> と表示）、2 = 引数の誤り。</p>
+
+<h3 id="cmd-layers">境界層の追加: <code>python -m cutmesh.layers</code></h3>
+<pre><code>python -m cutmesh.layers CASE [layerDict.json] [-out CASE2] [-noCheck] [-ascii | -binary]</code></pre>
+<div class="table-wrap"><table>
+  <tr><th>引数・オプション</th><th>意味</th></tr>
+  <tr><td><code>CASE</code></td><td>層を付けるメッシュのケース（<code>CASE/constant/polyMesh</code>）</td></tr>
+  <tr><td><code>layerDict.json</code></td><td>層の設定（<a href="#layers">境界層</a>の表のキー）。meshDict を渡すと、その <code>addLayers</code> を使う。省略すると既定値</td></tr>
+  <tr><td><code>-out CASE2</code></td><td>書き出し先（省略すると <code>CASE</code> を上書き）</td></tr>
+  <tr><td><code>-noCheck</code></td><td>品質チェックを省く</td></tr>
+  <tr><td><code>-ascii</code> / <code>-binary</code></td><td>書き出し形式（省略すると入力と同じ）</td></tr>
+</table></div>
+
+<h3 id="cmd-check">メッシュの確認</h3>
 <div class="table-wrap"><table>
   <tr><th>コマンド</th><th>内容</th></tr>
-  <tr><td><code>python -m cutmesh.diagnose meshDict.json [CASE]</code></td><td>既存のメッシュで、流体が固体の壁を越えてつながっていないかを調べる（<code>checkLeaks</code> と同じ検査）</td></tr>
-  <tr><td><code>python tools/edge_check.py meshDict.json [-case DIR]</code></td><td>STL の特徴線と円筒ゾーンの縁に沿って、最寄りのメッシュの辺までの距離を最小セル寸法比で表示する（捉えられていれば 0）</td></tr>
-  <tr><td><code>python benchmark/render_mesh.py CASE</code></td><td>メッシュの画像（壁面の 3D 図と、内部の断面図）を描く。品質の悪いセルは赤</td></tr>
-  <tr><td><code>python benchmark/run_bench.py SUITE</code></td><td>多数の STL をまとめて通し、失敗・警告・品質の低下と時間を一覧にする（<code>benchmark/README.md</code>）</td></tr>
+  <tr><td><code>python -m cutmesh.diagnose meshDict.json [CASE]</code></td><td>流体が固体の壁を越えてつながっていないかを調べる（<code>checkLeaks</code> と同じ検査）。<code>CASE</code> を省くと meshDict の <code>case</code>。見つかれば終了コード 1</td></tr>
+  <tr><td><code>python tools/edge_check.py meshDict.json [-case DIR]</code></td><td>STL の特徴線と円筒ゾーンの縁に沿って、最寄りのメッシュの辺までの距離を最小セル寸法比で表示する（捉えられていれば 0）。メッシュを作り直して測る。<code>-case</code> を付けるとそのメッシュも書き出す</td></tr>
+  <tr><td><code>python benchmark/render_mesh.py CASE [-o OUT] [--title NAME]</code></td><td>3D 図（<code>overview.png</code>: 壁面、<code>cut.png</code>: 内部の切り口と 3 断面）を描く。品質の悪いセルは赤。<code>-o</code> の既定は CASE の親ディレクトリ</td></tr>
+  <tr><td><code>python benchmark/stl_check.py model.stl [...] [--json]</code></td><td>入力 STL の診断（開いた辺、非多様体の辺、向きの不一致、重複・面積 0 の三角形、部品の数、体積）</td></tr>
+</table></div>
+
+<h3 id="cmd-bench">ベンチマーク: <code>benchmark/run_bench.py</code></h3>
+<p>多数の STL をまとめて通し、判定（PASS / WARN / INVALID / ERROR）・セル数・品質・時間を一覧にします。1 ケースずつ別のプロセスで動くので、落ちても他のケースは続きます。</p>
+<pre><code>python benchmark/make_synthetic.py                           # 人工形状の STL を生成（初回だけ）
+python benchmark/run_bench.py benchmark/suites/synthetic.json [オプション]</code></pre>
+<div class="table-wrap"><table>
+  <tr><th>オプション</th><th>意味</th></tr>
+  <tr><td><code>-j N</code></td><td>N ケースを並列に走らせる（時間を比べるときは 1 にする）</td></tr>
+  <tr><td><code>--only PATTERN</code></td><td>ケース名で絞る（ワイルドカード可。複数回指定できる）</td></tr>
+  <tr><td><code>--cells-across N</code></td><td>全ケースのベースセルを「外接箱の最長辺 / N」にする（既定 24）</td></tr>
+  <tr><td><code>--set KEY=JSON</code></td><td>全ケースの meshDict のキーを上書きする（例: <code>--set addLayers='{"nLayers": 3}'</code>）</td></tr>
+  <tr><td><code>--keep</code></td><td>合格したケースの polyMesh も残す（既定では消す）</td></tr>
+  <tr><td><code>--no-images</code></td><td>画像を描かない</td></tr>
+  <tr><td><code>--out DIR</code></td><td>出力先（既定 <code>benchmark/results/&lt;スイート&gt;-&lt;日時&gt;</code>）</td></tr>
+  <tr><td><code>--baseline FILE</code></td><td>過去の結果と比べ、悪化があれば終了コード 1</td></tr>
+  <tr><td><code>--save-baseline</code></td><td>結果を <code>benchmark/baselines/&lt;スイート&gt;.json</code> に保存する</td></tr>
+  <tr><td><code>--timeout SEC</code></td><td>1 ケースの時間の上限（既定 900 秒）</td></tr>
+  <tr><td><code>--vol-tol X</code></td><td>体積の差がこの割合を超えたら WARN（既定 0.01）</td></tr>
+  <tr><td><code>--strict</code></td><td>checkMesh より厳しい判定（面の三角形分割の四面体）も WARN に数える</td></tr>
+</table></div>
+<p>スイート: <code>synthetic.json</code>（人工形状 26 個）、<code>large.json</code>（約 100 万セル・回転ゾーンなど、速さの確認用）、<code>local.json</code>（手元の実形状）。詳しくは <code>benchmark/README.md</code>。</p>
+
+<h3 id="cmd-misc">そのほか</h3>
+<div class="table-wrap"><table>
+  <tr><th>コマンド</th><th>内容</th></tr>
+  <tr><td><code>python tools/build_rust.py [--debug]</code></td><td>Rust 拡張をビルドしてパッケージに置く（cargo が必要）</td></tr>
+  <tr><td><code>python examples/stirred_tank/make_geometry.py [--stator GAP_MM]</code></td><td>攪拌槽の STL を生成する。<code>--stator</code> で翼の外側に隙間 GAP_MM の固定リングを付ける</td></tr>
+  <tr><td><code>python examples/stirred_tank/run.py [meshDict]</code></td><td>例題のメッシュを作って断面図（<code>slice_z.png</code>, <code>slice_y.png</code>）を描く</td></tr>
+  <tr><td><code>python tools/make_docs_images.py [--only NAME ...]</code></td><td>このサイトの画像を作り直す</td></tr>
+  <tr><td><code>CUTMESH_NO_RUST=1</code></td><td>環境変数。Rust 拡張があっても Python の処理を使う（比較用）</td></tr>
 </table></div>
 
 <h2 id="limits">既知の制約</h2>
