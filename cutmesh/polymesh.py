@@ -155,9 +155,12 @@ def write_polymesh(case_dir, points, faces, owner, neighbour, patches,
         f.write(f"{len(patches)}\n(\n")
         for p in patches:
             f.write(f"    {p['name']}\n    {{\n        type            {p['type']};\n")
-            if p["type"] == "wall":
-                f.write("        inGroups        List<word> 1(wall);\n")
-            f.write(f"        nFaces          {p['nFaces']};\n        startFace       {p['startFace']};\n    }}\n")
+            if p["type"] in ("wall", "cyclicAMI"):
+                f.write(f"        inGroups        List<word> 1({p['type']});\n")
+            f.write(f"        nFaces          {p['nFaces']};\n        startFace       {p['startFace']};\n")
+            for k, v in (p.get("extra") or {}).items():      # e.g. neighbourPatch of a cyclicAMI
+                f.write(f"        {k:<15} {v};\n")
+            f.write("    }\n")
         f.write(")\n")
     if cell_zones:
         with _open(d, "cellZones", "regIOobject") as f:

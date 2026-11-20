@@ -22,7 +22,7 @@ class ConfigError(ValueError):
 OTHER_KEYS = {"domain", "baseCellSize", "gapRefinement", "autoGapRefinement", "case",
               "addLayers", "baseMesh"}
 ZONE_KEYS = {"name", "cylinder", "stl", "origin", "axis", "surfaceLevel", "volumeLevel", "omega",
-             "nonRotatingPatches", "wallProximity", "conforming"}
+             "nonRotatingPatches", "wallProximity", "conforming", "ami"}
 CYLINDER_KEYS = {"point1", "point2", "radius", "origin"}
 BASEMESH_KEYS = {"type", "origin", "axis", "zRange", "nz", "dz", "core", "blocks", "maxSizeRatio"}
 
@@ -161,10 +161,13 @@ def validate_config(cfg, log=None, layer_keys=None):
     c.num(cfg["mergeMaxNonOrtho"], "mergeMaxNonOrtho", lo=0, hi=90, lo_open=True)
     c.num(cfg["thinCutFraction"], "thinCutFraction", lo=0, hi=1, lo_open=True, hi_open=True)
     c.num(cfg["minRegionVolume"], "minRegionVolume", lo=0, hi=1, hi_open=True)
-    for k in ("checkLeaks", "strictInput", "writeMRFProperties", "mergeWallFaces"):
+    for k in ("checkLeaks", "strictInput", "writeMRFProperties", "mergeWallFaces", "writeDynamicMeshDict"):
         c.bool_(cfg[k], k)
     if cfg["hangingSnap"] not in ("free", "constrained"):
         c.err(f"hangingSnap must be \"free\" or \"constrained\", got {cfg['hangingSnap']!r}")
+    if cfg["openfoam"] not in ("com", "org10", "org11", "org12"):
+        c.err(f"openfoam must be \"com\" (openfoam.com) or \"org10\", \"org11\", \"org12\""
+              f" (openfoam.org), got {cfg['openfoam']!r}")
     if cfg["writeFormat"] not in ("binary", "ascii"):
         c.err(f"writeFormat must be \"binary\" or \"ascii\", got {cfg['writeFormat']!r}")
     if cfg["featureCaps"] not in ("domain", "zone", "both", True, False, None):
@@ -247,6 +250,11 @@ def validate_config(cfg, log=None, layer_keys=None):
                 c.num(z["omega"], f"{nm}.omega")
             if "conforming" in z:
                 c.bool_(z["conforming"], f"{nm}.conforming")
+            if "ami" in z:
+                c.bool_(z["ami"], f"{nm}.ami")
+                if z["ami"] is True and z.get("conforming", True) is False:
+                    c.err(f"{nm}: \"ami\": true needs a conforming interface (\"conforming\": false"
+                          " only selects cells by their centre)")
             nr = z.get("nonRotatingPatches", [])
             if c.list_(nr, f"{nm}.nonRotatingPatches") and not all(isinstance(p, str) for p in nr):
                 c.err(f"{nm}.nonRotatingPatches must be a list of patch names, got {nr!r}")

@@ -47,6 +47,8 @@ DEFAULTS = {
     "rotatingZones": [],
     "writeMRFProperties": True,
     "writeFormat": "binary",    # polyMesh points/faces/owner/neighbour: "binary" or "ascii"
+    "openfoam": "com",          # sliding-mesh patches and dynamicMeshDict: "com" (ESI) or "org10"/"org11"/"org12"
+    "writeDynamicMeshDict": True,   # with "ami" zones: constant/dynamicMeshDict (solid-body rotation)
 }
 
 
@@ -104,7 +106,8 @@ def build_zones(cfg, log=None):
                           axis=np.asarray(axis, float), omega=z.get("omega", 0.0),
                           nonRotatingPatches=z.get("nonRotatingPatches", []),
                           wallProximity=z.get("wallProximity"),
-                          conforming=bool(z.get("conforming", True))))
+                          conforming=bool(z.get("conforming", True)),
+                          ami=bool(z.get("ami", False))))
     return zones
 
 
@@ -2219,10 +2222,40 @@ def run(config_path, case_dir=None, log=print, check=True):
                 fz[name + "_interface"] = (f, ~zo[f])        # flip: normal points into zone
             R["face_zones"] = fz
         T("boundary layers")
+    ami_z = [z for z in R["zones"] if z["ami"]]
+    if ami_z:
+        from . import ami
+        for z in ami_z:
+            err = ami.axisymmetry_error(R, z["name"], z["geom"], z["origin"], z["axis"])
+            hz = float(cfg["baseCellSize"]) / 2 ** max(int(z["surfaceLevel"]), 0)
+            if err > 0.05 * hz:
+                log(f"WARNING: zone '{z['name']}': its interface is not a surface of revolution about"
+                    f" the axis {list(np.round(z['axis'], 6))} through {list(np.round(z['origin'], 6))}"
+                    f" (turned by 7 degrees it is {err:.3g} off itself): the zone cannot slide."
+                    " Check origin / axis")
+            R = ami.split_interface(R, z["name"], cfg["openfoam"])
+            st = R["ami_split"][z["name"]]
+            log(f"zone '{z['name']}': {st['faces']} interface faces -> sliding-mesh patches "
+                + " / ".join(ami.patch_names(z["name"], cfg["openfoam"]))
+                + f", {st['points']} points duplicated on the zone side")
+        T("sliding-mesh interfaces")
     write_polymesh(case_dir, R["points"], R["faces"], R["owner"], R["neighbour"], R["patches"],
                    R["cell_zones"], R["face_zones"], fmt=cfg["writeFormat"])
-    if cfg["writeMRFProperties"] and R["zones"]:
-        write_mrf(case_dir, R["zones"])
+    mrf_z = [z for z in R["zones"] if not z["ami"]]
+    if cfg["writeMRFProperties"] and mrf_z:
+        write_mrf(case_dir, mrf_z)
+    if ami_z:
+        # an MRFProperties left from an earlier run must not keep the zones that now turn
+        # with the mesh (rotating-frame terms on top of the motion)
+        nd = ami.drop_mrf_entries(case_dir, [z["name"] for z in ami_z])
+        if nd:
+            log(f"MRFProperties: removed {nd} entr{'y' if nd == 1 else 'ies'} of sliding-mesh zones")
+    if ami_z and cfg["writeDynamicMeshDict"]:
+        ami.write_dynamic_mesh_dict(case_dir, ami_z, cfg["openfoam"])
+    if ami_z:
+        hint = ami.couple_hint([z["name"] for z in ami_z], cfg["openfoam"])
+        if hint:
+            log(f"sliding mesh (openfoam.org): after reading the mesh run {hint}")
     T("write polyMesh")
     if check:
         R["quality"] = quality.check(R["points"], R["faces"], R["owner"], R["neighbour"], log=log)

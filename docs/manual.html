@@ -33,6 +33,7 @@
       </ol>
     </li>
     <li><a href="#zones">回転ゾーン</a></li>
+    <li><a href="#ami">スライディングメッシュ（AMI）</a></li>
     <li><a href="#cylbase">円筒ベースメッシュ</a></li>
     <li><a href="#layers">境界層</a></li>
     <li><a href="#format">書き出し形式</a></li>
@@ -42,6 +43,7 @@
       <ol>
         <li><a href="#cmd-cutmesh">cutmesh</a></li>
         <li><a href="#cmd-layers">境界層の追加</a></li>
+        <li><a href="#cmd-ami">スライディングメッシュへの変換</a></li>
         <li><a href="#cmd-check">メッシュの確認</a></li>
         <li><a href="#cmd-bench">ベンチマーク</a></li>
         <li><a href="#cmd-misc">そのほか</a></li>
@@ -158,7 +160,9 @@ python run.py                         # 断面図も欲しい場合 → slice_z.
   <tr><td><code>strictInput</code></td><td>STL に開いた辺・非多様体の辺があるとき、警告ではなくエラーで止める</td><td>false</td></tr>
   <tr><td><code>volumeCheckTolerance</code></td><td>メッシュの体積と STL の体積の差がこの割合を超えたら警告する</td><td>0.05</td></tr>
   <tr><td><code>writeFormat</code></td><td>polyMesh の形式: <code>"binary"</code> または <code>"ascii"</code>（<a href="#format">書き出し形式</a>）</td><td><code>"binary"</code></td></tr>
-  <tr><td><code>writeMRFProperties</code></td><td>回転ゾーンがあるとき <code>constant/MRFProperties</code> の雛形を書く</td><td>true</td></tr>
+  <tr><td><code>writeMRFProperties</code></td><td>回転ゾーンがあるとき <code>constant/MRFProperties</code> の雛形を書く（<code>"ami": true</code> のゾーンは除く）</td><td>true</td></tr>
+  <tr><td><code>openfoam</code></td><td>スライディングメッシュの書き方: <code>"com"</code>（openfoam.com / ESI）、<code>"org10"</code>・<code>"org11"</code>・<code>"org12"</code>（openfoam.org）（<a href="#ami">スライディングメッシュ</a>）</td><td><code>"com"</code></td></tr>
+  <tr><td><code>writeDynamicMeshDict</code></td><td><code>"ami": true</code> のゾーンがあるとき <code>constant/dynamicMeshDict</code> を書く</td><td>true</td></tr>
 </table></div>
 
 <h2 id="zones">回転ゾーン（<code>rotatingZones</code>）</h2>
@@ -179,6 +183,7 @@ python run.py                         # 断面図も欲しい場合 → slice_z.
   <tr><td><code>omega</code></td><td>角速度 [rad/s]（MRFProperties に書く）</td></tr>
   <tr><td><code>nonRotatingPatches</code></td><td>ゾーン内でも回転させないパッチ</td></tr>
   <tr><td><code>wallProximity</code></td><td><code>{"distance": d, "level": L}</code>: ゾーンの面のうち STL から <code>d</code> 以内の部分だけを <code>L</code> まで細分化する。界面を壁すれすれに置く（狭い隙間の中に置く）場合に、ゾーン面全体を細かくせずに済む</td></tr>
+  <tr><td><code>ami</code></td><td><code>true</code> にすると、界面をスライディングメッシュ用の 2 つのパッチに分け、<code>dynamicMeshDict</code> を書く（<a href="#ami">スライディングメッシュ</a>）</td></tr>
   <tr><td><code>conforming</code></td><td><code>false</code> にすると界面をメッシュに沿わせず、セル中心が円筒内にあるセルを cellZone にする（MRF 用。AMI には使えない）。界面が狭い隙間の中にあって沿わせられない場合に使う</td></tr>
 </table></div>
 <p>出力: <code>cellZones</code>（回転領域）、<code>faceZones</code>（<code>&lt;name&gt;_interface</code>: 円筒界面、向きつき）、
@@ -188,6 +193,31 @@ python run.py                         # 断面図も欲しい場合 → slice_z.
   <code>wallProximity</code> の <code>level</code> を「隙間の半分 ≧ セル寸法」になるように選びます。隙間が狭いほどセル数が急に増えます
   （<a href="examples.html#stator">実行例: ローター・ステーター</a>）。</p>
 </div>
+
+<h2 id="ami">スライディングメッシュ（AMI）</h2>
+<p>回転ゾーンに <code>"ami": true</code> を付けると、界面の内部面を、回転側のセルが持つ面と静止側のセルが持つ面の 2 つのパッチに分け、
+界面の点を回転側だけ複製して切り離します（OpenFOAM の <code>createBaffles</code> と <code>mergeOrSplitBaffles -split</code> / <code>splitBaffles</code> をまとめて行うのと同じ）。
+境界層は分ける前に付けます。あわせて <code>constant/dynamicMeshDict</code>（cellZone の剛体回転）を書きます。このゾーンは <code>MRFProperties</code> には書きません。</p>
+<pre><code>"rotatingZones": [
+  { "name": "rotor",
+    "cylinder": { "point1": [0, 0, 0.06], "point2": [0, 0, 0.14], "radius": 0.07 },
+    "surfaceLevel": 2, "volumeLevel": 2, "omega": 31.416,
+    "ami": true }
+],
+"openfoam": "com"</code></pre>
+<p>書き方は OpenFOAM の配布元によって違うので、<code>openfoam</code> で選びます。</p>
+<div class="table-wrap"><table>
+  <tr><th><code>openfoam</code></th><th>パッチ（回転側 / 静止側）</th><th>dynamicMeshDict</th><th>OpenFOAM での手順</th></tr>
+  <tr><td><code>"com"</code>（既定）</td><td><code>&lt;name&gt;_AMI1</code> / <code>&lt;name&gt;_AMI2</code>、型 <code>cyclicAMI</code></td><td><code>dynamicMotionSolverFvMesh</code> + <code>solidBody</code></td><td>そのまま使える</td></tr>
+  <tr><td><code>"org10"</code>・<code>"org11"</code>・<code>"org12"</code></td><td><code>&lt;name&gt;_nonCouple1</code> / <code>&lt;name&gt;_nonCouple2</code>、型 <code>patch</code></td><td><code>mover { type motionSolver; ... }</code></td><td><code>createNonConformalCouples -overwrite &lt;name&gt;_nonCouple1 &lt;name&gt;_nonCouple2</code> でつなぐ</td></tr>
+</table></div>
+<ul>
+  <li>界面は回転軸まわりの回転面である必要があります（円筒は常に可）。STL で与えたゾーンが回転面でない、または <code>origin</code>・<code>axis</code> がずれていると警告します。</li>
+  <li><code>"conforming": false</code> のゾーンには使えません。複数のゾーンは、openfoam.com では <code>multiSolidBodyMotionSolver</code>、openfoam.org では <code>motionSolverList</code> で書きます。</li>
+  <li>既存のメッシュは <code>python -m cutmesh.ami</code> で後から変換できます（<a href="#cmd-ami">コマンドとオプション</a>）。</li>
+</ul>
+<div class="warn"><p>書き方は各配布元のチュートリアル（openfoam.com: <code>interFoam/RAS/mixerVesselAMI</code>、openfoam.org 10〜12: <code>mixerVessel2D</code>）に合わせていますが、
+OpenFOAM 本体で読み込んで回すことはまだ確認していません。cutmesh の中では、回転側の点を実際に回してもセルが壊れず、界面が円筒の上に残ることを確かめています。</p></div>
 
 <h2 id="cylbase">円筒ベースメッシュ（<code>baseMesh</code>）</h2>
 <p>回転機械向けに、八分木の根を直交格子の代わりに軸まわりの同心ブロックにできます。</p>
@@ -317,6 +347,18 @@ CUTMESH_NO_RUST=1 python -m cutmesh meshDict.json   # Python の処理を強制�
   <tr><td><code>layerDict.json</code></td><td>層の設定（<a href="#layers">境界層</a>の表のキー）。meshDict を渡すと、その <code>addLayers</code> を使う。省略すると既定値</td></tr>
   <tr><td><code>-out CASE2</code></td><td>書き出し先（省略すると <code>CASE</code> を上書き）</td></tr>
   <tr><td><code>-noCheck</code></td><td>品質チェックを省く</td></tr>
+  <tr><td><code>-ascii</code> / <code>-binary</code></td><td>書き出し形式（省略すると入力と同じ）</td></tr>
+</table></div>
+
+<h3 id="cmd-ami">スライディングメッシュへの変換: <code>python -m cutmesh.ami</code></h3>
+<pre><code>python -m cutmesh.ami CASE [-zone NAME ...] [-openfoam com|org10|org11|org12] [-out CASE2] [-noDynamicMeshDict] [-ascii | -binary]</code></pre>
+<div class="table-wrap"><table>
+  <tr><th>引数・オプション</th><th>意味</th></tr>
+  <tr><td><code>CASE</code></td><td>cellZone <code>NAME</code> と faceZone <code>NAME_interface</code> を持つメッシュ（cutmesh が書いたもの）</td></tr>
+  <tr><td><code>-zone NAME</code></td><td>変換するゾーン（複数回指定できる。省略すると、faceZone の対があるゾーンすべて）</td></tr>
+  <tr><td><code>-openfoam</code></td><td>書き方（既定 <code>com</code>）</td></tr>
+  <tr><td><code>-out CASE2</code></td><td>書き出し先（省略すると <code>CASE</code> を上書き）</td></tr>
+  <tr><td><code>-noDynamicMeshDict</code></td><td><code>dynamicMeshDict</code> を書かない（回転の設定は <code>constant/MRFProperties</code> から読む。変換したゾーンの項目は <code>MRFProperties</code> から取り除く）</td></tr>
   <tr><td><code>-ascii</code> / <code>-binary</code></td><td>書き出し形式（省略すると入力と同じ）</td></tr>
 </table></div>
 
