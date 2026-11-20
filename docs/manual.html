@@ -295,7 +295,7 @@ ASCII しか読めないツールに渡すときは <code>"writeFormat": "ascii"
 </div>
 
 <h2 id="rust">高速化（Rust 拡張）</h2>
-<p>最近点・内外判定・符号付き距離、カット、面とセルの重心と体積、境界層の平滑化などを Rust（BVH + rayon による並列化）で計算します。
+<p>最近点・内外判定・符号付き距離、回転ゾーンのカット、面とセルの重心と体積、境界層の平滑化などを Rust（BVH + rayon による並列化）で計算します。
 Rust ツールチェーン（cargo）があれば次でビルドされ、<code>cutmesh/_core</code> が置かれます。無ければ Python/NumPy の処理で動きます（結果は同じ）。</p>
 <pre><code>python tools/build_rust.py                          # cargo build --release + パッケージへコピー
 CUTMESH_NO_RUST=1 python -m cutmesh meshDict.json   # Python の処理を強制（比較用）</code></pre>
@@ -409,7 +409,7 @@ python benchmark/run_bench.py benchmark/suites/synthetic.json [オプション]<
   <li>壁と別の壁が交わる入隅、円筒の縁、格子に沿わない凸の鋭角エッジは、セル寸法程度で面取りされることがある。</li>
   <li>歪度 &gt; 4 の境界面が少数残ることがある（checkMesh では 1 項目の失敗になる可能性がある）。</li>
   <li>メモリは 100 万セルあたり約 5 GB 使う。狭い隙間の中に回転ゾーンの界面を置くと、セル数とメモリが急に増える。</li>
-  <li>幾何の問い合わせ以外（カット、セル統合、組み立て）の多くは Python のままで、時間の大半を占める。</li>
+  <li>幾何の問い合わせと回転ゾーンのカットは Rust 拡張に移したが、STL のカット・セル統合・組み立ては Python のままで、時間の大半を占める。</li>
 </ul>
 </article>
 </main>
