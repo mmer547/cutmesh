@@ -277,6 +277,34 @@ def read_mrf(case_dir):
     return out
 
 
+def drop_mrf_entries(case_dir, names):
+    """Remove the entries of the cellZones names from constant/MRFProperties (the zones now
+    turn with the mesh; an MRF entry left there would add rotating-frame terms on top).
+    Other entries and the rest of the file stay as they are.  Returns the removed count."""
+    p = os.path.join(case_dir, "constant", "MRFProperties")
+    if not names or not os.path.isfile(p):
+        return 0
+    t = open(p).read()
+    names = set(names)
+    removed = 0
+
+    def drop(m):
+        nonlocal removed
+        z = re.search(r"\bcellZone\s+([^\s;]+)\s*;", m.group(0))
+        if z and z.group(1) in names:
+            removed += 1
+            return ""
+        return m.group(0)
+    # top-level entries "name { ... }" (MRF entries hold no nested braces), after the header
+    h = re.search(r"FoamFile\s*\{[^{}]*\}", t)
+    start = h.end() if h else 0
+    body = re.sub(r"(?m)^[ \t]*\w+\s*\{[^{}]*\}[ \t]*\n?", drop, t[start:])
+    if removed:
+        with open(p, "w") as f:
+            f.write(t[:start] + body)
+    return removed
+
+
 def main(argv=None):
     import sys
     from .readfoam import read_mesh
@@ -330,8 +358,11 @@ def main(argv=None):
     dst = out or case
     write_polymesh(dst, m["points"], m["faces"], m["owner"], m["neighbour"], m["patches"],
                    m["cell_zones"], m["face_zones"], fmt=fmt or m.get("format", "binary"))
+    mrf = read_mrf(case)
+    nd = drop_mrf_entries(dst, zones)
+    if nd:
+        print(f"removed {nd} converted zone(s) from {os.path.join(dst, 'constant', 'MRFProperties')}")
     if dyn:
-        mrf = read_mrf(case)
         rz = [dict(name=z, **mrf[z]) for z in zones if z in mrf]
         if len(rz) == len(zones):
             print(f"wrote {write_dynamic_mesh_dict(dst, rz, style)}")

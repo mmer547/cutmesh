@@ -2244,6 +2244,12 @@ def run(config_path, case_dir=None, log=print, check=True):
     mrf_z = [z for z in R["zones"] if not z["ami"]]
     if cfg["writeMRFProperties"] and mrf_z:
         write_mrf(case_dir, mrf_z)
+    if ami_z:
+        # an MRFProperties left from an earlier run must not keep the zones that now turn
+        # with the mesh (rotating-frame terms on top of the motion)
+        nd = ami.drop_mrf_entries(case_dir, [z["name"] for z in ami_z])
+        if nd:
+            log(f"MRFProperties: removed {nd} entr{'y' if nd == 1 else 'ies'} of sliding-mesh zones")
     if ami_z and cfg["writeDynamicMeshDict"]:
         ami.write_dynamic_mesh_dict(case_dir, ami_z, cfg["openfoam"])
     if ami_z:

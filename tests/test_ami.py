@@ -188,6 +188,35 @@ class SlidingMesh(unittest.TestCase):
         self.assertTrue(any(s.startswith("WARNING: zone 'rotor': its interface is not a surface of"
                                          " revolution") for s in logs))
 
+    def test_cli_in_place_drops_converted_mrf_entry(self):
+        # converting a zone in place: its MRF entry goes (the mesh turns it now), the other stays
+        with tempfile.TemporaryDirectory() as d:
+            plain = [dict(z) for z in TWO_ZONES]; plain[0].pop("ami")
+            run(make_case(d, "p", rotatingZones=plain), log=lambda s: None, check=False)
+            case = os.path.join(d, "p")
+            before = open(os.path.join(case, "constant", "MRFProperties")).read()
+            self.assertEqual(ami.main([case, "-zone", "rotor"]), 0)
+            after = open(os.path.join(case, "constant", "MRFProperties")).read()
+            dyn = open(os.path.join(case, "constant", "dynamicMeshDict")).read()
+        self.assertIn("MRF_rotor", before)
+        self.assertNotIn("MRF_rotor", after)
+        self.assertIn("MRF_mrf", after)
+        self.assertIn("FoamFile", after)
+        self.assertIn("omega       10;", dyn)                   # read before the entry went
+
+    def test_rerun_with_all_zones_ami_clears_mrf(self):
+        # a case meshed with MRF zones, meshed again with every zone sliding: no stale entries
+        with tempfile.TemporaryDirectory() as d:
+            plain = [dict(z) for z in TWO_ZONES]; plain[0].pop("ami")
+            run(make_case(d, "r", rotatingZones=plain), log=lambda s: None, check=False)
+            both = [dict(z, ami=True) for z in TWO_ZONES]
+            logs = []
+            run(make_case(d, "r", rotatingZones=both), log=logs.append, check=False)
+            mrf = open(os.path.join(d, "r", "constant", "MRFProperties")).read()
+        self.assertNotIn("MRF_rotor", mrf)
+        self.assertNotIn("MRF_mrf", mrf)
+        self.assertTrue(any("MRFProperties: removed 2 entries" in s for s in logs))
+
     def test_read_mrf(self):
         with tempfile.TemporaryDirectory() as d:
             run(make_case(d, "m", rotatingZones=[dict(TWO_ZONES[1])]), log=lambda s: None, check=False)

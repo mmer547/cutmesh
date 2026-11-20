@@ -358,7 +358,7 @@ CUTMESH_NO_RUST=1 python -m cutmesh meshDict.json   # Python の処理を強制�
   <tr><td><code>-zone NAME</code></td><td>変換するゾーン（複数回指定できる。省略すると、faceZone の対があるゾーンすべて）</td></tr>
   <tr><td><code>-openfoam</code></td><td>書き方（既定 <code>com</code>）</td></tr>
   <tr><td><code>-out CASE2</code></td><td>書き出し先（省略すると <code>CASE</code> を上書き）</td></tr>
-  <tr><td><code>-noDynamicMeshDict</code></td><td><code>dynamicMeshDict</code> を書かない（回転の設定は <code>constant/MRFProperties</code> から読む）</td></tr>
+  <tr><td><code>-noDynamicMeshDict</code></td><td><code>dynamicMeshDict</code> を書かない（回転の設定は <code>constant/MRFProperties</code> から読む。変換したゾーンの項目は <code>MRFProperties</code> から取り除く）</td></tr>
   <tr><td><code>-ascii</code> / <code>-binary</code></td><td>書き出し形式（省略すると入力と同じ）</td></tr>
 </table></div>
 

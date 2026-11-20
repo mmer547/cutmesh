@@ -170,7 +170,8 @@ MRF円筒を置く）場合、隙間より細かいセルが必要ですが、`s
 - 複数のゾーンは、openfoam.com では `multiSolidBodyMotionSolver`、openfoam.org では `motionSolverList` で書く。
 
 既存のメッシュ（faceZone `<name>_interface` と cellZone `<name>` があるもの）は後から変換できます。
-回転の設定は `constant/MRFProperties` から読みます。
+回転の設定は `constant/MRFProperties` から読み、変換したゾーンの項目はそこから取り除きます（メッシュごと回る
+ゾーンに MRF の項が重ならないように。メッシュ生成で `"ami": true` にしたゾーンも、前の実行で書いた項目を取り除く）。
 
 ```bash
 python -m cutmesh.ami CASE [-zone NAME ...] [-openfoam com|org10|org11|org12] [-out CASE2] [-noDynamicMeshDict] [-ascii | -binary]
