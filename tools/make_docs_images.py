@@ -6,8 +6,13 @@ Meshes the examples (stirred tank: rotating zone, cylindrical base, boundary lay
 rotor-stator with a 1 mm gap), a few benchmark shapes and the showcase suite
 (pipes, ducts, a bluff body) (benchmark/make_synthetic.py is
 run first if their STLs are missing), then draws 3D views and plane sections with
-benchmark/render_mesh.py and cutmesh.viz.  Takes about 6 minutes with the Rust extension.
-docs/images/stats.json records cells and times shown on the pages.
+benchmark/render_mesh.py and cutmesh.viz.
+
+Each mesh is made twice: as configured, and with boundary layers (LAYERS added as
+"addLayers"); the pictures of the second get the suffix _layers (e.g. shape_sphere_layers.png),
+which the page shows with its "with layers" switch.  --variant plain / layers makes only one.
+Takes about 15 minutes with the Rust extension.
+docs/images/stats.json records cells, times and quality shown on the pages.
 """
 import argparse
 import json
@@ -35,6 +40,9 @@ TANK = os.path.join(ROOT, "examples", "stirred_tank")
 SYN = os.path.join(ROOT, "benchmark", "data", "synthetic")
 OUT = os.path.join(ROOT, "docs", "images")
 DPI = 110
+# the boundary layers of the "_layers" pictures (= examples/stirred_tank/meshDict_layers.json)
+LAYERS = {"nLayers": 3, "expansionRatio": 1.2, "finalLayerThickness": 0.3}
+VARIANTS = [("", None), ("_layers", LAYERS)]     # (file / stats suffix, addLayers); set by --variant
 
 
 def save(fig, name):
@@ -55,13 +63,35 @@ def mesh(md, work, name, check=True):
     p = os.path.join(work, name + ".json")
     with open(p, "w") as f:
         json.dump(md, f, indent=1)
+    lines = []
     t0 = time.time()
-    R = run(p, log=lambda s: None, check=check)
+    R = run(p, log=lines.append, check=check)
+    R["log"] = lines
     return R, time.time() - t0
 
 
 def n_cells(R):
     return int(max(R["owner"].max(), R["neighbour"].max())) + 1
+
+
+def record(stats, key, R, t):
+    """cells, seconds, quality and (with layers) the share of wall points at full thickness"""
+    import re
+    st = dict(cells=n_cells(R), seconds=round(t, 1))
+    q = R.get("quality")
+    if q:
+        st.update(nonOrtho=round(q["maxNonOrth"], 1), skew=round(q["maxSkewness"], 2))
+    for line in R.get("log", []):
+        m = re.search(r"wall points with full thickness ([\d.]+)%", line)
+        if m:
+            st["layerFull"] = float(m.group(1))
+    stats[key] = st
+
+
+def variants(md):
+    """(suffix, meshDict) for each picture variant: as given, and with boundary layers"""
+    for sfx, lay in VARIANTS:
+        yield sfx, (dict(md, addLayers=lay) if lay is not None else md)
 
 
 def tank_md(name):
@@ -105,14 +135,23 @@ def _trim(im, pad=12):
 def three_d(R, name, title, which="overview"):
     geo = rm._mesh_geometry(R)
     p = os.path.join(OUT, name)
-    (rm.overview if which == "overview" else rm.cut)(R, geo, p, title)
+    if which == "cut":
+        # the title of the 3D view sits on top of the shape, which is low for a wide one: leave it out
+        finish = rm._finish
+        rm._finish = lambda ax, title: finish(ax, "")
+        try:
+            rm.cut(R, geo, p, title)
+        finally:
+            rm._finish = finish
+    else:
+        rm.overview(R, geo, p, title)
     from PIL import Image
     im = Image.open(p).convert("RGB")
     if which == "cut":
         # render_mesh.cut puts the 3D view left and the sections right with a wide gap: close it.
-        # The titles above them are left out (the page says what the picture is).
+        # The figure title above them is left out (the page says what the picture is).
         w, h = im.size
-        left = _trim(im.crop((0, int(0.085 * h), int(0.55 * w), h)))
+        left = _trim(im.crop((0, int(0.05 * h), int(0.55 * w), h)))
         right = _trim(im.crop((int(0.55 * w), int(0.06 * h), w, h)))
         H = max(left.height, right.height)
         out = Image.new("RGB", (left.width + right.width + 20, H), (255, 255, 255))
@@ -131,27 +170,28 @@ LEGEND = "black: STL walls   red: rotor interface (faceZone)   grey: cell faces"
 
 
 def case_tank(work, stats):
-    R, t = mesh(tank_md("meshDict.json"), work, "tank")
-    stats["tank"] = dict(cells=n_cells(R), seconds=round(t, 1))
-    three_d(R, "tank_overview.png", "stirred tank (meshDict.json)")
-    three_d(R, "tank_cut.png", "stirred tank (meshDict.json)", "cut")
-    slices(R, [(2, 0.1001, "z = 0.10 (impeller mid-plane)", None, None),
-               (1, 0.0001, "y = 0 (through the blades)", None, None)], "tank_slices.png", LEGEND)
+    """meshDict.json; its layered variant is meshDict_layers.json (also layers_slices.png)"""
+    for sfx, md in variants(tank_md("meshDict.json")):
+        R, t = mesh(md, work, "tank" + sfx)
+        record(stats, "tank" + sfx, R, t)
+        if not sfx:            # wall faces: the same with layers
+            three_d(R, "tank_overview.png", "stirred tank (meshDict.json)")
+        three_d(R, f"tank_cut{sfx}.png", "stirred tank (meshDict.json)", "cut")
+        slices(R, [(2, 0.1001, "z = 0.10 (impeller mid-plane)", None, None),
+                   (1, 0.0001, "y = 0 (through the blades)", None, None)], f"tank_slices{sfx}.png", LEGEND)
+        if sfx:
+            stats["layers"] = stats["tank" + sfx]
+            slices(R, [(1, 0.0001, "y = 0: 3 boundary layers on every wall", None, None),
+                       (1, 0.0001, "corner of the bottom and the tank wall", (0.118, 0.152), (-0.002, 0.032))],
+                   "layers_slices.png", LEGEND)
 
 
 def case_cylindrical(work, stats):
-    R, t = mesh(tank_md("meshDict_cylindrical.json"), work, "cyl")
-    stats["cylindrical"] = dict(cells=n_cells(R), seconds=round(t, 1))
-    slices(R, [(2, 0.1001, "z = 0.10: cylindrical base mesh", None, None),
-               (2, 0.1001, "close-up", (-0.08, 0.08), (-0.08, 0.08))], "cylindrical_slices.png", LEGEND)
-
-
-def case_layers(work, stats):
-    R, t = mesh(tank_md("meshDict_layers.json"), work, "layers")
-    stats["layers"] = dict(cells=n_cells(R), seconds=round(t, 1))
-    slices(R, [(1, 0.0001, "y = 0: 3 boundary layers on every wall", None, None),
-               (1, 0.0001, "corner of the bottom and the tank wall", (0.118, 0.152), (-0.002, 0.032))],
-           "layers_slices.png", LEGEND)
+    for sfx, md in variants(tank_md("meshDict_cylindrical.json")):
+        R, t = mesh(md, work, "cyl" + sfx)
+        record(stats, "cylindrical" + sfx, R, t)
+        slices(R, [(2, 0.1001, "z = 0.10: cylindrical base mesh", None, None),
+                   (2, 0.1001, "close-up", (-0.08, 0.08), (-0.08, 0.08))], f"cylindrical_slices{sfx}.png", LEGEND)
 
 
 def case_stator(work, stats):
@@ -166,12 +206,14 @@ def case_stator(work, stats):
     z["cylinder"]["radius"] = round(rtip + 0.0005, 6)
     z["wallProximity"] = {"distance": 0.001, "level": 5}
     md.pop("_comment", None)
-    R, t = mesh(md, work, "stator")
-    stats["stator_1mm"] = dict(cells=n_cells(R), seconds=round(t, 1))
-    slices(R, [(2, 0.1001, "z = 0.10: impeller, 1 mm gap, fixed ring", (-0.065, 0.065), (-0.065, 0.065)),
-               (2, 0.1001, "z = 0.10, blade tip (2 mm wide)", (0.0494, 0.0516), (-0.0011, 0.0011)),
-               (1, 0.0001, "y = 0, top corner of the blade tip", (0.0478, 0.0532), (0.1172, 0.1262))],
-           "stator_gap.png", LEGEND, size=(16, 6.0), widths=[1.2, 1, 0.75])
+    for sfx, mdv in variants(md):
+        R, t = mesh(mdv, work, "stator" + sfx)
+        record(stats, "stator_1mm" + sfx, R, t)
+        slices(R, [(2, 0.1001, "z = 0.10: impeller, 1 mm gap, fixed ring", (-0.065, 0.065), (-0.065, 0.065)),
+                   (2, 0.1001, "z = 0.10, blade tip (2 mm wide)", (0.0494, 0.0516), (-0.0011, 0.0011)),
+                   (1, 0.0001, "y = 0, top corner of the blade tip", (0.0478, 0.0532), (0.1172, 0.1262))],
+               f"stator_gap{sfx}.png", LEGEND, size=(16, 6.0), widths=[1.2, 1, 0.75])
+        del R
 
 
 SHAPES = [("sphere", "smooth convex surface"), ("cube_rotated", "sharp edges not aligned with the octree"),
@@ -187,14 +229,15 @@ def case_shapes(work, stats):
         p = os.path.join(SYN, s + ".stl")
         V = np.concatenate([t.reshape(-1, 3) for _, t in read_stl(p)])
         h = float((V.max(0) - V.min(0)).max()) / 24          # as benchmark/suites/synthetic.json
-        R, t = mesh({"domain": p, "baseCellSize": h, "surfaceRefinement": {"default": 2}}, work, s)
-        stats[s] = dict(cells=n_cells(R), seconds=round(t, 1))
-        three_d(R, f"shape_{s}.png", f"{s}: {what}", "cut")
-        if s == "cube_rotated":           # the wall faces show the edges best: with and without
-            three_d(R, f"shape_{s}_walls.png", f"{s}: wall faces (exactFeatureCut on)", "overview")
-            R0, _ = mesh({"domain": p, "baseCellSize": h, "surfaceRefinement": {"default": 2},
-                          "exactFeatureCut": False}, work, s + "_plain")
-            three_d(R0, f"shape_{s}_walls_plain.png", f"{s}: wall faces (exactFeatureCut off)", "overview")
+        for sfx, md in variants({"domain": p, "baseCellSize": h, "surfaceRefinement": {"default": 2}}):
+            R, t = mesh(md, work, s + sfx)
+            record(stats, s + sfx, R, t)
+            three_d(R, f"shape_{s}{sfx}.png", f"{s}: {what}", "cut")
+            if s == "cube_rotated" and not sfx:   # wall faces, with and without the exact cut
+                three_d(R, f"shape_{s}_walls.png", f"{s}: wall faces (exactFeatureCut on)", "overview")
+                R0, _ = mesh({"domain": p, "baseCellSize": h, "surfaceRefinement": {"default": 2},
+                              "exactFeatureCut": False}, work, s + "_plain")
+                three_d(R0, f"shape_{s}_walls_plain.png", f"{s}: wall faces (exactFeatureCut off)", "overview")
 
 
 # Showcase shapes (benchmark/suites/showcase.json): the meshDict comes from the suite; the
@@ -203,7 +246,7 @@ SHOWCASE = {
     "pipe_elbow": dict(panels=[(2, 0.0001, "z = 0: through the bend", None, None),
                                (1, 0.5, "y = 0.5: cross-section of the outlet leg", None, None)],
                        size=(11, 5.6), widths=[1.6, 1]),
-    "helical_coil": dict(view="overview"),
+    "helical_coil": dict(view="overview", view_layers="cut"),   # the wall faces hide the layers
     "venturi": dict(panels=[(1, 0.0001, "y = 0: contraction, throat and 7° diffuser", None, None),
                             (1, 0.0001, "throat", (-0.21, 0.21), (0.35, 0.75))],
                     size=(11, 7.0), widths=[1, 1.1]),
@@ -237,15 +280,17 @@ def case_showcase(work, stats):
     if not all(os.path.exists(os.path.join(SYN, s + ".stl")) for s in SHOWCASE):
         subprocess.run([sys.executable, os.path.join(ROOT, "benchmark", "make_synthetic.py")], check=True)
     for s, fig in SHOWCASE.items():
-        R, t = mesh(showcase_md(s), work, s)
-        stats[s] = dict(cells=n_cells(R), seconds=round(t, 1))
-        if fig.get("view"):
-            three_d(R, f"showcase_{s}.png", s, fig["view"])
-        else:
-            slices(R, fig["panels"], f"showcase_{s}.png", size=fig["size"], widths=fig["widths"])
+        for sfx, md in variants(showcase_md(s)):
+            R, t = mesh(md, work, s + sfx)
+            record(stats, s + sfx, R, t)
+            view = fig.get("view_layers" if sfx else "view", fig.get("view"))
+            if view:
+                three_d(R, f"showcase_{s}{sfx}.png", s, view)
+            else:
+                slices(R, fig["panels"], f"showcase_{s}{sfx}.png", size=fig["size"], widths=fig["widths"])
 
 
-CASES = {"tank": case_tank, "cylindrical": case_cylindrical, "layers": case_layers,
+CASES = {"tank": case_tank, "cylindrical": case_cylindrical,
          "stator": case_stator, "shapes": case_shapes,
          "showcase": case_showcase}
 
@@ -253,8 +298,13 @@ CASES = {"tank": case_tank, "cylindrical": case_cylindrical, "layers": case_laye
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--only", nargs="*", choices=sorted(CASES))
+    ap.add_argument("--variant", choices=["plain", "layers"],
+                    help="make only the pictures without / with boundary layers (default: both)")
     ap.add_argument("--work", help="directory for the meshes (default: a temporary one)")
     a = ap.parse_args(argv)
+    global VARIANTS
+    if a.variant:
+        VARIANTS = [v for v in VARIANTS if bool(v[0]) == (a.variant == "layers")]
     os.makedirs(OUT, exist_ok=True)
     sp = os.path.join(OUT, "stats.json")
     stats = json.load(open(sp)) if os.path.exists(sp) else {}
@@ -281,8 +331,17 @@ def update_page(stats):
         case, key = m.group(1).split(".")
         if case not in stats:
             return m.group(0)
+        if key not in stats[case]:
+            return m.group(0)
         v = stats[case][key]
-        txt = f"{v:,}" if key == "cells" else (f"{v:.0f}" if v >= 20 else f"{v:.1f}")
+        if key == "cells":
+            txt = f"{v:,}"
+        elif key == "skew":
+            txt = f"{v:.1f}"
+        elif key in ("nonOrtho", "layerFull"):
+            txt = f"{v:.0f}" if key == "nonOrtho" else f"{v:.1f}"
+        else:
+            txt = f"{v:.0f}" if v >= 20 else f"{v:.1f}"
         return f'<span data-stat="{m.group(1)}">{txt}</span>'
     with open(p, encoding="utf-8") as f:
         s = f.read()
