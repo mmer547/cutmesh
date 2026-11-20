@@ -826,6 +826,14 @@ def cut_with_fallback(ctx, items, shared_cap, hk, csize, max_iter=4):
     return res, nsharp, nfb
 
 
+def _cat_ranges(lo, hi):
+    """np.concatenate([np.arange(a, b) for a, b in zip(lo, hi)]) without the loop"""
+    lo = np.asarray(lo, np.int64); n = np.asarray(hi, np.int64) - lo
+    if not len(n):
+        return np.zeros(0, np.int64)
+    return np.repeat(lo - np.concatenate([[0], np.cumsum(n)[:-1]]), n) + np.arange(int(n.sum()))
+
+
 def select_clip_cells(pc, cand, faces_of, cells_of_face, special, pts):
     """Cells cut by plane clipping (featclip): the candidates whose surroundings are
     convex, grown so that the faces they share with level-set cells come out the same
@@ -834,17 +842,29 @@ def select_clip_cells(pc, cand, faces_of, cells_of_face, special, pts):
     are cut by the level-set rule in the clipped cell as well."""
     elig = {}
 
+    def cell_pts(c):
+        P = pts[unique(np.concatenate([np.asarray(p, np.int64) for _, p in faces_of(c)]))]
+        return P, 1.5 * float(np.linalg.norm(P - P.mean(0), axis=1).max())
+
     def eligible(c):
         e = elig.get(c)
         if e is None:
             if c in special:
                 e = False
             else:
-                P = pts[unique(np.concatenate([np.asarray(p, np.int64) for _, p in faces_of(c)]))]
-                r = 1.5 * float(np.linalg.norm(P - P.mean(0), axis=1).max())
-                e, _ = pc.convex_at(P, r)
+                e, _ = pc.convex_at(*cell_pts(c))
             elig[c] = e
         return e
+
+    # the candidates in one batch (the neighbours reached below go one by one)
+    cs = [c for c in dict.fromkeys(cand) if c not in special]
+    for c in cand:
+        if c in special:
+            elig[c] = False
+    if cs:
+        Pr = [cell_pts(c) for c in cs]
+        for c, e in zip(cs, pc.convex_many([P for P, _ in Pr], [r for _, r in Pr])):
+            elig[c] = e
 
     compat, around = {}, {}
 
@@ -876,16 +896,31 @@ def select_clip_cells(pc, cand, faces_of, cells_of_face, special, pts):
     # volume.  So next to such a cell the clipped cells go back to the level-set cut (the
     # edge is chamfered there as before), until no such face is left.
     dropped = 0
-    while True:
-        mixed = set(fid for c in E for fid, poly in faces_of(c)
-                    if any(o not in E for o in cells_at(fid) if o != c) and mismatch(fid, poly))
-        hard = set(fid for fid in mixed
-                   if any(o not in E and o not in special for o in cells_at(fid)))
-        if not hard:
-            break
-        bad = set(c for c in E if any(fid in hard for fid, _ in faces_of(c)))
+    polys = {}
+
+    def poly_of(c, fid):
+        d = polys.get(c)
+        if d is None:
+            d = polys[c] = dict(faces_of(c))
+        return d[fid]
+
+    def is_hard(fid):
+        cs = cells_at(fid)
+        if not any(o not in E and o not in special for o in cs):
+            return False
+        return any(c in E and any(o not in E for o in cs if o != c) and mismatch(fid, poly_of(c, fid))
+                   for c in cs)
+
+    # A face's state only depends on which of its cells are in E: after a removal only
+    # the faces of the removed cells can change (every hard face is one of them).
+    hard = set(fid for c in E for fid, _ in faces_of(c) if is_hard(fid))
+    while hard:
+        bad = set(c for fid in hard for c in cells_at(fid) if c in E)
         E -= bad
         dropped += len(bad)
+        hard = set(fid for c in bad for fid, _ in faces_of(c) if is_hard(fid))
+    mixed = set(fid for c in E for fid, poly in faces_of(c)
+                if any(o not in E for o in cells_at(fid) if o != c) and mismatch(fid, poly))
     return E, mixed, dropped
 
 
@@ -1773,7 +1808,7 @@ def generate(cfg, log=print):
         mphi = np.minimum.reduceat(np.minimum.reduceat(phi_d[fverts], fptr[:-1]), cptr[:-1])
         cnd = np.nonzero((cls >= 0) & (mphi < 0.9 * csize))[0]
         if len(cnd):
-            occ_c = np.concatenate([np.arange(fptr[cptr[c]], fptr[cptr[c + 1]]) for c in cnd.tolist()])
+            occ_c = _cat_ranges(fptr[cptr[cnd]], fptr[cptr[cnd + 1]])
             own_c = np.repeat(np.arange(len(cnd)), fptr[cptr[cnd + 1]] - fptr[cptr[cnd]])
             cen = np.zeros((len(cnd), 3)); np.add.at(cen, own_c, pts[fverts[occ_c]])
             cen /= np.bincount(own_c, minlength=len(cnd))[:, None]
@@ -1785,8 +1820,8 @@ def generate(cfg, log=print):
             # wall vertices of these cells a hair off a crease go onto it (as the clip's own
             # points do, make_alloc): left there, the clip keeps a strip of the other wall
             # as narrow as the gap
-            cv = unique(fverts[np.concatenate([np.arange(fptr[cptr[c]], fptr[cptr[c + 1]])
-                                               for c in cnd[ok].tolist()])]) if ok.any() else np.zeros(0, np.int64)
+            cv = unique(fverts[_cat_ranges(fptr[cptr[cnd[ok]]], fptr[cptr[cnd[ok] + 1]])]) \
+                if ok.any() else np.zeros(0, np.int64)
             cv = cv[phi_d[cv] == 0]
             if len(cv):
                 cpv, dv = dom_feat.closest(pts[cv])

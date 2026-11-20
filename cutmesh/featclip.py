@@ -117,6 +117,48 @@ class PlaneClip:
         bad = ((ph < -tol) & (s > tol)) | ((ph > tol) & (s < -tol))
         return not bad.any(), pl
 
+    def convex_many(self, Ps, rs):
+        """convex_at(P, r) for many cells at once (the same result, cell by cell): one
+        neighbour search and one signed-distance call for all of them."""
+        n = len(Ps)
+        out = [False] * n
+        if not n:
+            return out
+        C = np.array([P.mean(0) for P in Ps])
+        rs = np.asarray(rs, float)
+        dom = self.dom
+        if dom._rs is not None and hasattr(dom._rs, "near"):
+            ptr, ids = dom._rs.near(np.ascontiguousarray(C), rs * (1 + 1e-9) + self.eps)
+            tri_of = [ids[ptr[i]:ptr[i + 1]] for i in range(n)]
+        else:
+            tri_of = [self.tris_near(C[i], rs[i]) for i in range(n)]
+        g = np.linspace(0, 1, 4)
+        unit = np.stack(np.meshgrid(g, g, g, indexing="ij"), -1).reshape(-1, 3)
+        todo, Xs, pls = [], [], []
+        for i in range(n):
+            tris = tri_of[i]
+            if not len(tris):
+                continue
+            pl = self.planes(tris)
+            gr = self.groups(pl)
+            if gr.max() > 0 and len(gr) > gr.max() + 1:
+                continue
+            P = Ps[i]
+            lo, hi = P.min(0), P.max(0)
+            Xs.append(np.concatenate([P, lo + (hi - lo) * unit]))
+            todo.append(i); pls.append(pl)
+        if not todo:
+            return out
+        ph_all = self.dom.sdf(np.concatenate(Xs))
+        tol = 1e-6 * self.hmin
+        k = 0
+        for i, X, pl in zip(todo, Xs, pls):
+            ph = ph_all[k:k + len(X)]; k += len(X)
+            s = (X @ self.n[pl].T - self.d[pl]).max(1)
+            bad = ((ph < -tol) & (s > tol)) | ((ph > tol) & (s < -tol))
+            out[i] = not bad.any()
+        return out
+
     def on_one_plane(self, ctx, poly, pl):
         """the polygon lies in one of the planes pl"""
         if not len(pl):
