@@ -135,14 +135,23 @@ def _trim(im, pad=12):
 def three_d(R, name, title, which="overview"):
     geo = rm._mesh_geometry(R)
     p = os.path.join(OUT, name)
-    (rm.overview if which == "overview" else rm.cut)(R, geo, p, title)
+    if which == "cut":
+        # the title of the 3D view sits on top of the shape, which is low for a wide one: leave it out
+        finish = rm._finish
+        rm._finish = lambda ax, title: finish(ax, "")
+        try:
+            rm.cut(R, geo, p, title)
+        finally:
+            rm._finish = finish
+    else:
+        rm.overview(R, geo, p, title)
     from PIL import Image
     im = Image.open(p).convert("RGB")
     if which == "cut":
         # render_mesh.cut puts the 3D view left and the sections right with a wide gap: close it.
-        # The titles above them are left out (the page says what the picture is).
+        # The figure title above them is left out (the page says what the picture is).
         w, h = im.size
-        left = _trim(im.crop((0, int(0.085 * h), int(0.55 * w), h)))
+        left = _trim(im.crop((0, int(0.05 * h), int(0.55 * w), h)))
         right = _trim(im.crop((int(0.55 * w), int(0.06 * h), w, h)))
         H = max(left.height, right.height)
         out = Image.new("RGB", (left.width + right.width + 20, H), (255, 255, 255))
