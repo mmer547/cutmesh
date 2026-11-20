@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>実行例 — cutmesh</title>
-<meta name="description" content="cutmesh で作ったメッシュの例: 攪拌槽（回転ゾーン、円筒ベースメッシュ、境界層）、ローター・ステーターの狭い隙間、形状のテスト集">
+<meta name="description" content="cutmesh で作ったメッシュの例: 攪拌槽（回転ゾーン、円筒ベースメッシュ、境界層）、ローター・ステーターの狭い隙間、形状のテスト集、配管・ダクト・外部流れの例">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -30,6 +30,7 @@
     </li>
     <li><a href="#stator">ローター・ステーター</a></li>
     <li><a href="#shapes">形状のテスト集</a></li>
+    <li><a href="#showcase">実用的な形状</a></li>
     <li><a href="#reproduce">画像の作り方</a></li>
   </ol>
 </nav>
@@ -240,10 +241,68 @@ python benchmark/stl_check.py benchmark/data/synthetic/torus.stl                
 <p>このほかにも、薄い壁・汚れた STL（重複した三角形、開いた辺、向きの混在）など 26 の形状で、失敗・警告・品質の低下を一覧にできます
 （<a href="https://github.com/mmer547/cutmesh/tree/main/benchmark">benchmark/README.md</a>）。</p>
 
+<h2 id="showcase">実用的な形状（<code>benchmark/suites/showcase.json</code>）</h2>
+<p>配管・ダクト・外部流れなど、実際の流れの問題に近い 8 つの形状です。どれも入口・出口を別の solid（パッチ）にした STL で、
+<code>python benchmark/make_synthetic.py</code> で生成します。8 ケースとも、警告・品質フラグなしで PASS します
+（非直交性 &gt; 70° と歪度 &gt; 4 の面が 0、体積の誤差は STL の 0.3% 以内）。図は断面（黒: STL の壁、灰色: セルの面）です。</p>
+<p class="cmd-label">実行コマンド（リポジトリの直下で）</p>
+<pre><code>python benchmark/make_synthetic.py          # STL を benchmark/data/synthetic/ に生成（pipe_elbow.stl など）
+python benchmark/run_bench.py benchmark/suites/showcase.json -j 4 --keep --out benchmark/results/showcase
+    # → benchmark/results/showcase/cases/&lt;名前&gt;/case/constant/polyMesh と meshDict.json（使った設定）
+python benchmark/run_bench.py benchmark/suites/showcase.json --only venturi --keep   # 1 つだけ</code></pre>
+<p>ケースごとの <code>meshDict</code>（<code>baseCellSize</code>・パッチごとの細分化レベル・<code>patchTypes</code>）は
+<code>benchmark/suites/showcase.json</code> にあります。cutmesh を直接使うなら、出力先の <code>meshDict.json</code> をそのまま
+<code>cutmesh meshDict.json</code> に渡せます。</p>
+<div class="grid two">
+  <figure>
+    <a class="img" href="images/showcase_pipe_elbow.png"><img src="images/showcase_pipe_elbow.png" alt="円管の 90 度エルボの断面" loading="lazy"></a>
+    <figcaption><strong>pipe_elbow</strong> — 直径 D の円管の 90° 曲がり（曲率半径 1.5 D）。左は曲がりを通る断面、右は出口側の管の横断面（<span data-stat="pipe_elbow.cells">27,869</span> セル、<span data-stat="pipe_elbow.seconds">4.4</span> 秒、最大非直交 53°）</figcaption>
+  </figure>
+  <figure>
+    <a class="img" href="images/showcase_helical_coil.png"><img src="images/showcase_helical_coil.png" alt="らせん管の壁面メッシュ" loading="lazy"></a>
+    <figcaption><strong>helical_coil</strong> — 2.5 巻きのらせん管（コイル式熱交換器）。壁面をパッチごとに色分け（青: inlet、橙: outlet）（<span data-stat="helical_coil.cells">98,359</span> セル、<span data-stat="helical_coil.seconds">22</span> 秒、最大非直交 62°）</figcaption>
+  </figure>
+  <figure>
+    <a class="img" href="images/showcase_venturi.png"><img src="images/showcase_venturi.png" alt="ベンチュリ管の縦断面とのどの拡大" loading="lazy"></a>
+    <figcaption><strong>venturi</strong> — ベンチュリ管: 余弦形の縮流でのど（0.4 D）へ、7° のディフューザーで戻る（<span data-stat="venturi.cells">24,484</span> セル、<span data-stat="venturi.seconds">4.3</span> 秒、最大非直交 58°）</figcaption>
+  </figure>
+  <figure>
+    <a class="img" href="images/showcase_orifice_pipe.png"><img src="images/showcase_orifice_pipe.png" alt="オリフィス板の縦断面と開口のエッジの拡大" loading="lazy"></a>
+    <figcaption><strong>orifice_pipe</strong> — 円管の中の鋭いエッジのオリフィス板（開口径 0.5 D、板厚 0.1 D）（<span data-stat="orifice_pipe.cells">19,376</span> セル、<span data-stat="orifice_pipe.seconds">3.2</span> 秒、最大歪度 1.4）</figcaption>
+  </figure>
+  <figure>
+    <a class="img" href="images/showcase_backward_step.png"><img src="images/showcase_backward_step.png" alt="バックステップ流路の断面" loading="lazy"></a>
+    <figcaption><strong>backward_step</strong> — バックステップ流れ（拡大比 2）。側面は <code>symmetry</code> パッチ（<span data-stat="backward_step.cells">19,440</span> セル、<span data-stat="backward_step.seconds">1.4</span> 秒、最大非直交 25°）</figcaption>
+  </figure>
+  <figure>
+    <a class="img" href="images/showcase_t_junction.png"><img src="images/showcase_t_junction.png" alt="T 字合流ダクトの断面" loading="lazy"></a>
+    <figcaption><strong>t_junction</strong> — 正方形ダクトの T 字合流（枝管の幅は主管の半分）。入口は <code>inletMain</code>・<code>inletBranch</code> の 2 つ（<span data-stat="t_junction.cells">15,736</span> セル、<span data-stat="t_junction.seconds">1.5</span> 秒、最大非直交 25°）</figcaption>
+  </figure>
+  <figure>
+    <a class="img" href="images/showcase_pin_fins.png"><img src="images/showcase_pin_fins.png" alt="ピンの千鳥配列の水平断面と、ピンのまわりの拡大" loading="lazy"></a>
+    <figcaption><strong>pin_fins</strong> — ダクトを横切る 13 本のピンの千鳥配列（ピンフィン・管群）。ピンだけをレベル 3 に（<span data-stat="pin_fins.cells">63,287</span> セル、<span data-stat="pin_fins.seconds">12.5</span> 秒、最大非直交 39°）</figcaption>
+  </figure>
+  <figure>
+    <a class="img" href="images/showcase_body_in_tunnel.png"><img src="images/showcase_body_in_tunnel.png" alt="風洞の中の物体の縦断面と、物体まわりの拡大" loading="lazy"></a>
+    <figcaption><strong>body_in_tunnel</strong> — 風洞の中の鈍頭物体（丸めた先端、後端に 25° の傾斜、床からのすき間 0.05）。外部流れの例: 物体はレベル 4、床はレベル 1、風洞の側面と天井はレベル 0（<span data-stat="body_in_tunnel.cells">92,311</span> セル、<span data-stat="body_in_tunnel.seconds">12.3</span> 秒、最大非直交 58°）</figcaption>
+  </figure>
+</div>
+<details>
+  <summary>例: body_in_tunnel の meshDict</summary>
+<pre><code>{
+  "domain": "body_in_tunnel.stl",
+  "baseCellSize": 0.08,
+  "surfaceRefinement": { "default": 0, "floor": 1, "body": 4 },
+  "patchTypes": { "inlet": "patch", "outlet": "patch", "walls": "symmetry" },
+  "case": "case"
+}</code></pre>
+<p>solid は <code>inlet</code>, <code>outlet</code>, <code>floor</code>, <code>walls</code>（風洞の側面と天井）, <code>body</code>（法線は物体の内側＝流体の外向き）です。</p>
+</details>
+
 <h2 id="reproduce">画像の作り方</h2>
-<p>このページの画像は、次のスクリプトで作り直せます（Rust 拡張ありで約 5 分）。</p>
+<p>このページの画像は、次のスクリプトで作り直せます（Rust 拡張ありで約 6 分）。</p>
 <pre><code>python tools/make_docs_images.py                 # すべて → docs/images/
-python tools/make_docs_images.py --only stator   # 一部だけ（tank, cylindrical, layers, stator, shapes）</code></pre>
+python tools/make_docs_images.py --only stator   # 一部だけ（tank, cylindrical, layers, stator, shapes, showcase）</code></pre>
 <p>手元のメッシュの画像は <code>python benchmark/render_mesh.py CASE</code>（3D 図と断面図）、または
 <code>examples/stirred_tank/run.py</code> の <code>cutmesh.viz.plot_slice</code>（断面図）で描けます。</p>
 </article>

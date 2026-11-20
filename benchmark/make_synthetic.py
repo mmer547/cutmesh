@@ -6,7 +6,9 @@ Each shape targets one way a cut-cell mesher can break: sharp convex/concave edg
 lying exactly on octree grid planes, thin fluid channels, thin solid walls, acute spikes,
 holes (genus), nested surfaces, several solids, sliver triangles, and dirty input (open
 surface, flipped normals, duplicated/degenerate triangles, non-manifold edge).
-All shapes fit in a box of about 1 x 1 x 1 (units are arbitrary: the suite sets the cell
+It also writes the showcase shapes of suites/showcase.json (pipes, ducts, a body in a wind
+tunnel, with named inlet/outlet patches), which are meant to mesh cleanly.
+All stress shapes fit in a box of about 1 x 1 x 1 (units are arbitrary: the suite sets the cell
 size from the bounding box).
 """
 import os
@@ -211,6 +213,169 @@ def shapes():
     return S
 
 
+# ------------------------------------------------------------------ showcase (suites/showcase.json)
+# Shapes close to real CFD problems, with named inlet/outlet patches.  They are meant to mesh
+# cleanly (PASS) and serve as worked examples; see benchmark/README.md.
+def _disk(ring, centre):
+    """Fan of triangles closing the ring of points (n x 3) at centre."""
+    c = np.broadcast_to(np.asarray(centre, float), ring.shape)
+    return np.stack([c, ring, np.roll(ring, -1, 0)], 1)
+
+
+def _facing(tris, direction):
+    """Flip the triangles whose normal points against direction (3-vector or per triangle)."""
+    tris = np.array(tris, float)
+    n = np.cross(tris[:, 1] - tris[:, 0], tris[:, 2] - tris[:, 0])
+    d = np.broadcast_to(np.asarray(direction, float), n.shape)
+    bad = np.einsum("ij,ij->i", n, d) < 0
+    tris[bad] = tris[bad][:, ::-1]
+    return tris
+
+
+def _volume(tris):
+    return float(np.einsum("ij,ij->i", tris[:, 0], np.cross(tris[:, 1], tris[:, 2])).sum() / 6)
+
+
+def sweep_tube(path, r, n=40):
+    """Circular tube of radius r along the polyline path (m x 3), parallel-transport frames.
+    Returns (wall, start cap, end cap), all facing out of the tube."""
+    path = np.asarray(path, float)
+    T = np.gradient(path, axis=0)
+    T /= np.linalg.norm(T, axis=1, keepdims=True)
+    a = np.array([0, 0, 1.0]) if abs(T[0, 2]) < 0.9 else np.array([1.0, 0, 0])
+    N = np.cross(T[0], a); N /= np.linalg.norm(N)
+    th = np.linspace(0, 2 * np.pi, n + 1)[:-1]
+    rings, Ns = [], []
+    for k in range(len(path)):
+        if k:
+            N = N - T[k] * (N @ T[k]); N /= np.linalg.norm(N)
+        B = np.cross(T[k], N)
+        rings.append(path[k] + r * (np.cos(th)[:, None] * N + np.sin(th)[:, None] * B))
+    R = np.array(rings)                                   # (m, n, 3)
+    A, A2 = R[:-1], np.roll(R[:-1], -1, 1)
+    Bq, B2 = R[1:], np.roll(R[1:], -1, 1)
+    wall = np.concatenate([np.stack([A, A2, B2], 2).reshape(-1, 3, 3),
+                           np.stack([A, B2, Bq], 2).reshape(-1, 3, 3)])
+    axis_pt = np.concatenate([((path[:-1] + path[1:]) / 2)[:, None].repeat(n, 1).reshape(-1, 3)] * 2)
+    wall = _facing(wall, wall.mean(1) - axis_pt)
+    cap0 = _facing(_disk(R[0], path[0]), -T[0])
+    cap1 = _facing(_disk(R[-1], path[-1]), T[-1])
+    return wall, cap0, cap1
+
+
+def _revolve_pipe(profile, n=64):
+    """Pipe of revolution about z: wall from the profile [(r, z), ...] (all r > 0, bottom to
+    top), plus the inlet disk (bottom) and outlet disk (top)."""
+    wall = revolve(profile, n)
+    th = np.linspace(0, 2 * np.pi, n + 1)[:-1]
+    ring = lambda r, z: np.stack([r * np.cos(th), r * np.sin(th), np.full(n, z)], 1)
+    (r0, z0), (r1, z1) = profile[0], profile[-1]
+    return (wall, _facing(_disk(ring(r0, z0), (0, 0, z0)), [0, 0, -1]),
+            _facing(_disk(ring(r1, z1), (0, 0, z1)), [0, 0, 1]))
+
+
+def _split(tris, rules, rest="walls"):
+    """Group triangles into solids: rules = [(name, test(vertices n x 3 x 3) -> bool mask)]."""
+    out, left = [], np.ones(len(tris), bool)
+    for name, test in rules:
+        m = left & test(tris)
+        out.append((name, tris[m])); left &= ~m
+    return out + [(rest, tris[left])]
+
+
+def _plane(axis, value):
+    return lambda t: np.all(np.isclose(t[:, :, axis], value), 1)
+
+
+def _extrude_holes(outer, holes, z0, z1):
+    """Prism over the convex polygon outer (n x 2) minus the circular holes [(cx, cy, r, n)],
+    from z0 to z1.  Returns (outer side walls, hole walls, caps), facing out of the fluid."""
+    from scipy.spatial import Delaunay
+    outer = np.asarray(outer, float)
+    pts, loops = [outer], []
+    for cx, cy, r, n in holes:
+        th = np.linspace(0, 2 * np.pi, n + 1)[:-1]
+        pts.append(np.c_[cx + r * np.cos(th), cy + r * np.sin(th)])
+    P = np.concatenate(pts)
+    tri = Delaunay(P).simplices
+    cen = P[tri].mean(1)
+    keep = np.ones(len(tri), bool)
+    for cx, cy, r, n in holes:
+        keep &= np.hypot(cen[:, 0] - cx, cen[:, 1] - cy) > r * np.cos(np.pi / n) * 0.999
+    tri = tri[keep]
+    lo, hi = np.c_[P, np.full(len(P), z0)], np.c_[P, np.full(len(P), z1)]
+    caps = np.concatenate([_facing(lo[tri], [0, 0, -1]), _facing(hi[tri], [0, 0, 1])])
+
+    def band(loop2d, inward):
+        k = len(loop2d)
+        i = np.arange(k); j = np.roll(i, -1)
+        a, b = np.c_[loop2d, np.full(k, z0)], np.c_[loop2d, np.full(k, z1)]
+        q = np.concatenate([np.stack([a[i], a[j], b[j]], 1), np.stack([a[i], b[j], b[i]], 1)])
+        c = loop2d.mean(0)
+        d = q.mean(1)[:, :2] - c
+        return _facing(q, np.c_[-d if inward else d, np.zeros(len(q))])
+    sides = band(outer, False)
+    pins = np.concatenate([band(p, True) for p in pts[1:]]) if holes else np.zeros((0, 3, 3))
+    return sides, pins, caps
+
+
+def showcase():
+    """name -> [(solid, tris)]; every surface closed and facing out of the fluid."""
+    S = {}
+    # pipe elbow: D = 0.2, bend radius 1.5 D, straight legs of 3 D and 4 D
+    r, Rb = 0.1, 0.3
+    arc = np.linspace(0, np.pi / 2, 25)
+    path = np.concatenate([np.c_[np.linspace(-0.6, 0, 13)[:-1], np.zeros(12), np.zeros(12)],
+                           np.c_[Rb * np.sin(arc), Rb * (1 - np.cos(arc)), np.zeros(25)],
+                           np.c_[np.full(16, Rb), Rb + np.linspace(0, 0.8, 17)[1:], np.zeros(16)]])
+    wall, cin, cout = sweep_tube(path, r, 48)
+    S["pipe_elbow"] = [("inlet", cin), ("outlet", cout), ("walls", wall)]
+    # helical coil: 2.5 turns of radius 0.3, pitch 0.18, tube radius 0.05
+    t = np.linspace(0, 2.5 * 2 * np.pi, 301)
+    path = np.c_[0.3 * np.cos(t), 0.3 * np.sin(t), 0.18 * t / (2 * np.pi)]
+    wall, cin, cout = sweep_tube(path, 0.05, 32)
+    S["helical_coil"] = [("inlet", cin), ("outlet", cout), ("walls", wall)]
+    # venturi: D 0.4 -> throat 0.16 (cosine contraction, 7 deg diffuser), 1.6 long
+    z = np.concatenate([[0.0], np.linspace(0.3, 0.55, 14), np.linspace(0.62, 1.3, 18), [1.6]])
+    rr = np.where(z <= 0.3, 0.2, np.where(z <= 0.55, 0.08 + 0.06 * (1 + np.cos(np.pi * (z - 0.3) / 0.25)),
+                  np.where(z <= 0.62, 0.08, np.minimum(0.2, 0.08 + (z - 0.62) * np.tan(np.radians(7))))))
+    wall, cin, cout = _revolve_pipe(list(zip(rr, z)), 64)
+    S["venturi"] = [("inlet", cin), ("outlet", cout), ("walls", wall)]
+    # sharp-edged orifice plate in a pipe: D 0.3, bore 0.15, plate 0.03 thick
+    wall, cin, cout = _revolve_pipe([(0.15, 0), (0.15, 0.45), (0.075, 0.45), (0.075, 0.48),
+                                     (0.15, 0.48), (0.15, 1.2)], 64)
+    S["orifice_pipe"] = [("inlet", cin), ("outlet", cout), ("walls", wall)]
+    # backward-facing step: inlet channel 0.1 high over a step of 0.1, span 0.3
+    t = extrude([(-0.3, 0.1), (0, 0.1), (0, 0), (1.5, 0), (1.5, 0.2), (-0.3, 0.2)], 0, 0.3)
+    S["backward_step"] = _split(t, [("inlet", _plane(0, -0.3)), ("outlet", _plane(0, 1.5)),
+                                    ("sides", lambda t: _plane(2, 0)(t) | _plane(2, 0.3)(t))])
+    # T-junction of square ducts: main 0.2 x 0.2 along x, branch 0.1 wide from +y
+    t = extrude([(0, 0), (1.2, 0), (1.2, 0.2), (0.45, 0.2), (0.45, 0.6), (0.35, 0.6), (0.35, 0.2),
+                 (0, 0.2)], 0, 0.2)
+    S["t_junction"] = _split(t, [("inletMain", _plane(0, 0)), ("inletBranch", _plane(1, 0.6)),
+                                 ("outlet", _plane(0, 1.2))])
+    # pin-fin channel: staggered bank of 13 pins (d 0.08) across a 1.4 x 0.5 x 0.15 duct
+    holes = [(x, y, 0.04, 32) for i, x in enumerate([0.35, 0.5, 0.65, 0.8, 0.95])
+             for y in ([0.1, 0.25, 0.4] if i % 2 == 0 else [0.175, 0.325])]
+    sides, pins, caps = _extrude_holes([(0, 0), (1.4, 0), (1.4, 0.5), (0, 0.5)], holes, 0, 0.15)
+    S["pin_fins"] = _split(np.concatenate([sides, caps]), [("inlet", _plane(0, 0)), ("outlet", _plane(0, 1.4))]) \
+        + [("pins", pins)]
+    # bluff body in a wind tunnel: rounded nose, 25 deg rear slant, 0.05 ground clearance
+    a = np.linspace(0, np.pi / 2, 7)
+    rn, x0, L, z0, H = 0.05, 0.6, 0.5, 0.05, 0.15
+    prof = np.concatenate([[(x0 + L, z0), (x0 + L, z0 + H - 0.1 * np.tan(np.radians(25))),
+                            (x0 + L - 0.1, z0 + H)],
+                           np.c_[x0 + rn - rn * np.sin(a), z0 + H - rn + rn * np.cos(a)],
+                           np.c_[x0 + rn - rn * np.cos(a), z0 + rn - rn * np.sin(a)]])
+    body = extrude(prof, -0.1, 0.1)[:, :, [0, 2, 1]]       # profile in x-z, width along y
+    if _volume(body) > 0:
+        body = flip(body)                                  # the body is a hole in the fluid
+    tunnel = box([0, -0.4, 0], [2.0, 0.4, 0.5])
+    S["body_in_tunnel"] = _split(tunnel, [("inlet", _plane(0, 0)), ("outlet", _plane(0, 2.0)),
+                                          ("floor", _plane(2, 0))]) + [("body", body)]
+    return S
+
+
 def multi_solid():
     """Box with named inlet/outlet/walls patches (ASCII multi-solid STL)."""
     t = box([0, 0, 0], [1, .4, .4])
@@ -229,6 +394,10 @@ def main(argv):
     p = os.path.join(OUT, "duct_patches.stl")
     write_ascii(p, multi_solid())
     print(f"{p}  (ASCII, 3 solids)")
+    for name, solids in showcase().items():
+        p = os.path.join(OUT, name + ".stl")
+        write_ascii(p, solids)
+        print(f"{p}  (ASCII, {len(solids)} solids, {sum(len(t) for _, t in solids)} triangles)")
     return 0
 
 

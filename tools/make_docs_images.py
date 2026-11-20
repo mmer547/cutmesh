@@ -3,9 +3,10 @@
 python tools/make_docs_images.py [--only NAME ...] [--work DIR]
 
 Meshes the examples (stirred tank: rotating zone, cylindrical base, boundary layers; the
-rotor-stator with a 1 mm gap) and a few benchmark shapes (benchmark/make_synthetic.py is
+rotor-stator with a 1 mm gap), a few benchmark shapes and the showcase suite
+(pipes, ducts, a bluff body) (benchmark/make_synthetic.py is
 run first if their STLs are missing), then draws 3D views and plane sections with
-benchmark/render_mesh.py and cutmesh.viz.  Takes about 5 minutes with the Rust extension.
+benchmark/render_mesh.py and cutmesh.viz.  Takes about 6 minutes with the Rust extension.
 docs/images/stats.json records cells and times shown on the pages.
 """
 import argparse
@@ -191,8 +192,57 @@ def case_shapes(work, stats):
         three_d(R, f"shape_{s}.png", f"{s}: {what}", "cut")
 
 
+# Showcase shapes (benchmark/suites/showcase.json): the meshDict comes from the suite; the
+# figure is one or two plane sections (axis, value, title, xlim, ylim) or a 3D overview.
+SHOWCASE = {
+    "pipe_elbow": dict(panels=[(2, 0.0001, "z = 0: through the bend", None, None),
+                               (1, 0.5, "y = 0.5: cross-section of the outlet leg", None, None)],
+                       size=(11, 5.6), widths=[1.6, 1]),
+    "helical_coil": dict(view="overview"),
+    "venturi": dict(panels=[(1, 0.0001, "y = 0: contraction, throat and 7° diffuser", None, None),
+                            (1, 0.0001, "throat", (-0.21, 0.21), (0.35, 0.75))],
+                    size=(11, 7.0), widths=[1, 1.1]),
+    "orifice_pipe": dict(panels=[(1, 0.0001, "y = 0: orifice plate (bore 0.5 D)", None, None),
+                                 (1, 0.0001, "sharp edge of the bore", (0.04, 0.16), (0.40, 0.53))],
+                         size=(11, 7.0), widths=[0.6, 1.1]),
+    "backward_step": dict(panels=[(2, 0.15, "z = 0.15: backward-facing step", None, None),
+                                  (2, 0.15, "step corner", (-0.1, 0.4), (-0.01, 0.21))],
+                          size=(15, 3.0), widths=[3.6, 1.4]),
+    "t_junction": dict(panels=[(2, 0.1, "z = 0.1: T-junction of square ducts", None, None)],
+                       size=(7.5, 4.4), widths=None),
+    "pin_fins": dict(panels=[(2, 0.075, "z = 0.075: staggered pin bank", None, None),
+                             (2, 0.075, "around a pin", (0.42, 0.73), (0.13, 0.37))],
+                     size=(13, 4.8), widths=[2.2, 1]),
+    "body_in_tunnel": dict(panels=[(1, 0.0001, "y = 0: body in the wind tunnel", None, None),
+                                   (1, 0.0001, "rounded nose, 25° rear slant", (0.52, 1.18), (0.0, 0.28))],
+                           size=(13, 3.6), widths=[1.6, 1.3]),
+}
+
+
+def showcase_md(name):
+    suite = json.load(open(os.path.join(ROOT, "benchmark", "suites", "showcase.json")))
+    c = next(c for c in suite["cases"] if c["name"] == name)
+    md = json.loads(json.dumps(suite["defaults"]["meshDict"]))
+    md.update(c["meshDict"])
+    md["domain"] = os.path.normpath(os.path.join(ROOT, "benchmark", "suites", c["stl"]))
+    return md
+
+
+def case_showcase(work, stats):
+    if not all(os.path.exists(os.path.join(SYN, s + ".stl")) for s in SHOWCASE):
+        subprocess.run([sys.executable, os.path.join(ROOT, "benchmark", "make_synthetic.py")], check=True)
+    for s, fig in SHOWCASE.items():
+        R, t = mesh(showcase_md(s), work, s)
+        stats[s] = dict(cells=n_cells(R), seconds=round(t, 1))
+        if fig.get("view"):
+            three_d(R, f"showcase_{s}.png", s, fig["view"])
+        else:
+            slices(R, fig["panels"], f"showcase_{s}.png", size=fig["size"], widths=fig["widths"])
+
+
 CASES = {"tank": case_tank, "cylindrical": case_cylindrical, "layers": case_layers,
-         "stator": case_stator, "shapes": case_shapes}
+         "stator": case_stator, "shapes": case_shapes,
+         "showcase": case_showcase}
 
 
 def main(argv=None):

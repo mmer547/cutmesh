@@ -6,6 +6,7 @@
 ```bash
 python benchmark/make_synthetic.py                              # 人工形状の STL を生成（ダウンロード不要）
 python benchmark/run_bench.py benchmark/suites/synthetic.json -j 4
+python benchmark/run_bench.py benchmark/suites/showcase.json -j 4  # 配管・ダクト・外部流れ（実行例。どれも PASS）
 python benchmark/run_bench.py benchmark/suites/local.json       # 手元の実形状（無いファイルはスキップ）
 python benchmark/run_bench.py benchmark/suites/large.json -j 1  # 約 100 万セル・回転ゾーン（速さの確認。1 ケースずつ）
 python benchmark/stl_check.py some.stl                          # 入力 STL の診断だけ
@@ -22,7 +23,7 @@ PASS したケースの polyMesh は削除します（`--keep` で残す）。�
 | `run_bench.py` | スイートを実行して判定・集計する。1 ケース 1 プロセス（落ちても固まっても他のケースは続く）、タイムアウト付き |
 | `render_mesh.py` | メッシュの画像: `overview.png`（壁面を 2 方向から、パッチごとに色分け）と `cut.png`（x 方向の中央より奥のセルだけを残した 3D 図 + x・y・z の中央断面）。checkMesh の基準を満たさないセル（体積 ≤ 0、非直交性 > 70°、歪度 > 4）は赤。`run_bench.py` が毎回呼ぶ（`--no-images` で省略）。単独でも `python benchmark/render_mesh.py <case>` で使える |
 | `stl_check.py` | 入力 STL の診断: 開いた辺、非多様体の辺、向きの不一致、潰れた三角形、重複した三角形、部品の数、オイラー標数、符号付き体積 |
-| `make_synthetic.py` | 人工形状 25 個を `data/synthetic/` に生成 |
+| `make_synthetic.py` | 人工形状 25 個と実用的な形状 8 個（`showcase`）を `data/synthetic/` に生成 |
 | `fetch_thingi10k.py` | Thingi10K から段階ごとに抜き出して `data/thingi10k/` と `suites/thingi10k.json` を作る（`pip install thingi10k` が必要。初回はデータセット全体をダウンロードする） |
 | `suites/*.json` | スイート定義（STL、期待する結果、meshDict の上書き） |
 | `baselines/*.json` | 比較の基準にする過去の結果（`--save-baseline` で更新） |
@@ -83,6 +84,26 @@ Thingi10K などは単位や大きさがばらばらなので、この方法で�
 | 薄い形状 | `thin_channels`（幅 0.02 の流路）, `thin_walls`（厚さ 0.004 の固体の壁 < 最小セル）, `tapered_slot`（先端の幅が 0 になる溝）, `solid_spike` |
 | 三角形の質 | `sliver_cylinder`（縦横比 約300 の細長い三角形） |
 | 汚れた入力 | `dirty_flipped`, `dirty_mixed_orient`, `dirty_duplicates`, `dirty_edge_touch`, `dirty_open_box`, `dirty_overlap` |
+
+## 実用的な形状のスイート（`suites/showcase.json`）
+
+実際の流れの問題に近い形状で、入口・出口を別の solid（パッチ）にしてあります。壊れ方を探す人工形状スイートとは逆に、
+**きれいにメッシュができる例**を集めたもので、実行例（`docs/examples.html#showcase`、画像は `tools/make_docs_images.py --only showcase`）
+にも使っています。8 ケースとも PASS（非直交性 > 70°・歪度 > 4 の面が 0、体積の誤差 0.3% 以内）で、`expect` は `pass` です。
+
+| ケース | 内容 | セル数 | 最大非直交 [°] | 最大歪度 |
+|---|---|---|---|---|
+| `pipe_elbow` | 円管の 90° エルボ（曲率半径 1.5 D） | 27,869 | 53.3 | 2.24 |
+| `helical_coil` | 2.5 巻きのらせん管（コイル式熱交換器） | 98,359 | 62.1 | 2.90 |
+| `venturi` | ベンチュリ管（のど 0.4 D、7° のディフューザー） | 24,484 | 57.9 | 2.50 |
+| `orifice_pipe` | 鋭いエッジのオリフィス板（開口径 0.5 D） | 19,376 | 57.9 | 1.41 |
+| `backward_step` | バックステップ流路（拡大比 2、側面は `symmetry`） | 19,440 | 25.2 | 0.33 |
+| `t_junction` | 正方形ダクトの T 字合流（入口 2 つ） | 15,736 | 25.2 | 0.33 |
+| `pin_fins` | ダクトを横切る 13 本のピンの千鳥配列（ピンだけレベル 3） | 63,287 | 39.2 | 1.59 |
+| `body_in_tunnel` | 風洞の中の鈍頭物体（外部流れ。物体だけレベル 4） | 92,311 | 58.1 | 1.61 |
+
+`helical_coil` は `baseCellSize` 0.025・0.0275 だと歪度 > 4 の面が 1 つ出る（0.02・0.0225・0.03 では出ない）ので、
+0.0225 にしています。基準は `baselines/showcase.json`。
 
 ## 大きなケースのスイート（`suites/large.json`）
 
