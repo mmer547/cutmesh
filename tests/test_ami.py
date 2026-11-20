@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 
 from cutmesh import ami, quality                                # noqa: E402
 from cutmesh.config import ConfigError                          # noqa: E402
-from cutmesh.geometry import write_stl_ascii                    # noqa: E402
+from cutmesh.geometry import Cylinder, write_stl_ascii          # noqa: E402
 from cutmesh.mesher import load_config, generate, run           # noqa: E402
 from cutmesh.readfoam import read_mesh                          # noqa: E402
 
@@ -118,6 +118,53 @@ class SlidingMesh(unittest.TestCase):
             side = (Cf2[s, 2] > 0.021) & (Cf2[s, 2] < 0.079)
             self.assertLess(np.abs(np.hypot(Cf2[s, 0], Cf2[s, 1])[side] - 0.05).max(), 0.002)
 
+    def test_interface_follows_the_rims(self):
+        """the cells outside the zone's rims are cut so that no interface face is folded over
+        a rim: every face lies on the cap or on the side, and its centre on the cylinder"""
+        h = 0.025 / 4
+        out = {}
+        with tempfile.TemporaryDirectory() as d:
+            for key, flag in (("exact", True), ("plain", False)):
+                logs = []
+                R = run(make_case(d, key, amiExactRims=flag), log=logs.append, check=True)
+                m = read_mesh(os.path.join(d, key))
+                out[key] = (R["quality"], m, logs)
+        cyl = Cylinder([0, 0, 0.02], [0, 0, 0.08], 0.05)
+
+        def interface(m):
+            pa = {p["name"]: p for p in m["patches"]}["rotor_AMI1"]
+            sizes, flat = m["faces"]
+            ptr = np.concatenate([[0], np.cumsum(sizes)])
+            ids = range(pa["startFace"], pa["startFace"] + pa["nFaces"])
+            return [m["points"][flat[ptr[f]:ptr[f + 1]]] for f in ids]
+
+        def folded(m):
+            n = 0
+            for Q in interface(m):
+                t, r, _ = cyl._local(Q)
+                side = np.abs(r - cyl.R) < 1e-3 * h
+                cap = (np.abs(t) < 1e-3 * h) | (np.abs(t - cyl.H) < 1e-3 * h)
+                n += bool((side & ~cap).any() and (cap & ~side).any())
+            return n
+
+        def max_off(m):
+            return max(abs(float(cyl.sdf(Q.mean(0)[None])[0])) for Q in interface(m))
+
+        q, m, logs = out["exact"]
+        self.assertGreater(folded(out["plain"][1]), 10)        # the case has folds to remove
+        self.assertEqual(folded(m), 0)
+        self.assertLess(max_off(m), 0.05 * h)
+        self.assertGreater(max_off(out["plain"][1]), 0.1 * h)
+        self.assertTrue(any("cells outside a rim cut in two" in s for s in logs))
+        for k in ("nNegVol", "nBadPyramids", "openCellEdges"):
+            self.assertEqual(q[k], 0, k)
+        self.assertTrue(q["upperTriangular"])
+        self.assertLess(q["maxNonOrth"], 70)
+        # the volume is unchanged; the AMI pair still matches face by face
+        self.assertAlmostEqual(q["totalVol"], out["plain"][0]["totalVol"], places=12)
+        pa = {p["name"]: p for p in m["patches"]}
+        self.assertEqual(pa["rotor_AMI1"]["nFaces"], pa["rotor_AMI2"]["nFaces"])
+
     def test_org12_patches_and_hint(self):
         with tempfile.TemporaryDirectory() as d:
             logs = []
@@ -135,7 +182,8 @@ class SlidingMesh(unittest.TestCase):
 
     def test_cli_matches_run(self):
         with tempfile.TemporaryDirectory() as d:
-            run(make_case(d, "inrun"), log=lambda s: None, check=False)
+            # the CLI has no zone geometry: compare without the rim cut
+            run(make_case(d, "inrun", amiExactRims=False), log=lambda s: None, check=False)
             plain = [dict(z) for z in TWO_ZONES]; plain[0].pop("ami")
             run(make_case(d, "plain", rotatingZones=plain), log=lambda s: None, check=False)
             ret = ami.main([os.path.join(d, "plain"), "-zone", "rotor", "-out", os.path.join(d, "cli")])

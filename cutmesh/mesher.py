@@ -51,6 +51,7 @@ DEFAULTS = {
     "writeFormat": "binary",    # polyMesh points/faces/owner/neighbour: "binary" or "ascii"
     "openfoam": "com",          # sliding-mesh patches and dynamicMeshDict: "com" (ESI) or "org10"/"org11"/"org12"
     "writeDynamicMeshDict": True,   # with "ami" zones: constant/dynamicMeshDict (solid-body rotation)
+    "amiExactRims": True,       # with "ami" zones: the interface follows the zone's rims (cells outside a rim cut in two)
 }
 
 
@@ -2431,6 +2432,8 @@ def run(config_path, case_dir=None, log=print, check=True):
     if ami_z:
         from . import ami
         for z in ami_z:
+            if cfg["amiExactRims"]:
+                R, _, _ = ami.exact_rims(R, z["name"], z["geom"], cfg["featureAngle"], log=log)
             err = ami.axisymmetry_error(R, z["name"], z["geom"], z["origin"], z["axis"])
             hz = float(cfg["baseCellSize"]) / 2 ** max(int(z["surfaceLevel"]), 0)
             if err > 0.05 * hz:
