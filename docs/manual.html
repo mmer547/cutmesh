@@ -164,6 +164,7 @@ python run.py                         # 断面図も欲しい場合 → slice_z.
   <tr><td><code>writeMRFProperties</code></td><td>回転ゾーンがあるとき <code>constant/MRFProperties</code> の雛形を書く（<code>"ami": true</code> のゾーンは除く）</td><td>true</td></tr>
   <tr><td><code>openfoam</code></td><td>スライディングメッシュの書き方: <code>"com"</code>（openfoam.com / ESI）、<code>"org10"</code>・<code>"org11"</code>・<code>"org12"</code>（openfoam.org）（<a href="#ami">スライディングメッシュ</a>）</td><td><code>"com"</code></td></tr>
   <tr><td><code>writeDynamicMeshDict</code></td><td><code>"ami": true</code> のゾーンがあるとき <code>constant/dynamicMeshDict</code> を書く</td><td>true</td></tr>
+  <tr><td><code>amiExactRims</code></td><td><code>"ami": true</code> のゾーンの界面を、ゾーンの縁（円筒の上下の縁）にぴったり沿わせる（縁の外側のセルを 2 つに切る）（<a href="#ami">スライディングメッシュ</a>）</td><td>true</td></tr>
 </table></div>
 
 <h2 id="zones">回転ゾーン（<code>rotatingZones</code>）</h2>
@@ -216,9 +217,13 @@ python run.py                         # 断面図も欲しい場合 → slice_z.
   <li>界面は回転軸まわりの回転面である必要があります（円筒は常に可）。STL で与えたゾーンが回転面でない、または <code>origin</code>・<code>axis</code> がずれていると警告します。</li>
   <li><code>"conforming": false</code> のゾーンには使えません。複数のゾーンは、openfoam.com では <code>multiSolidBodyMotionSolver</code>、openfoam.org では <code>motionSolverList</code> で書きます。</li>
   <li>既存のメッシュは <code>python -m cutmesh.ami</code> で後から変換できます（<a href="#cmd-ami">コマンドとオプション</a>）。</li>
+  <li>ゾーンの縁（円筒の上下の縁）の外側のカットセルは縁を回り込み、その界面の面は縁で折れ曲がります。OpenFOAM は面を中心で扱うので、そのままでは縁が面取りされ、回すと回転側と静止側が合いません。
+  <code>amiExactRims</code>（既定 true）では、縁を横切る辺に縁の点を入れ、縁の外側のセルを折れた面の一方の平面で 2 つに切って、界面を縁にぴったり沿わせます。
+  切ると悪いセルになる所はそのまま残し、ログに数を出します。<code>python -m cutmesh.ami</code> はゾーンの形を知らないので、この処理はしません。</li>
 </ul>
-<div class="warn"><p>書き方は各配布元のチュートリアル（openfoam.com: <code>interFoam/RAS/mixerVesselAMI</code>、openfoam.org 10〜12: <code>mixerVessel2D</code>）に合わせていますが、
-OpenFOAM 本体で読み込んで回すことはまだ確認していません。cutmesh の中では、回転側の点を実際に回してもセルが壊れず、界面が円筒の上に残ることを確かめています。</p></div>
+<div class="warn"><p>書き方は各配布元のチュートリアル（openfoam.com: <code>interFoam/RAS/mixerVesselAMI</code>、openfoam.org 10〜12: <code>mixerVessel2D</code>）に合わせています。
+<code>examples/stirred_tank/meshDict_ami.json</code>（約 10 万セル、層流で 90° 回転）で、openfoam.com v2606 の <code>pimpleFoam</code> と OpenFOAM-13 の <code>foamRun</code>（<code>"org12"</code> の書き方のまま）は最後まで回ることを確かめました。
+OpenFOAM-12 では、このメッシュでも縁のない円筒ゾーンでも、回し始めると <code>cyclicFvPatch::makeWeights</code> の浮動小数点例外で止まりました（同じメッシュが OpenFOAM-13 では回るので、OpenFOAM-12 側の問題とみています）。</p></div>
 
 <h2 id="cylbase">円筒ベースメッシュ（<code>baseMesh</code>）</h2>
 <p>回転機械向けに、八分木の根を直交格子の代わりに軸まわりの同心ブロックにできます。</p>

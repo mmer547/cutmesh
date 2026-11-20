@@ -114,6 +114,7 @@ python run.py                         # 断面図も欲しい場合 → slice_z.
 | `writeFormat` | polyMesh の書き出し形式: `"binary"` または `"ascii"`（下記「書き出し形式」） | `"binary"` |
 | `openfoam` | スライディングメッシュ（`"ami": true` のゾーン）の書き方: `"com"`（openfoam.com / ESI）、`"org10"`・`"org11"`・`"org12"`（openfoam.org）（下記「スライディングメッシュ」） | `"com"` |
 | `writeDynamicMeshDict` | `"ami": true` のゾーンがあるとき `constant/dynamicMeshDict`（回転の設定）を書く | true |
+| `amiExactRims` | `"ami": true` のゾーンの界面を、ゾーンの縁（円筒の上下の縁）にぴったり沿わせる（縁の外側のセルを 2 つに切る。下記「スライディングメッシュ」） | true |
 | `case` | 出力先ケースディレクトリ | `.` |
 | `padding` | STL の外接箱の周りに足すベースセルの数 | 1 |
 | `addLayers` | 境界層の設定（下記「境界層」）。省略時は層なし | なし |
@@ -165,7 +166,14 @@ MRF円筒を置く）場合、隙間より細かいセルが必要ですが、`s
 | `"org10"`・`"org11"`・`"org12"` | `<name>_nonCouple1` / `<name>_nonCouple2`、型 `patch` | `mover { type motionSolver; ... }` | `createNonConformalCouples -overwrite <name>_nonCouple1 <name>_nonCouple2` でつなぐ（ログにも出る） |
 
 - 書き方は各配布元のチュートリアル（openfoam.com: `interFoam/RAS/mixerVesselAMI`、openfoam.org 10〜12:
-  `mixerVessel2D`）に合わせている。OpenFOAM 本体で読み込んで回すことは、まだ確認していない。
+  `mixerVessel2D`）に合わせている。`examples/stirred_tank/meshDict_ami.json`（約 10 万セル、層流で 90° 回転）で、
+  openfoam.com v2606 の `pimpleFoam` と OpenFOAM-13 の `foamRun`（`"org12"` の書き方のまま）は最後まで回ることを確かめた。
+  OpenFOAM-12 では、このメッシュでも縁のない円筒ゾーンでも、回し始めると `cyclicFvPatch::makeWeights` の
+  浮動小数点例外で止まった（同じメッシュが OpenFOAM-13 では回るので、OpenFOAM-12 側の問題とみている）。
+- ゾーンの縁（円筒の上下の縁）の外側のカットセルは縁を回り込み、その界面の面は縁で折れ曲がる。OpenFOAM は
+  面を中心で扱うので、そのままでは縁が面取りされ、回すと回転側と静止側が合わない（cyclicAMI の重みが 0.18 まで落ちた）。
+  `amiExactRims`（既定 true）では、縁を横切る辺に縁の点を入れ、縁の外側のセルを折れた面の一方の平面で 2 つに切って、
+  界面を縁にぴったり沿わせる（重みは回転前 1.0000、回転中も 0.78〜1.01）。切ると悪いセルになる所はそのまま残してログに出す。
 - ゾーンの界面は回転軸まわりの回転面である必要がある（円筒は常に可）。STL で与えたゾーンが回転面でない、
   または `origin`・`axis` がずれていると、警告を出す（界面の面を 7° 回してゾーンの表面からのずれが変わるかで判定）。
 - `"conforming": false` のゾーンには使えない（エラー）。openfoam.org の開発版（`mover { type solidBody; ... }`）は未対応。

@@ -162,7 +162,7 @@ def validate_config(cfg, log=None, layer_keys=None):
     c.num(cfg["thinCutFraction"], "thinCutFraction", lo=0, hi=1, lo_open=True, hi_open=True)
     c.num(cfg["minRegionVolume"], "minRegionVolume", lo=0, hi=1, hi_open=True)
     for k in ("checkLeaks", "strictInput", "writeMRFProperties", "mergeWallFaces", "writeDynamicMeshDict",
-              "exactFeatureCut"):
+              "exactFeatureCut", "amiExactRims"):
         c.bool_(cfg[k], k)
     if cfg["hangingSnap"] not in ("free", "constrained"):
         c.err(f"hangingSnap must be \"free\" or \"constrained\", got {cfg['hangingSnap']!r}")
