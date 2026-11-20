@@ -50,7 +50,7 @@ class PlaneClip:
         """triangles within distance r of the point c (sorted ids)"""
         dom = self.dom
         rr = r * (1 + 1e-9) + self.eps
-        if dom._rs is not None:
+        if dom._rs is not None and hasattr(dom._rs, "near"):     # an older build has no near()
             _, t = dom._rs.near(np.ascontiguousarray(c, float).reshape(1, 3), np.array([rr]))
             return t
         sub = dom._kd.query_ball_point(c, r + dom._rmax)
