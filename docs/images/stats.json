@@ -20,7 +20,9 @@
  },
  "stator_1mm": {
   "cells": 596160,
-  "seconds": 133.8
+  "seconds": 131.2,
+  "nonOrtho": 64.3,
+  "skew": 4.97
  },
  "sphere": {
   "cells": 75612,
@@ -151,14 +153,14 @@
  },
  "pipe_elbow_layers": {
   "cells": 59363,
-  "seconds": 5.6,
+  "seconds": 5.9,
   "nonOrtho": 63.9,
   "skew": 2.17,
   "layerFull": 98.6
  },
  "helical_coil_layers": {
   "cells": 223504,
-  "seconds": 30.1,
+  "seconds": 30.0,
   "nonOrtho": 65.0,
   "skew": 3.37,
   "layerFull": 90.4
@@ -172,37 +174,44 @@
  },
  "orifice_pipe_layers": {
   "cells": 40781,
-  "seconds": 4.4,
+  "seconds": 4.2,
   "nonOrtho": 63.3,
   "skew": 2.65,
   "layerFull": 98.8
  },
  "backward_step_layers": {
   "cells": 40752,
-  "seconds": 3.5,
+  "seconds": 3.2,
   "nonOrtho": 40.2,
   "skew": 2.47,
   "layerFull": 100.0
  },
  "t_junction_layers": {
   "cells": 38392,
-  "seconds": 3.4,
+  "seconds": 3.1,
   "nonOrtho": 62.3,
   "skew": 2.47,
   "layerFull": 100.0
  },
  "pin_fins_layers": {
   "cells": 144293,
-  "seconds": 19.7,
+  "seconds": 18.1,
   "nonOrtho": 55.5,
   "skew": 2.4,
   "layerFull": 93.4
  },
  "body_in_tunnel_layers": {
   "cells": 154852,
-  "seconds": 21.3,
+  "seconds": 19.9,
   "nonOrtho": 64.3,
   "skew": 2.69,
   "layerFull": 98.7
+ },
+ "stator_1mm_layers": {
+  "cells": 982245,
+  "seconds": 169.4,
+  "nonOrtho": 65.0,
+  "skew": 5.07,
+  "layerFull": 77.2
  }
 }
