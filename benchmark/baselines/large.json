@@ -384,6 +384,94 @@
    "verdict": "ok"
   },
   {
+   "name": "tank_tilted",
+   "stl": "examples/stirred_tank/tank_tilted.stl",
+   "expect": "valid",
+   "input": {
+    "triangles": 960,
+    "vertices": 482,
+    "edges": 1440,
+    "euler": 2,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "inconsistentEdges": 0,
+    "degenerateTris": 0,
+    "duplicateTris": 0,
+    "components": 1,
+    "signedVolume": 0.021078660528984456,
+    "bbox": [
+     [
+      -0.143325524,
+      -0.2358316655,
+      -0.06425173463
+     ],
+     [
+      0.2317089406,
+      0.1425299451,
+      0.3353295106
+     ]
+    ],
+    "diag": 0.6659380823719215,
+    "closed": true,
+    "oriented": true,
+    "clean": true,
+    "solids": [
+     "tankWall",
+     "bottom",
+     "top",
+     "impeller",
+     "shaft"
+    ]
+   },
+   "quality": {
+    "nPoints": 384622,
+    "nCells": 320393,
+    "nFaces": 1047512,
+    "nInternalFaces": 1001214,
+    "upperTriangular": true,
+    "maxClosedness": 1.6404112177343926e-16,
+    "openCellEdges": 0,
+    "duplicateCellEdges": 0,
+    "minVol": 6.0251734620278086e-12,
+    "maxVol": 5.526846921651434e-07,
+    "totalVol": 0.021075803310779895,
+    "nNegVol": 0,
+    "maxNonOrth": 64.71634798008266,
+    "avgNonOrth": 6.1699723592090265,
+    "nNonOrth70": 0,
+    "maxSkewness": 15.442724885107019,
+    "nSkew4": 12,
+    "nBadPyramids": 0,
+    "nBadTetDecomp": 310,
+    "minFaceArea": 7.047689084992448e-23
+   },
+   "steps": {
+    "geometry / search structures": 9.394,
+    "octree (488726 leaves)": 11.995,
+    "polyhedral cells (575721 points)": 5.773,
+    "level sets and vertex snapping": 11.238,
+    "domain cut": 12.983,
+    "zone cut 'rotor'": 0.707,
+    "assembly and small-cell merging": 8.042,
+    "patches, zones, renumbering": 2.978,
+    "leak check": 1.361,
+    "write polyMesh": 0.32,
+    "quality check": 3.335
+   },
+   "time": 68.44,
+   "peakMemMB": 2713.5234375,
+   "warnings": [],
+   "repairs": [],
+   "boundaryDistCells": 0.68,
+   "baseCellSize": 0.008,
+   "volErr": -0.00013555027372980089,
+   "status": "WARN",
+   "notes": [
+    "12 faces skewness > 4"
+   ],
+   "verdict": "ok"
+  },
+  {
    "name": "tank_stator_1mm",
    "stl": "examples/stirred_tank/tank_stator_1mm.stl",
    "expect": "valid",
