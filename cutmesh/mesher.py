@@ -1790,6 +1790,14 @@ def generate(cfg, log=print):
                 for v, x in zip(cv[w].tolist(), cpv[w]):
                     pts[v] = x
                     positions[v] = x.tolist()
+                # the zone cuts read the zones' level sets of these vertices later: refresh
+                # them (a vertex on a zone surface stays on it, 0.05 hmin is below the snap)
+                mv = cv[w]
+                for i, z in enumerate(zones):
+                    if len(mv) and z["conforming"]:
+                        m_ = mv[phi_z[i][mv] != 0]
+                        if len(m_):
+                            phi_z[i][m_] = z["geom"].sdf(pts[m_])
             ko = np.argsort(f_key, kind="stable")
             ks = f_key[ko]
 
