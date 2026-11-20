@@ -1,0 +1,127 @@
+{
+ "name": "showcase",
+ "description": "Shapes close to real CFD problems (pipes, ducts, a bluff body) with named inlet/outlet patches, from make_synthetic.py (run it first). They mesh cleanly and serve as worked examples.",
+ "defaults": {
+  "cellsAcross": 24,
+  "expect": "pass",
+  "meshDict": {
+   "surfaceRefinement": {
+    "default": 2
+   }
+  }
+ },
+ "cases": [
+  {
+   "name": "pipe_elbow",
+   "stl": "../data/synthetic/pipe_elbow.stl",
+   "note": "90 deg pipe bend, bend radius 1.5 D",
+   "meshDict": {
+    "baseCellSize": 0.04,
+    "patchTypes": {
+     "inlet": "patch",
+     "outlet": "patch"
+    }
+   }
+  },
+  {
+   "name": "helical_coil",
+   "stl": "../data/synthetic/helical_coil.stl",
+   "note": "2.5-turn helical tube (coil heat exchanger); at baseCellSize 0.025 and 0.0275 one face has skewness > 4",
+   "meshDict": {
+    "baseCellSize": 0.0225,
+    "patchTypes": {
+     "inlet": "patch",
+     "outlet": "patch"
+    }
+   }
+  },
+  {
+   "name": "venturi",
+   "stl": "../data/synthetic/venturi.stl",
+   "note": "venturi tube: cosine contraction to a 0.4 D throat, 7 deg diffuser",
+   "meshDict": {
+    "baseCellSize": 0.05,
+    "patchTypes": {
+     "inlet": "patch",
+     "outlet": "patch"
+    }
+   }
+  },
+  {
+   "name": "orifice_pipe",
+   "stl": "../data/synthetic/orifice_pipe.stl",
+   "note": "sharp-edged orifice plate (beta 0.5) in a pipe",
+   "meshDict": {
+    "baseCellSize": 0.05,
+    "patchTypes": {
+     "inlet": "patch",
+     "outlet": "patch"
+    }
+   }
+  },
+  {
+   "name": "backward_step",
+   "stl": "../data/synthetic/backward_step.stl",
+   "note": "backward-facing step, expansion ratio 2, symmetry side planes",
+   "meshDict": {
+    "baseCellSize": 0.025,
+    "surfaceRefinement": {
+     "default": 1,
+     "sides": 0
+    },
+    "patchTypes": {
+     "inlet": "patch",
+     "outlet": "patch",
+     "sides": "symmetry"
+    }
+   }
+  },
+  {
+   "name": "t_junction",
+   "stl": "../data/synthetic/t_junction.stl",
+   "note": "square-duct T-junction (mixing tee), branch half as wide",
+   "meshDict": {
+    "baseCellSize": 0.05,
+    "patchTypes": {
+     "inletMain": "patch",
+     "inletBranch": "patch",
+     "outlet": "patch"
+    }
+   }
+  },
+  {
+   "name": "pin_fins",
+   "stl": "../data/synthetic/pin_fins.stl",
+   "note": "staggered bank of 13 pins across a duct (pin-fin heat sink / tube bank)",
+   "meshDict": {
+    "baseCellSize": 0.05,
+    "surfaceRefinement": {
+     "default": 2,
+     "pins": 3
+    },
+    "patchTypes": {
+     "inlet": "patch",
+     "outlet": "patch"
+    }
+   }
+  },
+  {
+   "name": "body_in_tunnel",
+   "stl": "../data/synthetic/body_in_tunnel.stl",
+   "note": "bluff body with a rounded nose and a 25 deg rear slant in a wind tunnel (external flow)",
+   "meshDict": {
+    "baseCellSize": 0.08,
+    "surfaceRefinement": {
+     "default": 0,
+     "floor": 1,
+     "body": 4
+    },
+    "patchTypes": {
+     "inlet": "patch",
+     "outlet": "patch",
+     "walls": "symmetry"
+    }
+   }
+  }
+ ]
+}

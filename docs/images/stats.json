@@ -34,5 +34,37 @@
  "l_bracket": {
   "cells": 71439,
   "seconds": 8.5
+ },
+ "pipe_elbow": {
+  "cells": 27869,
+  "seconds": 4.4
+ },
+ "helical_coil": {
+  "cells": 98359,
+  "seconds": 22.5
+ },
+ "venturi": {
+  "cells": 24484,
+  "seconds": 4.3
+ },
+ "orifice_pipe": {
+  "cells": 19376,
+  "seconds": 3.2
+ },
+ "backward_step": {
+  "cells": 19440,
+  "seconds": 1.4
+ },
+ "t_junction": {
+  "cells": 15736,
+  "seconds": 1.5
+ },
+ "pin_fins": {
+  "cells": 63287,
+  "seconds": 12.5
+ },
+ "body_in_tunnel": {
+  "cells": 92311,
+  "seconds": 12.3
  }
 }
