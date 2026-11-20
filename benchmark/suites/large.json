@@ -130,6 +130,35 @@
    }
   },
   {
+   "name": "tank_tilted",
+   "stl": "../../examples/stirred_tank/tank_tilted.stl",
+   "note": "the stirred tank turned so that no edge runs along the octree axes (python make_geometry.py --tilt): exercises the exact feature cut as real geometry does",
+   "meshDict": {
+    "baseCellSize": 0.008,
+    "rotatingZones": [
+     {
+      "name": "rotor",
+      "cylinder": {
+       "point1": [
+        0.017676683,
+        -0.018660344,
+        0.054215555
+       ],
+       "point2": [
+        0.041245594,
+        -0.043540803,
+        0.126502962
+       ],
+       "radius": 0.07
+      },
+      "surfaceLevel": 2,
+      "volumeLevel": 2,
+      "omega": 31.416
+     }
+    ]
+   }
+  },
+  {
    "name": "tank_stator_1mm",
    "stl": "../../examples/stirred_tank/tank_stator_1mm.stl",
    "note": "rotor-stator: fixed ring 1 mm outside the blade corners, rotor interface in the middle of the gap",

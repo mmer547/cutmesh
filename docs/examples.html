@@ -29,7 +29,9 @@
       </ol>
     </li>
     <li><a href="#stator">ローター・ステーター</a></li>
-    <li><a href="#shapes">形状のテスト集</a></li>
+    <li><a href="#shapes">形状のテスト集</a>
+      <ol><li><a href="#tilted-edges">格子に沿わないエッジ</a></li></ol>
+    </li>
     <li><a href="#showcase">実用的な形状</a></li>
     <li><a href="#reproduce">画像の作り方</a></li>
   </ol>
@@ -46,7 +48,7 @@ STL は <code>python make_geometry.py</code> で作ります（solid: <code>tank
 
 <section class="example" id="tank-zone">
 <h3>回転ゾーン（<code>meshDict.json</code>）</h3>
-<ul class="stats"><li><span data-stat="tank.cells">102,433</span> セル</li><li><span data-stat="tank.seconds">13.2</span> 秒</li><li>直交格子 + 円筒の回転ゾーン</li></ul>
+<ul class="stats"><li><span data-stat="tank.cells">102,430</span> セル</li><li><span data-stat="tank.seconds">14.2</span> 秒</li><li>直交格子 + 円筒の回転ゾーン</li></ul>
 <p>翼のまわりに半径 70 mm の円筒の回転ゾーンを置いた例です。円筒は八分木のカットで切断されるので、界面（赤）は粗いセルの所でも円筒面にぴったり乗ります。
 翼（レベル 3）・シャフト（レベル 2）・回転ゾーンの内部（レベル 2）だけを細かくし、槽の壁はレベル 1 です。</p>
 <p class="cmd-label">実行コマンド</p>
@@ -105,7 +107,7 @@ python -m cutmesh.ami case -out case_ami_later    # 作ったメッシュを後�
 
 <section class="example" id="tank-cyl">
 <h3>円筒ベースメッシュ（<code>meshDict_cylindrical.json</code>）</h3>
-<ul class="stats"><li><span data-stat="cylindrical.cells">136,620</span> セル</li><li><span data-stat="cylindrical.seconds">22</span> 秒</li><li>同心ブロックのベースメッシュ</li></ul>
+<ul class="stats"><li><span data-stat="cylindrical.cells">136,620</span> セル</li><li><span data-stat="cylindrical.seconds">23</span> 秒</li><li>同心ブロックのベースメッシュ</li></ul>
 <p>八分木の根を、軸まわりの同心ブロック（中心の正方形 + 3 つのリング）にした例です。セルが周方向に並ぶので、回転ゾーンの界面や槽の壁に沿ったメッシュになります。
 ブロックの境界では分割数の比が整数でなくても、面を重ね合わせて適合したメッシュにします。</p>
 <p class="cmd-label">実行コマンド</p>
@@ -135,7 +137,7 @@ python run.py meshDict_cylindrical.json     # 断面図も描く場合</code></p
 
 <section class="example" id="tank-layers">
 <h3>境界層（<code>meshDict_layers.json</code>）</h3>
-<ul class="stats"><li><span data-stat="layers.cells">163,633</span> セル</li><li><span data-stat="layers.seconds">14.9</span> 秒</li><li>全壁に 3 層</li></ul>
+<ul class="stats"><li><span data-stat="layers.cells">163,633</span> セル</li><li><span data-stat="layers.seconds">16.7</span> 秒</li><li>全壁に 3 層</li></ul>
 <p>回転ゾーンの例に、すべての壁パッチへ 3 層のプリズム層を加えた例です。回転ゾーンの界面にかかる所では、層の側面も界面の円筒面に乗ったままです。</p>
 <p class="cmd-label">実行コマンド</p>
 <pre><code>cd examples/stirred_tank
@@ -157,7 +159,7 @@ python -m cutmesh.layers case meshDict_layers.json -out case_layers_later
 </section>
 
 <h2 id="stator">ローター・ステーター（狭い隙間の中の界面）</h2>
-<ul class="stats"><li><span data-stat="stator_1mm.cells">596,156</span> セル</li><li><span data-stat="stator_1mm.seconds">119</span> 秒</li><li>隙間 1 mm</li></ul>
+<ul class="stats"><li><span data-stat="stator_1mm.cells">596,160</span> セル</li><li><span data-stat="stator_1mm.seconds">134</span> 秒</li><li>隙間 1 mm</li></ul>
 <p>攪拌槽の翼のすぐ外側に、固定リング（ステーター）を置いた形状です。リングの内面は翼の先端の角から 1 mm 外にあり、
 回転ゾーンの界面はその隙間の中央（翼から 0.5 mm）に置きます。界面と両側の壁の間にそれぞれセルが入るように、
 <code>wallProximity</code> で壁に近い部分の界面だけを細かくし、<code>autoGapRefinement</code> で隙間に面した壁を細かくします。</p>
@@ -225,25 +227,42 @@ python benchmark/stl_check.py benchmark/data/synthetic/torus.stl                
 <div class="grid two">
   <figure>
     <a class="img" href="images/shape_sphere.png"><img src="images/shape_sphere.png" alt="球の内部のメッシュ" loading="lazy"></a>
-    <figcaption><strong>sphere</strong> — 滑らかな凸の曲面（<span data-stat="sphere.cells">75,612</span> セル、<span data-stat="sphere.seconds">13.3</span> 秒）</figcaption>
+    <figcaption><strong>sphere</strong> — 滑らかな凸の曲面（<span data-stat="sphere.cells">75,612</span> セル、<span data-stat="sphere.seconds">13.9</span> 秒）</figcaption>
   </figure>
   <figure>
     <a class="img" href="images/shape_cube_rotated.png"><img src="images/shape_cube_rotated.png" alt="格子に対して傾いた立方体の内部のメッシュ" loading="lazy"></a>
-    <figcaption><strong>cube_rotated</strong> — 格子に沿わない鋭いエッジ。エッジに沿って小さなギザギザが残る（既知の制約）（<span data-stat="cube_rotated.cells">53,536</span> セル、<span data-stat="cube_rotated.seconds">10.7</span> 秒）</figcaption>
+    <figcaption><strong>cube_rotated</strong> — 格子に沿わない鋭いエッジ（下の「格子に沿わないエッジ」）。切り口の縁の小さな段は、セルを丸ごと残す描き方によるもので、壁の形ではない（<span data-stat="cube_rotated.cells">53,564</span> セル、<span data-stat="cube_rotated.seconds">13.2</span> 秒）</figcaption>
   </figure>
   <figure>
     <a class="img" href="images/shape_torus.png"><img src="images/shape_torus.png" alt="トーラスの内部のメッシュ" loading="lazy"></a>
-    <figcaption><strong>torus</strong> — 流体を貫く穴（<span data-stat="torus.cells">39,008</span> セル、<span data-stat="torus.seconds">7.3</span> 秒）</figcaption>
+    <figcaption><strong>torus</strong> — 流体を貫く穴（<span data-stat="torus.cells">39,008</span> セル、<span data-stat="torus.seconds">7.1</span> 秒）</figcaption>
   </figure>
   <figure>
     <a class="img" href="images/shape_thin_channels.png"><img src="images/shape_thin_channels.png" alt="幅の狭い流路のメッシュ" loading="lazy"></a>
-    <figcaption><strong>thin_channels</strong> — セル 2 個分の幅の流路（<span data-stat="thin_channels.cells">46,244</span> セル、<span data-stat="thin_channels.seconds">8.9</span> 秒）</figcaption>
+    <figcaption><strong>thin_channels</strong> — セル 2 個分の幅の流路（<span data-stat="thin_channels.cells">46,244</span> セル、<span data-stat="thin_channels.seconds">22</span> 秒）</figcaption>
   </figure>
   <figure>
     <a class="img" href="images/shape_l_bracket.png"><img src="images/shape_l_bracket.png" alt="L 字形のメッシュ" loading="lazy"></a>
-    <figcaption><strong>l_bracket</strong> — 凹のエッジ（<span data-stat="l_bracket.cells">71,439</span> セル、<span data-stat="l_bracket.seconds">8.5</span> 秒）</figcaption>
+    <figcaption><strong>l_bracket</strong> — 凹のエッジ（<span data-stat="l_bracket.cells">71,439</span> セル、<span data-stat="l_bracket.seconds">14.0</span> 秒）</figcaption>
   </figure>
 </div>
+<h3 id="tilted-edges">格子に沿わないエッジ（凸エッジの厳密カット）</h3>
+<p>エッジが八分木の格子に沿わない形では、エッジのすぐ横の頂点が両側の壁に寄せられ、エッジと頂点の間の流体がセルごとに欠けて、
+エッジが鋸歯状になっていました。凸のエッジの近くのセルを STL の平面で直接切る処理（<code>exactFeatureCut</code>、既定で有効）で、
+エッジに沿ったメッシュになります。下は cube_rotated の壁面を 2 方向から見た図です。</p>
+<div class="grid two">
+  <figure>
+    <a class="img" href="images/shape_cube_rotated_walls_plain.png"><img src="images/shape_cube_rotated_walls_plain.png" alt="厳密カットなしの傾いた立方体の壁面。エッジに沿って欠けがあり、品質の悪いセルが赤く表示されている" loading="lazy"></a>
+    <figcaption>厳密カットなし: エッジに沿って欠けが並ぶ（ずれは最大で最小セルの 0.79 倍、エッジの 16.5% で 0.2 倍超）。赤は品質の悪いセル</figcaption>
+  </figure>
+  <figure>
+    <a class="img" href="images/shape_cube_rotated_walls.png"><img src="images/shape_cube_rotated_walls.png" alt="厳密カットありの傾いた立方体の壁面。エッジがまっすぐ" loading="lazy"></a>
+    <figcaption>厳密カットあり: エッジに沿う（0.2 倍を超える所はエッジの 0.1%）。歪度 &gt; 4 の面は 3 → 0</figcaption>
+  </figure>
+</div>
+<p>凸のエッジが凹のエッジや曲面と交わる所の近くでは、平面で切ると壊れたセルができることがあるので、従来のカットに戻します（そこには面取りが残ることがあります）。
+円錐の底の縁のように、曲面と平面が交わるエッジは対象外です。</p>
+
 <p>このほかにも、薄い壁・汚れた STL（重複した三角形、開いた辺、向きの混在）など 26 の形状で、失敗・警告・品質の低下を一覧にできます
 （<a href="https://github.com/mmer547/cutmesh/tree/main/benchmark">benchmark/README.md</a>）。</p>
 

@@ -14,6 +14,7 @@ from .octree import Octree
 from .cylbase import CylindricalBase
 from .cutcell import CutContext, split_components
 from .polymesh import write_polymesh
+from .featclip import PlaneClip, clip_cell, clipped_face, make_alloc
 from .config import validate_config, check_names, ConfigError  # noqa: F401
 from . import quality
 from . import diagnose
@@ -41,6 +42,7 @@ DEFAULTS = {
     "mergeMaxNonOrtho": 65.0,   # [deg] a merge may not make a face more non-orthogonal than this
     "mergeWallFaces": True,     # join coplanar wall pieces of one cell into one face
     "featureCaps": "domain",    # bend the cut along convex feature edges: "domain", "zone", "both" or false
+    "exactFeatureCut": True,    # cut the cells at convex feature edges by clipping with the STL planes (featclip)
     "surfaceRefinement": {},
     "refinementRegions": [],
     "patchTypes": {},
@@ -573,6 +575,16 @@ def merge_coplanar_wall_faces(P, nn, vv, owner, nI, patches, max_angle=5.0):
     return (np.concatenate(out_n), np.concatenate(out_v), np.concatenate(out_o), new_p, joined)
 
 
+def _piece_volume(pos, comp):
+    """volume enclosed by the faces of a piece (outward oriented)"""
+    v = 0.0
+    for _, p in comp:
+        Q = np.array([pos[u] for u in p])
+        c = Q.mean(0)
+        v += float(np.dot(c, np.cross(Q - c, np.roll(Q, -1, 0) - c).sum(0))) / 6.0
+    return v
+
+
 def _piece_bad(pos, comp, h):
     """some face does not clearly see the centroid (same test as the merging stage)"""
     Cf, Sf = [], []
@@ -811,6 +823,69 @@ def cut_with_fallback(ctx, items, shared_cap, hk, csize, max_iter=4):
             do(k)
     nsharp = sum(1 for ch, did in used if ch or did)
     return res, nsharp, nfb
+
+
+def select_clip_cells(pc, cand, faces_of, cells_of_face, special, pts):
+    """Cells cut by plane clipping (featclip): the candidates whose surroundings are
+    convex, grown so that the faces they share with level-set cells come out the same
+    both ways (the neighbour joins where its surroundings are convex too).  Returns
+    (cells, faces): the faces where that is not so (the neighbour is not convex there)
+    are cut by the level-set rule in the clipped cell as well."""
+    elig = {}
+
+    def eligible(c):
+        e = elig.get(c)
+        if e is None:
+            if c in special:
+                e = False
+            else:
+                P = pts[unique(np.concatenate([np.asarray(p, np.int64) for _, p in faces_of(c)]))]
+                r = 1.5 * float(np.linalg.norm(P - P.mean(0), axis=1).max())
+                e, _ = pc.convex_at(P, r)
+            elig[c] = e
+        return e
+
+    compat, around = {}, {}
+
+    def cells_at(fid):
+        r = around.get(fid)
+        if r is None:
+            r = around[fid] = cells_of_face(fid)
+        return r
+
+    def mismatch(fid, poly):
+        ok = compat.get(fid)
+        if ok is None:
+            ok = compat[fid] = pc.ls_compatible(fid, poly)
+        return not ok
+
+    E = set(c for c in cand if eligible(c))
+    todo = sorted(E)
+    while todo:
+        c = todo.pop()
+        for fid, poly in faces_of(c):
+            others = [o for o in cells_at(fid) if o != c and o not in E]
+            if others and mismatch(fid, poly) and all(eligible(o) for o in others):
+                E.update(others)
+                todo.extend(others)
+    # Where a clipped cell shares a face with a cell that cannot be clipped and the two
+    # cuts differ on it, the level-set cell takes the clipped face (below).  That works
+    # for the cells kept out for their own handling (special: wall contact, splits); in a
+    # cell whose surroundings are not convex its cut then makes pieces of no or negative
+    # volume.  So next to such a cell the clipped cells go back to the level-set cut (the
+    # edge is chamfered there as before), until no such face is left.
+    dropped = 0
+    while True:
+        mixed = set(fid for c in E for fid, poly in faces_of(c)
+                    if any(o not in E for o in cells_at(fid) if o != c) and mismatch(fid, poly))
+        hard = set(fid for fid in mixed
+                   if any(o not in E and o not in special for o in cells_at(fid)))
+        if not hard:
+            break
+        bad = set(c for c in E if any(fid in hard for fid, _ in faces_of(c)))
+        E -= bad
+        dropped += len(bad)
+    return E, mixed, dropped
 
 
 def _fluid_fraction(dom, c, h, n=6):
@@ -1686,12 +1761,142 @@ def generate(cfg, log=print):
         if bulk_alive[ci]:
             pieces.append([apply_splits(ci, leaf_faces(ci)), ci, -1])
             bulk_alive[ci] = False
+    clip, mixed, nback = set(), set(), 0
+    if hk and cfg["exactFeatureCut"] and dom_feat._kd is not None:
+        # cut and solid-side cells next to a convex feature edge: clipped by the STL planes
+        # (the concave edges whether or not vertices are snapped onto them)
+        ccv = dom_ccv if dom_ccv is not None else             FeatureSet(dom.feature_edges(cfg["featureAngle"], concave_only=True), L=dom.L)
+        pc = PlaneClip(dom, pts, phi_d, hmin, dom_feat, ccv, cfg["featureAngle"])
+        pc.zero_edge = ctx.zero_edge
+        special = set(drop) | split_cells | set(opened) | set(cb)
+        mphi = np.minimum.reduceat(np.minimum.reduceat(phi_d[fverts], fptr[:-1]), cptr[:-1])
+        cnd = np.nonzero((cls >= 0) & (mphi < 0.9 * csize))[0]
+        if len(cnd):
+            occ_c = np.concatenate([np.arange(fptr[cptr[c]], fptr[cptr[c + 1]]) for c in cnd.tolist()])
+            own_c = np.repeat(np.arange(len(cnd)), fptr[cptr[cnd + 1]] - fptr[cptr[cnd]])
+            cen = np.zeros((len(cnd), 3)); np.add.at(cen, own_c, pts[fverts[occ_c]])
+            cen /= np.bincount(own_c, minlength=len(cnd))[:, None]
+            _, df = dom_feat.closest(cen)
+            ok = df < 0.9 * csize[cnd]
+            if ccv._kd is not None:
+                _, dcv = ccv.closest(cen)
+                ok &= dcv > 1.5 * csize[cnd]
+            # wall vertices of these cells a hair off a crease go onto it (as the clip's own
+            # points do, make_alloc): left there, the clip keeps a strip of the other wall
+            # as narrow as the gap
+            cv = unique(fverts[np.concatenate([np.arange(fptr[cptr[c]], fptr[cptr[c + 1]])
+                                               for c in cnd[ok].tolist()])]) if ok.any() else np.zeros(0, np.int64)
+            cv = cv[phi_d[cv] == 0]
+            if len(cv):
+                cpv, dv = dom_feat.closest(pts[cv])
+                w = (dv > 0) & (dv < 0.05 * hmin)
+                for v, x in zip(cv[w].tolist(), cpv[w]):
+                    pts[v] = x
+                    positions[v] = x.tolist()
+                # the zone cuts read the zones' level sets of these vertices later: refresh
+                # them (a vertex on a zone surface stays on it, 0.05 hmin is below the snap)
+                mv = cv[w]
+                for i, z in enumerate(zones):
+                    if len(mv) and z["conforming"]:
+                        m_ = mv[phi_z[i][mv] != 0]
+                        if len(m_):
+                            phi_z[i][m_] = z["geom"].sdf(pts[m_])
+            ko = np.argsort(f_key, kind="stable")
+            ks = f_key[ko]
+
+            def cells_of_face(fid):
+                return f_cell[ko[np.searchsorted(ks, fid):np.searchsorted(ks, fid, side="right")]].tolist()
+            clip, mixed, nback = select_clip_cells(pc, cnd[ok].tolist(), leaf_faces, cells_of_face, special, pts)
+            # the faces they share with level-set cells: cut by the plain rule there (no
+            # chord or pinch points), which select_clip_cells checked the clip agrees with
+            ctx.plain_faces = set(fid for c in clip for fid, _ in leaf_faces(c)
+                                  if any(o not in clip for o in cells_of_face(fid)))
+        keep = [k for k, (_, ci) in enumerate(items) if ci not in clip]
+        items = [items[k] for k in keep]
+        cl = [cl[k] for k in keep]
+        if clip:
+            def feat_closest(x):
+                cp, d = dom_feat.closest(np.asarray(x)[None])
+                return cp[0], d[0]
+            alloc = make_alloc(ctx, phi_d, feat_closest, 1e-6 * hmin, 0.05 * hmin)
+        if mixed:
+            # where the clip differs and the neighbour cannot be clipped (its
+            # surroundings are not convex), the neighbour takes the clipped face (on the
+            # fluid side or on the wall, it keeps it whole and closes its cut along it)
+            pre = {}
+            for fid in sorted(mixed):
+                c = next(o for o in cells_of_face(fid) if o in clip)
+                poly = next(p_ for f_, p_ in leaf_faces(c) if f_ == fid)
+                pre[fid] = (poly, clipped_face(pc, ctx, fid, poly, alloc))
+
+            def take_clipped(fl):
+                out = []
+                for f_, p_ in fl:
+                    if f_ not in pre:
+                        out.append((f_, p_)); continue
+                    poly, kept = pre[f_]
+                    if kept is not None:
+                        f2, q = kept
+                        out.append((f2, list(q) if _same_orientation(poly, p_) else list(q[::-1])))
+                return out
+            at = {ci: k for k, (_, ci) in enumerate(items)}
+            for ci in sorted(set(o for fid in mixed for o in cells_of_face(fid)) - clip):
+                if ci in at:
+                    k = at[ci]
+                    items[k] = (take_clipped(items[k][0]), ci)
+                elif bulk_alive[ci]:
+                    # an uncut fluid cell: cut, closed along the clipped face
+                    bulk_alive[ci] = False
+                    items.append((take_clipped(leaf_faces(ci)), ci))
+                    cl.append(ci)
     res, nsh, nfb = cut_with_fallback(ctx, items, False, hk, csize)
     del items
     for ci, (negc, _) in zip(cl, res):
         for comp in negc:
             pieces.append([comp, ci, -1])
     del res
+    if clip:
+        hook, st = hk
+        nbad = nsl = nfac = ngap = 0
+        for ci in sorted(clip):
+            st["cell"] = ci; st["forbid"] = False
+            creases, walls = set(), set()
+            neg = clip_cell(pc, ctx, leaf_faces(ci), alloc, hook, creases, walls)
+            if not neg:
+                continue
+            bulk_alive[ci] = False
+            kept = False
+            for comp in split_components(neg):
+                # faces lying on a wall plane alone (vertices snapped onto it): no volume
+                if _piece_volume(ctx.pos, comp) < 1e-6 * csize[ci] ** 3:
+                    continue
+                # a sliver in a solid-side cell is kept where its caps lie on the walls
+                # (bent over a crease, or in one wall plane); one between a chord and a
+                # faceted curved wall only resolves the facets: dropped, the chord is the
+                # wall there (as the level-set cut has it; the neighbours keep the shared
+                # faces as walls)
+                if cls[ci] > 0 and not any(fid in creases for fid, _ in comp):
+                    nfac += 1
+                    continue
+                # one between two opposite walls that do not meet in the cell (wall faces
+                # facing away from each other, no vertex in common - a wedge's meet along
+                # the crease) is a thin gap: left to the thin-gap handling (fillThinGaps)
+                if cls[ci] > 0:
+                    cf = [p for fid, p in comp if fid in walls]
+                    nw = [_newell(np.array([ctx.pos[v] for v in p])) for p in cf]
+                    nw = [x / max(np.linalg.norm(x), 1e-300) for x in nw]
+                    if any(nw[i] @ nw[j] < -0.5 and not set(cf[i]) & set(cf[j])
+                           for i in range(len(cf)) for j in range(i + 1, len(cf))):
+                        ngap += 1
+                        continue
+                kept = True
+                nbad += _piece_bad(ctx.pos, comp, csize[ci])
+                pieces.append([comp, ci, -1])
+            nsl += kept and cls[ci] > 0
+        log(f"exact feature cut: {len(clip)} cells clipped by the STL planes ({nsl} solid-side cells"
+            f" keeping a sliver, {nfac} slivers along faceted walls and {ngap} in thin gaps dropped,"
+            f" {nbad} pieces not convex; {nback} cells left to the level-set cut where a neighbour"
+            f" could not be clipped)")
     next_id = ctx.next_id
     log(f"domain cut: {len(cut_leaves)} cut cells, {int(bulk_alive.sum()) + len(pieces)} cells kept"
         + (f", {nsh} cells follow feature edges ({nfb} fell back to chamfers to stay convex)"

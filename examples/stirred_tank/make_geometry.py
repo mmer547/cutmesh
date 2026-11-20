@@ -8,6 +8,8 @@ python make_geometry.py               -> tank.stl, rotor.stl
 python make_geometry.py --stator 0.5  -> tank_stator_0.5mm.stl: the same tank with a fixed ring
     (solids statorInner = the face towards the impeller, stator = the rest) around the
     impeller, leaving a gap of 0.5 mm to the outermost blade corners (rotor-stator mixer)
+python make_geometry.py --tilt        -> tank_tilted.stl: the tank turned by TILT (no edge along
+    the octree axes, as in most real geometry; the rotor cylinder turns with it, see tilt_point)
 """
 import sys
 import os
@@ -113,6 +115,21 @@ def stator_ring(gap, n=360):
     return [("statorInner", inner), ("stator", np.concatenate([outer, bot, top]))]
 
 
+def _rot(axis, deg):
+    t = np.radians(deg); c, s = np.cos(t), np.sin(t)
+    return {"x": np.array([[1, 0, 0], [0, c, -s], [0, s, c]]),
+            "y": np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]]),
+            "z": np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])}[axis]
+
+
+TILT = _rot("z", 17) @ _rot("x", 23) @ _rot("y", 11)
+
+
+def tilt_point(p):
+    """a point (e.g. the rotor cylinder's ends) turned like tank_tilted.stl"""
+    return (TILT @ np.asarray(p, float)).tolist()
+
+
 def rotor_cylinder(r=0.07, z0=0.06, z1=0.14, n=96):
     """Closed cylinder STL for the rotating zone (alternative to the analytic cylinder)."""
     ang = np.linspace(0, 2 * np.pi, n, endpoint=False)
@@ -125,6 +142,12 @@ def rotor_cylinder(r=0.07, z0=0.06, z1=0.14, n=96):
 
 if __name__ == "__main__":
     here = os.path.dirname(os.path.abspath(__file__))
+    if "--tilt" in sys.argv:
+        solids = [(n, t @ TILT.T) for n, t in build()]
+        write_stl_ascii(os.path.join(here, "tank_tilted.stl"), solids)
+        print("wrote tank_tilted.stl; rotor cylinder ends",
+              [round(x, 9) for x in tilt_point([0, 0, 0.06])], [round(x, 9) for x in tilt_point([0, 0, 0.14])])
+        sys.exit(0)
     if "--stator" in sys.argv:
         gap_mm = float(sys.argv[sys.argv.index("--stator") + 1])
         solids = build() + stator_ring(gap_mm * 1e-3)
