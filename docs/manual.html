@@ -65,7 +65,7 @@
 <p>必要なもの: Python 3.9 以上、numpy、scipy（断面図を描くなら matplotlib）。メッシュ生成に OpenFOAM は要りません。</p>
 <pre><code>git clone https://github.com/mmer547/cutmesh.git
 cd cutmesh
-pip install -e .                      # オフライン環境では --no-build-isolation（要 wheel）
+pip install -e .                      # オフライン環境では --no-build-isolation（要 wheel、setuptools 77 以上）
 python tools/build_rust.py            # 任意: Rust 拡張のビルド（約 4 倍速くなる）</code></pre>
 <p>インストールしない場合は、リポジトリの直下から <code>python -m cutmesh</code> で実行するか、<code>PYTHONPATH</code> にリポジトリのディレクトリを通してください。</p>
 
@@ -375,7 +375,8 @@ python benchmark/run_bench.py benchmark/suites/synthetic.json [オプション]<
 <footer class="site-footer"><div class="inner">
   cutmesh は OpenFOAM の一部ではなく、OpenFOAM 用のメッシュ（<code>constant/polyMesh</code>）を書き出す独立したツールです。
   This offering is not approved or endorsed by OpenCFD Limited, producer and distributor of the OpenFOAM software via www.openfoam.com,
-  and owner of the OPENFOAM® and OpenCFD® trade marks.
+  and owner of the OPENFOAM® and OpenCFD® trade marks.<br>
+  cutmesh: <a href="https://github.com/mmer547/cutmesh/blob/main/LICENSE">MIT License</a>, Copyright (c) 2026 mmer547
 </div></footer>
 </body>
 </html>

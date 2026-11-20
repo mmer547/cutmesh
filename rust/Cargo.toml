@@ -2,6 +2,7 @@
 name = "cutmesh_core"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 description = "Fast geometry queries for cutmesh (closest point, inside test, signed distance)"
 
 [lib]

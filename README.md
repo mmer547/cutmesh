@@ -26,7 +26,7 @@ https://mmer547.github.io/cutmesh/ ）にあります。
 ## インストール
 
 ```bash
-pip install -e .                      # オフライン環境では --no-build-isolation（要 wheel）
+pip install -e .                      # オフライン環境では --no-build-isolation（要 wheel、setuptools 77 以上）
 python tools/build_rust.py            # 任意: Rust 拡張のビルド（下記「高速化」）
 ```
 
@@ -433,3 +433,10 @@ cutmesh は OpenFOAM の一部ではなく、OpenFOAM 用のメッシュ（`cons
 
 This offering is not approved or endorsed by OpenCFD Limited, producer and distributor of the
 OpenFOAM software via www.openfoam.com, and owner of the OPENFOAM® and OpenCFD® trade marks.
+
+## ライセンス
+
+MIT License（[LICENSE](LICENSE)）。Copyright (c) 2026 mmer547
+
+依存ライブラリ（numpy, scipy, matplotlib, Rust 拡張の pyo3, rayon, numpy クレート）はそれぞれのライセンスに従います。
+`benchmark/fetch_thingi10k.py` などで取得する第三者の形状データは、このライセンスの対象外です（モデルごとのライセンスに従います）。
