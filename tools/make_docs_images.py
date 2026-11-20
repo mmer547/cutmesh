@@ -189,6 +189,11 @@ def case_shapes(work, stats):
         R, t = mesh({"domain": p, "baseCellSize": h, "surfaceRefinement": {"default": 2}}, work, s)
         stats[s] = dict(cells=n_cells(R), seconds=round(t, 1))
         three_d(R, f"shape_{s}.png", f"{s}: {what}", "cut")
+        if s == "cube_rotated":           # the wall faces show the edges best: with and without
+            three_d(R, f"shape_{s}_walls.png", f"{s}: wall faces (exactFeatureCut on)", "overview")
+            R0, _ = mesh({"domain": p, "baseCellSize": h, "surfaceRefinement": {"default": 2},
+                          "exactFeatureCut": False}, work, s + "_plain")
+            three_d(R0, f"shape_{s}_walls_plain.png", f"{s}: wall faces (exactFeatureCut off)", "overview")
 
 
 CASES = {"tank": case_tank, "cylindrical": case_cylindrical, "layers": case_layers,

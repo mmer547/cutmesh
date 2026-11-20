@@ -481,6 +481,61 @@ impl TriMesh {
         Ok((si.into_pyarray(py), tt.into_pyarray(py), tri.into_pyarray(py)))
     }
 
+    /// Triangles within distance r[i] of p[i] (exact), ascending per point:
+    /// (ptr[n + 1], triangle ids) - the ids of point i are ids[ptr[i]..ptr[i + 1]].
+    fn near<'py>(
+        &self,
+        py: Python<'py>,
+        p: PyReadonlyArray2<'py, f64>,
+        r: PyReadonlyArray1<'py, f64>,
+    ) -> PyResult<(Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<i64>>)> {
+        let pts = points(&p)?;
+        let rr: Vec<f64> = r.as_array().iter().copied().collect();
+        if rr.len() != pts.len() {
+            return Err(pyo3::exceptions::PyValueError::new_err("p and r differ in length"));
+        }
+        let per: Vec<Vec<i64>> = py.detach(|| {
+            pts.par_iter()
+                .zip(rr.par_iter())
+                .map(|(&q, &rad)| {
+                    let mut out: Vec<i64> = Vec::new();
+                    if self.bvh.nodes.is_empty() || !(rad >= 0.0) {
+                        return out;
+                    }
+                    let r2 = rad * rad;
+                    let mut stack: Vec<u32> = vec![0];
+                    while let Some(ni) = stack.pop() {
+                        let n = &self.bvh.nodes[ni as usize];
+                        if box_d2(n, q) > r2 {
+                            continue;
+                        }
+                        if n.count > 0 {
+                            for &i in &self.bvh.prims[n.start as usize..(n.start + n.count) as usize] {
+                                let [a, b, c] = self.t[i as usize];
+                                if dist2(closest_tri(q, a, b, c), q) <= r2 {
+                                    out.push(i as i64);
+                                }
+                            }
+                        } else {
+                            stack.push(n.start);
+                            stack.push(n.right);
+                        }
+                    }
+                    out.sort_unstable();
+                    out
+                })
+                .collect()
+        });
+        let mut ptr = Vec::with_capacity(per.len() + 1);
+        ptr.push(0i64);
+        let mut ids = Vec::new();
+        for v in per {
+            ids.extend(v);
+            ptr.push(ids.len() as i64);
+        }
+        Ok((ptr.into_pyarray(py), ids.into_pyarray(py)))
+    }
+
     /// signed distance (negative inside)
     fn sdf<'py>(&self, py: Python<'py>, p: PyReadonlyArray2<'py, f64>) -> PyResult<Bound<'py, PyArray1<f64>>> {
         let pts = points(&p)?;

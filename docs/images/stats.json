@@ -1,38 +1,38 @@
 {
  "tank": {
-  "cells": 102433,
-  "seconds": 13.2
+  "cells": 102430,
+  "seconds": 14.2
  },
  "cylindrical": {
   "cells": 136620,
-  "seconds": 22.0
+  "seconds": 22.7
  },
  "layers": {
   "cells": 163633,
-  "seconds": 14.9
+  "seconds": 16.7
  },
  "stator_1mm": {
-  "cells": 596156,
-  "seconds": 119.2
+  "cells": 596160,
+  "seconds": 133.8
  },
  "sphere": {
   "cells": 75612,
-  "seconds": 13.3
+  "seconds": 13.9
  },
  "cube_rotated": {
-  "cells": 53536,
-  "seconds": 10.7
+  "cells": 53564,
+  "seconds": 13.2
  },
  "torus": {
   "cells": 39008,
-  "seconds": 7.3
+  "seconds": 7.1
  },
  "thin_channels": {
   "cells": 46244,
-  "seconds": 8.9
+  "seconds": 22.5
  },
  "l_bracket": {
   "cells": 71439,
-  "seconds": 8.5
+  "seconds": 14.0
  }
 }

@@ -138,6 +138,7 @@ python run.py                         # 断面図も欲しい場合 → slice_z.
   <tr><td><code>concaveSnapMax</code></td><td>凹の鋭角エッジでは、固体側の節点をこの距離までエッジ上へ寄せる</td><td>0.75</td></tr>
   <tr><td><code>hangingSnap</code></td><td>表面へ届かないぶら下がり節点の扱い（<code>"free"</code>: 表面へ直接投影、<code>"constrained"</code>: 動かさない）</td><td><code>"free"</code></td></tr>
   <tr><td><code>featureCaps</code></td><td>凸の鋭角部でカット面を特徴線に沿わせる（<code>"domain"</code> / <code>"zone"</code> / <code>"both"</code> / <code>false</code>）</td><td><code>"domain"</code></td></tr>
+  <tr><td><code>exactFeatureCut</code></td><td>凸の鋭角エッジの近くのセルを、STL の平面で直接切る。格子に沿わないエッジがギザギザにならない（<code>featureCaps</code> が <code>"domain"</code> か <code>"both"</code> のときだけ働く）</td><td>true</td></tr>
   <tr><td><code>mergeRatio</code></td><td>元の六面体の体積比でこれ未満のカットセルを隣のセルに統合する</td><td>0.25</td></tr>
   <tr><td><code>mergeMaxNonOrtho</code></td><td>統合後の非直交角の上限 [deg]</td><td>65</td></tr>
   <tr><td><code>mergeWallFaces</code></td><td>1 つのセルの、ほぼ同一平面の壁面の断片を 1 つの面にまとめる</td><td>true</td></tr>
@@ -406,7 +407,7 @@ python benchmark/run_bench.py benchmark/suites/synthetic.json [オプション]<
 <ul>
   <li>STL は水密（閉じた・向きの揃った）である必要がある。開いた辺・自己交差は直さない（開いた辺は警告、自己交差は体積チェックの警告で分かることが多い）。</li>
   <li>セルより薄い形状（薄翼・バッフル板）は、その厚さ程度まで細分化が必要。</li>
-  <li>壁と別の壁が交わる入隅、円筒の縁、格子に沿わない凸の鋭角エッジは、セル寸法程度で面取りされることがある。</li>
+  <li>壁と別の壁が交わる入隅や円筒の縁は、セル寸法程度で面取りされることがある。凸の鋭角エッジは厳密カットで捉えるが、凹のエッジや曲面と交わる所の近くでは面取りが残ることがある。</li>
   <li>歪度 &gt; 4 の境界面が少数残ることがある（checkMesh では 1 項目の失敗になる可能性がある）。</li>
   <li>メモリは 100 万セルあたり約 5 GB 使う。狭い隙間の中に回転ゾーンの界面を置くと、セル数とメモリが急に増える。</li>
   <li>幾何の問い合わせと回転ゾーンのカットは Rust 拡張に移したが、STL のカット・セル統合・組み立ては Python のままで、時間の大半を占める。</li>
