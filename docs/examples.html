@@ -59,6 +59,12 @@ python run.py meshDict.json                 # メッシュを作って断面図 
 python ../../benchmark/render_mesh.py case -o case_pictures    # 3D 図 overview.png・cut.png を描く
 python -m cutmesh.diagnose meshDict.json case                  # 壁越しのリークがないかを検査する
 python ../../tools/edge_check.py meshDict.json                 # 特徴線・円筒の縁を捉えられているか測る</code></pre>
+<p class="cmd-label">スライディングメッシュ（AMI）にする場合</p>
+<pre><code>cutmesh meshDict_ami.json                   # 界面を cyclicAMI パッチ rotor_AMI1 / rotor_AMI2 に分け、
+                                            # constant/dynamicMeshDict を書く → case_ami/
+python -m cutmesh.ami case -out case_ami_later    # 作ったメッシュを後から変換する場合
+    # openfoam.org では meshDict に "openfoam": "org12" を書き、OpenFOAM で
+    # createNonConformalCouples -overwrite rotor_nonCouple1 rotor_nonCouple2 を実行する</code></pre>
 <figure>
   <a class="img" href="images/tank_cut.png"><img src="images/tank_cut.png" alt="攪拌槽のメッシュ。手前半分のセルを取り除いた 3D 図と、x・y・z の断面" loading="lazy"></a>
   <figcaption>x &lt; 0 のセルだけを残した 3D 図（切り口はベージュ）と、中央の 3 断面</figcaption>
