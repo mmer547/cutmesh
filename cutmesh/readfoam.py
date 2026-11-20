@@ -163,14 +163,20 @@ def _strip_header(path):
 
 
 def read_boundary(case):
-    """[dict(name, type, nFaces, startFace)]"""
+    """[dict(name, type, nFaces, startFace[, extra])]: extra holds the other entries
+    (neighbourPatch, transform, ... of coupled patches; inGroups is left out: the writer
+    sets it from the type)"""
     t = _strip_header(os.path.join(case, "constant", "polyMesh", "boundary"))
     out = []
     for m in re.finditer(r"(\w[\w.:-]*)\s*\{([^{}]*)\}", t):
         body = m.group(2)
-        g = lambda k: re.search(rf"\b{k}\s+([^;]+);", body).group(1).strip()
-        out.append(dict(name=m.group(1), type=g("type"), nFaces=int(g("nFaces")),
-                        startFace=int(g("startFace"))))
+        ent = {k: v.strip() for k, v in re.findall(r"(\w+)\s+([^;]+);", body)}
+        p = dict(name=m.group(1), type=ent.pop("type"), nFaces=int(ent.pop("nFaces")),
+                 startFace=int(ent.pop("startFace")))
+        ent.pop("inGroups", None)
+        if ent:
+            p["extra"] = ent
+        out.append(p)
     return out
 
 

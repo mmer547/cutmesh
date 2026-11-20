@@ -15,7 +15,8 @@ https://mmer547.github.io/cutmesh/ ）にあります。
   隙間の幅に合わせた自動細分化（`autoGapRefinement`）もある
 - **境界層**: 壁パッチにプリズム層を追加（cutmesh 以外で作った polyMesh にも使える）
 - **回転ゾーン（任意）**: 円筒（寸法または STL で指定）を**メッシュ生成の一部として**切断し、
-  円筒面そのものを内部面にする。`cellZone`・向き付きの界面 `faceZone`・`MRFProperties` の雛形を出力する
+  円筒面そのものを内部面にする。`cellZone`・向き付きの界面 `faceZone`・`MRFProperties` の雛形を出力する。
+  スライディングメッシュ（AMI）用に、界面を 2 つのパッチに分けて `dynamicMeshDict` を書くこともできる
 - **円筒ベースメッシュ（任意）**: 回転機械向けに、八分木の根を軸まわりの同心ブロックにできる
 - **依存が少ない**: Python 3.9+, numpy, scipy（断面図に matplotlib）。メッシュ生成に OpenFOAM は不要。
   幾何計算を Rust 拡張で高速化できる（任意）
@@ -68,6 +69,7 @@ python run.py                         # 断面図も欲しい場合 → slice_z.
 | `meshDict.json` | 直交格子ベース、寸法指定の回転ゾーン |
 | `meshDict_coarseRotor.json` | 回転ゾーン内部を粗くした例 |
 | `meshDict_stlRotor.json` | 回転ゾーンを STL で指定 |
+| `meshDict_ami.json` | スライディングメッシュ（AMI）: 界面を `cyclicAMI` パッチの対にし、`dynamicMeshDict` を書く |
 | `meshDict_cylindrical.json` | 円筒ベースメッシュ |
 | `meshDict_layers.json` | 境界層（3層、全壁） |
 | `meshDict_stator_1mm.json` | ローター・ステーター: 翼の外側 1 mm に固定リング（`python make_geometry.py --stator 1` で `tank_stator_1mm.stl` を生成）、回転ゾーンの界面は隙間の中央。約 60 万セル・2 分 |
@@ -110,6 +112,8 @@ python run.py                         # 断面図も欲しい場合 → slice_z.
 | `rotatingZones` | 回転ゾーンのリスト（下記「回転ゾーン」）。省略時はゾーンなし | `[]` |
 | `writeMRFProperties` | 回転ゾーンがあるとき `constant/MRFProperties` の雛形を書く | true |
 | `writeFormat` | polyMesh の書き出し形式: `"binary"` または `"ascii"`（下記「書き出し形式」） | `"binary"` |
+| `openfoam` | スライディングメッシュ（`"ami": true` のゾーン）の書き方: `"com"`（openfoam.com / ESI）、`"org10"`・`"org11"`・`"org12"`（openfoam.org）（下記「スライディングメッシュ」） | `"com"` |
+| `writeDynamicMeshDict` | `"ami": true` のゾーンがあるとき `constant/dynamicMeshDict`（回転の設定）を書く | true |
 | `case` | 出力先ケースディレクトリ | `.` |
 | `padding` | STL の外接箱の周りに足すベースセルの数 | 1 |
 | `addLayers` | 境界層の設定（下記「境界層」）。省略時は層なし | なし |
@@ -140,10 +144,40 @@ MRF円筒を置く）場合、隙間より細かいセルが必要ですが、`s
 なってセル数が大きく増えます。`wallProximity` なら必要な所だけで済みます。
 `"bufferLayers": 1` を加えると、この細分化の遷移層だけを薄くしてさらにセル数を減らせます。
 
+`"ami": true`（任意）: 界面をスライディングメッシュ用の 2 つのパッチに分ける（下記「スライディングメッシュ」）。
+
 `"conforming": false`（任意）: 界面をメッシュに沿わせず、セル中心が円筒内にあるセルを cellZone にします
 （snappyHexMesh の MRF と同じ考え方。MRF は cellZone だけを使う）。界面が狭い隙間の中にあって円筒に沿った
 界面を作れない場合に使います。AMI（スライディングメッシュ）には使えません。この界面は境界層の拘束面に
 しません（層の追加後に cellZone から faceZone を作り直します）。
+
+## スライディングメッシュ（AMI、`cutmesh/ami.py`）
+
+回転ゾーンに `"ami": true` を付けると、界面の内部面（faceZone `<name>_interface`）を、回転側のセルが持つ面と
+静止側のセルが持つ面の 2 つのパッチに分け、界面の点を回転側だけ複製して切り離します（OpenFOAM の
+`createBaffles` と `mergeOrSplitBaffles -split` / `splitBaffles` をまとめて行うのと同じ）。境界層を付ける場合は
+層を付けた後に分けます。あわせて `constant/dynamicMeshDict`（cellZone の剛体回転）を書き、このゾーンは
+`MRFProperties` には書きません。書き方は OpenFOAM の配布元で違うので `openfoam` で選びます。
+
+| `openfoam` | パッチ（回転側 / 静止側） | dynamicMeshDict | OpenFOAM での手順 |
+|---|---|---|---|
+| `"com"`（既定） | `<name>_AMI1` / `<name>_AMI2`、型 `cyclicAMI`（`neighbourPatch`、`transform noOrdering`） | `dynamicMotionSolverFvMesh` + `solidBody` | そのまま使える |
+| `"org10"`・`"org11"`・`"org12"` | `<name>_nonCouple1` / `<name>_nonCouple2`、型 `patch` | `mover { type motionSolver; ... }` | `createNonConformalCouples -overwrite <name>_nonCouple1 <name>_nonCouple2` でつなぐ（ログにも出る） |
+
+- 書き方は各配布元のチュートリアル（openfoam.com: `interFoam/RAS/mixerVesselAMI`、openfoam.org 10〜12:
+  `mixerVessel2D`）に合わせている。OpenFOAM 本体で読み込んで回すことは、まだ確認していない。
+- ゾーンの界面は回転軸まわりの回転面である必要がある（円筒は常に可）。STL で与えたゾーンが回転面でない、
+  または `origin`・`axis` がずれていると、警告を出す（界面の面を 7° 回してゾーンの表面からのずれが変わるかで判定）。
+- `"conforming": false` のゾーンには使えない（エラー）。openfoam.org の開発版（`mover { type solidBody; ... }`）は未対応。
+- 複数のゾーンは、openfoam.com では `multiSolidBodyMotionSolver`、openfoam.org では `motionSolverList` で書く。
+
+既存のメッシュ（faceZone `<name>_interface` と cellZone `<name>` があるもの）は後から変換できます。
+回転の設定は `constant/MRFProperties` から読み、変換したゾーンの項目はそこから取り除きます（メッシュごと回る
+ゾーンに MRF の項が重ならないように。メッシュ生成で `"ami": true` にしたゾーンも、前の実行で書いた項目を取り除く）。
+
+```bash
+python -m cutmesh.ami CASE [-zone NAME ...] [-openfoam com|org10|org11|org12] [-out CASE2] [-noDynamicMeshDict] [-ascii | -binary]
+```
 
 ## 円筒ベースメッシュ（`cutmesh/cylbase.py`）
 
@@ -443,8 +477,8 @@ REPAIR: domain STL: removed 20 zero-area triangles, 50 duplicated triangles (one
 3. **Rust 化**: 距離計算（BVH）と回転ゾーンのカット（特徴線のフックなし）は Rust 拡張に移行済み（上記「高速化」）。
    次は STL のカット（特徴線のフックつき。セル単位で独立なので並列化しやすい）、セル統合。
    メモリの削減も課題（`benchmark/PLAN.md` の P0-2）
-4. **AMI（スライディングメッシュ）**: 回転ゾーンの `<name>_interface` faceZone を `createBaffles` で
-   切り離し、cyclicAMI にする（手順は snappyHexMesh のチュートリアルと同じ）
+4. **スライディングメッシュ**: 界面の AMI / 非適合カップル用パッチへの分割は対応済み（上記）。今後: OpenFOAM 本体での
+   動作確認、openfoam.org 開発版の `dynamicMeshDict`
 
 ## 商標
 
