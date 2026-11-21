@@ -18,6 +18,7 @@ mod octree;
 mod wallmerge;
 mod contact;
 mod sortutil;
+mod csr;
 
 pub(crate) type V3 = [f64; 3];
 
@@ -1017,6 +1018,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cell_geometry, m)?)?;
     m.add_function(wrap_pyfunction!(poly_cell, m)?)?;
     m.add_function(wrap_pyfunction!(cut::cut_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(cut::cut_batch_csr, m)?)?;
     m.add_function(wrap_pyfunction!(layers::jacobi_band, m)?)?;
     m.add_function(wrap_pyfunction!(layers::cells_bad, m)?)?;
     m.add_function(wrap_pyfunction!(octree::build_cells, m)?)?;

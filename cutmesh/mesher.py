@@ -988,10 +988,12 @@ def _rust_cut_ok(ctx, hk):
     return not hk or getattr(getattr(hk[0], "feat", None), "_rs", None) is not None
 
 
-def _cut_with_fallback_rs(ctx, items, shared_cap, hk, csize, P0, max_iter=4):
+def _cut_with_fallback_rs(ctx, items, shared_cap, hk, csize, P0, max_iter=4, leaf_csr=None):
     """cut_with_fallback with the cuts in the Rust kernel (the same results and ids);
     P0: array of the first len(P0) positions of the context.  The context's state is
-    brought up to date afterwards."""
+    brought up to date afterwards.  leaf_csr: (cptr, fptr, fverts, f_key) for items
+    whose faces are None (the leaf's own); the results are then the kernel's arrays
+    (item, side, face ptr, face ids, vertex ptr, vertices), not lists."""
     hook = hk[0] if hk else None
     st = hk[1] if hk else {}
     n0 = len(P0)
@@ -1018,7 +1020,10 @@ def _cut_with_fallback_rs(ctx, items, shared_cap, hk, csize, P0, max_iter=4):
                         float(hook.reach) if hook is not None else 0.0,
                         np.ascontiguousarray(csize, float), pinch_cb, cap_cb, float(ctx.pinch_min_area))
     del Pa, pa
-    K.set_items(items)
+    if leaf_csr is not None:
+        K.set_items_csr(*_items_csr(items, *leaf_csr))
+    else:
+        K.set_items(items)
     n = len(items)
     used = K.cut(list(range(n)), [False] * n)
     forbid = set()
@@ -1038,7 +1043,7 @@ def _cut_with_fallback_rs(ctx, items, shared_cap, hk, csize, P0, max_iter=4):
         for k, u in zip(ks, K.cut(ks, [k in forbid for k in ks])):
             used[k] = u
     nsharp = sum(1 for ch_, did in used if ch_ or did)
-    res = K.results()
+    res = K.results_csr(not shared_cap) if leaf_csr is not None else K.results()
     newp, newv, newpar, nid, cd, sd, clog, nf = K.export()
     del K
     ctx.pos.extend(newp.tolist())
@@ -1054,13 +1059,19 @@ def _cut_with_fallback_rs(ctx, items, shared_cap, hk, csize, P0, max_iter=4):
     return res, nsharp, nfb
 
 
-def cut_with_fallback(ctx, items, shared_cap, hk, csize, max_iter=4, P0=None):
+def cut_with_fallback(ctx, items, shared_cap, hk, csize, max_iter=4, P0=None, faces_of=None, leaf_csr=None):
     """Cut items [(faces, parent_leaf)].  Cells where the feature refinement (bent face
     chords, split caps) produced a non-convex piece are re-cut without it, together
     with the cells sharing those faces.  Returns ([(neg_comps, pos_comps)], n_sharp,
-    n_fallback).  P0 (array of the context's first positions): cut in Rust."""
+    n_fallback).  P0 (array of the context's first positions): cut in Rust.
+    faces None in an item: the leaf's own faces (faces_of(leaf)); with leaf_csr and the
+    Rust kernel the results are flat arrays (_cut_with_fallback_rs)."""
     if P0 is not None and _rust_cut_ok(ctx, hk):
-        return _cut_with_fallback_rs(ctx, items, shared_cap, hk, csize, P0, max_iter)
+        if leaf_csr is None and faces_of is not None:
+            items = [(fl if fl is not None else faces_of(ci), ci) for fl, ci in items]
+        return _cut_with_fallback_rs(ctx, items, shared_cap, hk, csize, P0, max_iter, leaf_csr)
+    if faces_of is not None:
+        items = [(fl if fl is not None else faces_of(ci), ci) for fl, ci in items]
     hook = hk[0] if hk else None
     st = hk[1] if hk else {}
     res = [None] * len(items)
@@ -1110,6 +1121,110 @@ def _cat_ranges(lo, hi):
     if not len(n):
         return np.zeros(0, np.int64)
     return np.repeat(lo - np.concatenate([[0], np.cumsum(n)[:-1]]), n) + np.arange(int(n.sum()))
+
+
+def _ptr(counts):
+    """offsets of consecutive runs of the given lengths: [0, c0, c0 + c1, ...]"""
+    c = np.asarray(counts, np.int64)
+    out = np.zeros(len(c) + 1, np.int64)
+    np.cumsum(c, out=out[1:])
+    return out
+
+
+class _Pieces:
+    """Cut pieces [faces, parent leaf, zone] as flat arrays: piece i has the faces
+    fptr[i]..fptr[i+1], face f the id key[f] and the vertices verts[vptr[f]..vptr[f+1]].
+    pieces[i] is the [faces, leaf, zone] list of the Python code (built when read), so
+    the cut results go from the Rust kernels to the merging and the assembly without a
+    Python list per face."""
+
+    def __init__(self, leaf, zone, fptr, key, vptr, verts):
+        self.leaf = np.ascontiguousarray(leaf, np.int64)
+        self.zone = np.array(np.broadcast_to(np.asarray(zone, np.int64), self.leaf.shape))
+        self.fptr, self.key, self.vptr, self.verts = (np.ascontiguousarray(x, np.int64)
+                                                      for x in (fptr, key, vptr, verts))
+
+    @classmethod
+    def from_lists(cls, lst):
+        """from [[faces, leaf, zone], ...]"""
+        return cls([pc[1] for pc in lst], [pc[2] for pc in lst], _ptr([len(pc[0]) for pc in lst]),
+                   [fid for pc in lst for fid, _ in pc[0]],
+                   _ptr([len(p) for pc in lst for _, p in pc[0]]),
+                   [v for pc in lst for _, p in pc[0] for v in p])
+
+    @classmethod
+    def from_leaves(cls, leaves, zone, cptr, fptr, fverts, f_key):
+        """uncut octree leaves (their faces as leaf_faces gives them)"""
+        leaves = np.asarray(leaves, np.int64)
+        occ = _cat_ranges(cptr[leaves], cptr[leaves + 1])
+        return cls(leaves, zone, _ptr(cptr[leaves + 1] - cptr[leaves]), f_key[occ],
+                   _ptr(fptr[occ + 1] - fptr[occ]), fverts[_cat_ranges(fptr[occ], fptr[occ + 1])])
+
+    @classmethod
+    def from_csr(cls, leaf, zone, csr):
+        """from a kernel's (face ptr, face ids, vertex ptr, vertices)"""
+        return cls(leaf, zone, *csr)
+
+    def __len__(self):
+        return len(self.leaf)
+
+    def faces(self, i):
+        a, b = int(self.fptr[i]), int(self.fptr[i + 1])
+        vp = self.vptr[a:b + 1].tolist()
+        o = vp[0]
+        vs = self.verts[o:vp[-1]].tolist()
+        return [(k, vs[vp[j] - o:vp[j + 1] - o]) for j, k in enumerate(self.key[a:b].tolist())]
+
+    def __getitem__(self, i):
+        return [self.faces(i), int(self.leaf[i]), int(self.zone[i])]
+
+    def __iter__(self):
+        for i in range(len(self)):
+            yield self[i]
+
+    def csr(self):
+        return self.fptr, self.key, self.vptr, self.verts
+
+    def take(self, idx):
+        """the pieces idx, in that order"""
+        idx = np.asarray(idx, np.int64)
+        occ = _cat_ranges(self.fptr[idx], self.fptr[idx + 1])
+        return _Pieces(self.leaf[idx], self.zone[idx], _ptr(self.fptr[idx + 1] - self.fptr[idx]),
+                       self.key[occ], _ptr(self.vptr[occ + 1] - self.vptr[occ]),
+                       self.verts[_cat_ranges(self.vptr[occ], self.vptr[occ + 1])])
+
+    @staticmethod
+    def concat(parts):
+        parts = [p if isinstance(p, _Pieces) else _Pieces.from_lists(p) for p in parts]
+        fo = np.cumsum([0] + [len(p.key) for p in parts])
+        vo = np.cumsum([0] + [len(p.verts) for p in parts])
+        return _Pieces(np.concatenate([p.leaf for p in parts] + [np.zeros(0, np.int64)]),
+                       np.concatenate([p.zone for p in parts] + [np.zeros(0, np.int64)]),
+                       np.concatenate([[0]] + [p.fptr[1:] + o for p, o in zip(parts, fo)]),
+                       np.concatenate([p.key for p in parts] + [np.zeros(0, np.int64)]),
+                       np.concatenate([[0]] + [p.vptr[1:] + o for p, o in zip(parts, vo)]),
+                       np.concatenate([p.verts for p in parts] + [np.zeros(0, np.int64)]))
+
+    def per_vertex(self):
+        """piece of each entry of verts"""
+        nv = np.diff(self.vptr)
+        face_piece = np.repeat(np.arange(len(self), dtype=np.int64), np.diff(self.fptr))
+        return np.repeat(face_piece, nv)
+
+
+def _items_csr(items, cptr, fptr, fverts, f_key):
+    """cut items [(faces or None for the leaf's own faces, leaf)] as flat arrays:
+    (leaves, face ptr, face ids, vertex ptr, vertices)"""
+    leaf = np.fromiter((ci for _, ci in items), np.int64, count=len(items))
+    own = np.fromiter((fl is None for fl, _ in items), bool, count=len(items))
+    lv = _Pieces.from_leaves(leaf[own], -1, cptr, fptr, fverts, f_key)
+    if own.all():
+        return leaf, lv.fptr, lv.key, lv.vptr, lv.verts
+    ex = _Pieces.from_lists([[fl, ci, -1] for fl, ci in items if fl is not None])
+    # interleave the two in item order
+    k_own = np.flatnonzero(own); k_ex = np.flatnonzero(~own)
+    order = np.argsort(np.concatenate([k_own, k_ex]), kind="stable")
+    return leaf, *_Pieces.concat([lv, ex]).take(order).csr()
 
 
 def select_clip_cells(pc, cand, faces_of, cells_of_face, special, pts):
@@ -2094,8 +2209,11 @@ def generate(cfg, log=print):
     cl = cl + opened
     if opened:
         log(f"surface contact: {len(opened)} uncut cells at concave edges drop a wedge of solid")
-    items = []
+    items = []                         # (faces, leaf); None: the leaf's own faces
     for ci in cl:
+        if ci not in drop and ci not in split_cells:
+            items.append((None, ci))
+            continue
         fl = leaf_faces(ci)
         if ci in drop:
             fl = [f for f in fl if f[0] not in drop[ci]]
@@ -2188,18 +2306,22 @@ def generate(cfg, log=print):
             for ci in sorted(set(o for fid in mixed for o in cells_of_face(fid)) - clip):
                 if ci in at:
                     k = at[ci]
-                    items[k] = (take_clipped(items[k][0]), ci)
+                    items[k] = (take_clipped(items[k][0] if items[k][0] is not None else leaf_faces(ci)), ci)
                 elif bulk_alive[ci]:
                     # an uncut fluid cell: cut, closed along the clipped face
                     bulk_alive[ci] = False
                     items.append((take_clipped(leaf_faces(ci)), ci))
                     cl.append(ci)
-    res, nsh, nfb = cut_with_fallback(ctx, items, False, hk, csize, P0=pts)
+    res, nsh, nfb = cut_with_fallback(ctx, items, False, hk, csize, P0=pts, faces_of=leaf_faces,
+                                      leaf_csr=(cptr, fptr, fverts, f_key))
     del items
-    for ci, (negc, _) in zip(cl, res):
-        for comp in negc:
-            pieces.append([comp, ci, -1])
+    if isinstance(res, tuple):         # the kernel's arrays (negative components)
+        kpieces = _Pieces.from_csr(np.asarray(cl, np.int64)[res[0]], -1, res[2:])
+    else:
+        kpieces = _Pieces.from_lists([[comp, ci, -1] for ci, (negc, _) in zip(cl, res) for comp in negc])
     del res
+    pieces = [pieces, kpieces, []]     # split cells, cut cells, clipped cells (below)
+    del kpieces
     if clip:
         hook, st = hk
         nbad = nsl = nfac = ngap = 0
@@ -2236,12 +2358,13 @@ def generate(cfg, log=print):
                         continue
                 kept = True
                 nbad += _piece_bad(ctx.pos, comp, csize[ci])
-                pieces.append([comp, ci, -1])
+                pieces[2].append([comp, ci, -1])
             nsl += kept and cls[ci] > 0
         log(f"exact feature cut: {len(clip)} cells clipped by the STL planes ({nsl} solid-side cells"
             f" keeping a sliver, {nfac} slivers along faceted walls and {ngap} in thin gaps dropped,"
             f" {nbad} pieces not convex; {nback} cells left to the level-set cut where a neighbour"
             f" could not be clipped)")
+    pieces = _Pieces.concat(pieces)
     next_id = ctx.next_id
     log(f"domain cut: {len(cut_leaves)} cut cells, {int(bulk_alive.sum()) + len(pieces)} cells kept"
         + (f", {nsh} cells follow feature edges ({nfb} fell back to chamfers to stay convex)"
@@ -2276,51 +2399,50 @@ def generate(cfg, log=print):
         bulk_zone[al[czl < 0]] = zi
         newcut = al[czl == 0]
         bulk_alive[newcut] = False
-        for ci in newcut.tolist():
-            pieces.append([leaf_faces(ci), ci, -1])
+        pieces = _Pieces.concat([pieces, _Pieces.from_leaves(newcut, -1, cptr, fptr, fverts, f_key)])
         if isinstance(g, Cylinder):
             zfeat = FeatureSet(cylinder_features(g, hmin / 4), L=g.L)
         else:
             zfeat = FeatureSet(g.s.feature_edges(cfg["featureAngle"]), L=g.L)
         zh = make_feature_hook(zfeat, csize) if fc in ("both", "zone", True) else None
-        rust_cut = _core is not None and not zh          # no hooks: whole batch in Rust
-        positions = None if rust_cut else _PosList(P)
-        ctx = CutContext(positions, pz.tolist(), next_id)
-        if zh:
-            ctx.chord_hook = make_chord_hook(zfeat)
-            ctx.onfeat = set(on_feat_z[zi].tolist())
-        newp = []
-        tocut = []
-        for pc in pieces:
-            c = ctx.classify(pc[0])
-            if c < 0:
-                pc[2] = zi
-                newp.append(pc)
-            elif c > 0:
-                newp.append(pc)
-            else:
-                tocut.append(pc)
+        rust_cut = _core is not None and hasattr(_core, "cut_batch_csr") and not zh   # no hooks: whole batch in Rust
+        # pieces entirely inside go into the zone, those straddling are cut (CutContext.classify)
+        pv_ = pz[pieces.verts]
+        pp_ = pieces.per_vertex()
+        hasN = np.bincount(pp_, pv_ < 0, len(pieces)) > 0
+        hasP = np.bincount(pp_, pv_ > 0, len(pieces)) > 0
+        del pv_, pp_
+        straddle = hasN & hasP
+        pieces.zone[~straddle & ~hasP] = zi
+        tocut = pieces.take(np.flatnonzero(straddle))
+        kept = pieces.take(np.flatnonzero(~straddle))
         nc = len(tocut)
         if rust_cut:
-            res, newpts, newpar, next_id = _core.cut_batch(P, pz, next_id, [pc[0] for pc in tocut], True, {})
+            (it, side, *rcsr), newpts, newpar, next_id = _core.cut_batch_csr(P, pz, next_id, *tocut.csr(), True, {})
             zsh = zfb = 0
             newv = np.arange(len(P), len(P) + len(newpts), dtype=np.int64)
             P = np.concatenate([P, newpts])
             par = np.array(newpar, np.int64).reshape(-1, 2)
+            cutp = _Pieces.from_csr(tocut.leaf[it], np.where(side == 0, zi, tocut.zone[it]), rcsr)
+            del it, side, rcsr
         else:
-            res, zsh, zfb = cut_with_fallback(ctx, [(pc[0], pc[1]) for pc in tocut], True, zh, csize, P0=P)
+            positions = _PosList(P)
+            ctx = CutContext(positions, pz.tolist(), next_id)
+            if zh:
+                ctx.chord_hook = make_chord_hook(zfeat)
+                ctx.onfeat = set(on_feat_z[zi].tolist())
+            tl = list(tocut)
+            res, zsh, zfb = cut_with_fallback(ctx, [(pc[0], pc[1]) for pc in tl], True, zh, csize, P0=P)
             next_id = ctx.next_id
             P = positions.array()
             newv = np.array(ctx.new_vertices, np.int64)
             par = np.array(ctx.new_parents, np.int64).reshape(-1, 2)
-        for pc, (negc, posc) in zip(tocut, res):
-            for comp in negc:
-                newp.append([comp, pc[1], zi])
-            for comp in posc:
-                newp.append([comp, pc[1], pc[2]])
-        del res, tocut
-        pieces = newp
-        del positions, ctx
+            cutp = _Pieces.from_lists([x for pc, (negc, posc) in zip(tl, res)
+                                       for x in [[comp, pc[1], zi] for comp in negc]
+                                       + [[comp, pc[1], pc[2]] for comp in posc]])
+            del res, tl, positions, ctx
+        pieces = _Pieces.concat([kept, cutp])
+        del tocut, kept, cutp
         if len(newv):
             isfeat = par[:, 0] < 0            # feature points: already exact
             on_curve = (~isfeat) & on_dom[np.maximum(par[:, 0], 0)] & on_dom[np.maximum(par[:, 1], 0)]
@@ -2350,8 +2472,7 @@ def generate(cfg, log=print):
     nbad_bulk = 0
     if len(tl):
         badc = tl[_leaf_bad(P, tl, fptr, fverts, cptr, csize)]
-        for ci in badc.tolist():
-            pieces.append([leaf_faces(ci), ci, int(bulk_zone[ci])])
+        pieces = _Pieces.concat([pieces, _Pieces.from_leaves(badc, bulk_zone[badc], cptr, fptr, fverts, f_key)])
         bulk_alive[badc] = False
         nbad_bulk = len(badc)
     if nbad_bulk:
@@ -2363,15 +2484,14 @@ def generate(cfg, log=print):
     bsel = np.nonzero(bulk_alive[f_cell])[0]
     key2bulk = np.full(M_nkeys, -1, np.int64)
     key2bulk[f_key[bsel]] = f_cell[bsel]
-    py_polys = [poly for pc in pieces for _, poly in pc[0]]
-    py_key = np.fromiter((fid for pc in pieces for fid, _ in pc[0]), np.int64, count=len(py_polys))
-    py_cell = np.repeat(np.arange(nP, dtype=np.int64), [len(pc[0]) for pc in pieces]).astype(np.int64)
+    py_key = pieces.key
+    py_cell = np.repeat(np.arange(nP, dtype=np.int64), np.diff(pieces.fptr))
     occ = _FaceOcc(py_key, py_cell)       # face id -> pieces holding it, in piece order
     vol = np.zeros(nP)
     farea = {}
     p_n = np.zeros(0, np.int64); p_verts = np.zeros(0, np.int64)
     if nP:
-        ffp = quality.FlatFaces(py_polys)
+        ffp = quality.FlatFaces((np.diff(pieces.vptr), pieces.verts))
         p_n, p_verts = ffp.n, ffp.v
         Cf, Sf = quality.face_geometry(P, ffp)
         ref = np.zeros((nP, 3)); ref[py_cell] = Cf
@@ -2383,7 +2503,7 @@ def generate(cfg, log=print):
         np.add.at(cc, py_cell, pv[:, None] * (0.75 * Cf + 0.25 * est[py_cell]))
         cc /= np.where(np.abs(vol) > 0, 3.0 * vol, 1.0)[:, None]
         # "bad" pieces: some face does not clearly see the centroid (non-convex cut cell)
-        hp = np.array([csize[pc[1]] for pc in pieces])
+        hp = csize[pieces.leaf]
         selfpyr = np.einsum("ij,ij->i", Sf, Cf - cc[py_cell])
         badf = selfpyr < 0.05 * np.linalg.norm(Sf, axis=1) * hp[py_cell]
         bad_piece = np.bincount(py_cell, badf.astype(int), nP) > 0
@@ -2391,9 +2511,9 @@ def generate(cfg, log=print):
         del ffp, Cf, Sf, ref, est, pv, cc, selfpyr, badf
     else:
         bad_piece = np.zeros(0, bool)
-    hexvol = np.array([cvol[pc[1]] for pc in pieces])
+    hexvol = cvol[pieces.leaf].astype(float)
     ratio = vol / np.maximum(hexvol, 1e-300)
-    zone_of = [pc[2] for pc in pieces]
+    zone_of = pieces.zone.tolist()
     parent = list(range(nP))           # piece index -> piece index, or nP + bulk leaf
 
     def find(i):
@@ -2511,7 +2631,7 @@ def generate(cfg, log=print):
         # the same greedy loop in Rust (candidates in this set order, same arithmetic)
         # the pieces as flat arrays (flattened above): no conversion of the Python lists
         i64 = lambda a: np.ascontiguousarray(a, np.int64)            # noqa: E731
-        p_leaf = np.fromiter((pc[1] for pc in pieces), np.int64, count=nP)
+        p_leaf = pieces.leaf
         par_, mem_, bmem_, gvol_, merged, rejected = _core.merge_cells_csr(
             np.ascontiguousarray(P, float),
             i64(np.concatenate([[0], np.cumsum(np.bincount(py_cell, minlength=nP))])), i64(py_key),
@@ -2598,7 +2718,7 @@ def generate(cfg, log=print):
     # nodes: bulk leaves (alive) and root pieces; ordered by parent leaf
     alive = np.nonzero(bulk_alive)[0]
     rp = np.nonzero((proot == np.arange(nP)) & ~removed)[0]
-    node_leaf = np.concatenate([alive, np.array([pieces[r][1] for r in rp], np.int64)])
+    node_leaf = np.concatenate([alive, pieces.leaf[rp]])
     order = _argsort_stable(node_leaf)
     ids = np.empty(len(order), np.int64); ids[order] = np.arange(len(order))
     nC = len(order)
@@ -2609,14 +2729,13 @@ def generate(cfg, log=print):
     piece_cid[~to_bulk] = piece_cid[proot[~to_bulk]]    # -1 for removed cells
     cell_zone = np.empty(nC, np.int64)
     cell_zone[leaf_cid[alive]] = bulk_zone[alive]
-    cell_zone[piece_cid[rp]] = np.array([zone_of[r] for r in rp], np.int64)
+    cell_zone[piece_cid[rp]] = pieces.zone[rp]
 
     # ------------------------------------------------------------ assembly (all numpy)
     bn = fn[bsel]
     b_off = np.repeat(fptr[bsel] - np.concatenate([[0], np.cumsum(bn)[:-1]]), bn)
     b_verts = fverts[np.arange(int(bn.sum())) + b_off]
     pn = p_n                                  # the pieces' faces, flattened above
-    del py_polys
     o_n = np.concatenate([bn, pn])
     o_ptr = np.concatenate([[0], np.cumsum(o_n)])
     o_verts = np.concatenate([b_verts, p_verts])

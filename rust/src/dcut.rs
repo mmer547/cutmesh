@@ -161,6 +161,30 @@ impl CutKernel {
         Ok(())
     }
 
+    /// set_items with the items as flat arrays (csr.rs) and their parent leaves
+    fn set_items_csr(
+        &mut self,
+        leaf: PyReadonlyArray1<i64>,
+        fptr: PyReadonlyArray1<i64>,
+        key: PyReadonlyArray1<i64>,
+        vptr: PyReadonlyArray1<i64>,
+        verts: PyReadonlyArray1<i64>,
+    ) -> PyResult<()> {
+        let cells = crate::csr::read_cells(&fptr, &key, &vptr, &verts)?;
+        let leaf = leaf.as_slice()?;
+        if leaf.len() != cells.len() {
+            return Err(pyo3::exceptions::PyValueError::new_err("one leaf per item"));
+        }
+        self.set_items(cells.into_iter().zip(leaf.iter().copied()).collect())
+    }
+
+    /// results() as flat arrays (csr.rs), moved out of the kernel; neg_only: only the
+    /// negative components
+    fn results_csr<'py>(&mut self, py: Python<'py>, neg_only: bool) -> PyResult<crate::csr::CsrOut<'py>> {
+        let r = self.results()?;
+        Ok(crate::csr::write_results(py, &r, neg_only))
+    }
+
     /// the items holding face fid (in item order, an item once per face it has)
     fn items_of_face(&self, fid: i64) -> Vec<usize> {
         self.face_items.get(&fid).cloned().unwrap_or_default()
