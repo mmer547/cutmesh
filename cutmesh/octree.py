@@ -8,7 +8,7 @@ cylindrical block); see cylbase.py.
 import itertools
 import numpy as np
 
-from .geometry import searchsorted, sdf_below, unique, unique_rows
+from .geometry import _core, searchsorted, sdf_below, unique, unique_rows
 
 OFF26 = np.array([d for d in itertools.product((-1, 0, 1), repeat=3) if d != (0, 0, 0)])
 CHILD = np.array(list(itertools.product((0, 1), repeat=3)))   # (8,3)
@@ -80,6 +80,8 @@ class Octree:
 
     def _find_exact(self, l, q):
         """Index of leaf at exactly level l with coords q, else -1."""
+        if getattr(self, "_lk", None) is None:
+            self._build_lookup()
         keys, idx = self._lk[l]
         out = np.full(len(q), -1, np.int64)
         if len(keys) == 0 or len(q) == 0:
@@ -115,6 +117,7 @@ class Octree:
         child_lev = np.repeat(self.lev[idx] + 1, 8)
         self.ijk = np.concatenate([self.ijk[keep], child_ijk.reshape(-1, 3)])
         self.lev = np.concatenate([self.lev[keep], child_lev])
+        self._lk = None                        # the leaf lookup is rebuilt when needed
         return len(idx)
 
     # ------------------------------------------------------------ refinement
@@ -151,6 +154,19 @@ class Octree:
         self.balance(log)
 
     def balance(self, log=print):
+        if _core is not None and hasattr(_core, "balance"):
+            self.ijk, self.lev, passes = _core.balance(
+                np.ascontiguousarray(self.ijk, np.int64), np.ascontiguousarray(self.lev, np.int64),
+                [int(v) for v in self.n], int(self.Lmax), [bool(v) for v in self.periodic])
+            tot = len(self.lev) - 7 * sum(passes)
+            for it, n in enumerate(passes[:-1]):
+                tot += 7 * n
+                log(f"  balance pass {it + 1}: split {n}, total {tot}")
+            self._lk = None                    # built when needed
+            return
+        self._balance_py(log)
+
+    def _balance_py(self, log=print):
         it = 0
         while True:
             self._build_lookup()
@@ -176,7 +192,24 @@ class Octree:
 
     # ----------------------------------------------------------- cell build
     def build_cells(self):
-        """Return dict with points, hanging flag, per-cell faces [(face_key_id, poly)], ..."""
+        """Return dict with points, hanging flag, per-cell faces [(face_key_id, poly)], ...
+        (the Rust extension builds the same arrays in parallel when it is available)"""
+        if _core is None or not hasattr(_core, "build_cells"):
+            return self._build_cells_py()
+        (pts_lat, hanging, hang_par, hang_size, qc, fkey, fptr, fverts, cptr,
+         cvid) = _core.build_cells(np.ascontiguousarray(self.ijk, np.int64),
+                                   np.ascontiguousarray(self.lev, np.int64),
+                                   [int(v) for v in self.n], int(self.Lmax),
+                                   [bool(v) for v in self.periodic])
+        assert (fverts >= 0).all()
+        return dict(points=self.map_lattice(pts_lat), hanging=hanging, hang_par=hang_par,
+                    hang_size=hang_size, face_cell=qc, face_key=fkey, fptr=fptr, fverts=fverts,
+                    cell_fptr=cptr, nface_keys=int(fkey.max()) + 1, cell_size=self.leaf_sizes(),
+                    cell_volume=self.leaf_volumes(), cell_level=self.lev.copy(),
+                    corner_vid=cvid, points_lattice=pts_lat)
+
+    def _build_cells_py(self):
+        self._build_lookup()
         Lmax = self.Lmax
         S = (1 << (Lmax - self.lev)).astype(np.int64)            # cell size in finest units
         base = self.ijk * S[:, None]

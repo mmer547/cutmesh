@@ -11,7 +11,10 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 mod cut;
+mod dcut;
+mod merge;
 mod layers;
+mod octree;
 
 pub(crate) type V3 = [f64; 3];
 
@@ -550,12 +553,123 @@ impl TriMesh {
         Ok(r.into_pyarray(py))
     }
 
+    /// thin_gap(p[n, 3], into[n, 3], tg, eps, max_steps) -> (thin[n], n_unresolved):
+    /// mesher._thin_gap for each sample on its own (the same probes and steps)
+    fn thin_gap<'py>(
+        &self,
+        py: Python<'py>,
+        p: PyReadonlyArray2<'py, f64>,
+        into: PyReadonlyArray2<'py, f64>,
+        tg: f64,
+        eps: f64,
+        max_steps: usize,
+    ) -> PyResult<(Bound<'py, PyArray1<bool>>, usize)> {
+        let pts = points(&p)?;
+        let dir = points(&into)?;
+        if dir.len() != pts.len() {
+            return Err(pyo3::exceptions::PyValueError::new_err("p and into differ in length"));
+        }
+        let res: Vec<(bool, bool)> = py.detach(|| {
+            pts.par_iter()
+                .zip(dir.par_iter())
+                .map(|(&p, &n)| {
+                    // (thin, still unresolved)
+                    if !self.inside_one(axpy(p, eps, n)) {
+                        return (false, false);
+                    }
+                    for k in 1..9 {
+                        if !self.inside_one(axpy(p, k as f64 * tg / 8.0, n)) {
+                            return (true, false);
+                        }
+                    }
+                    let r = 0.5 * (tg - eps);
+                    if !(self.closest_one(axpy(p, eps + r, n)).0.sqrt() < r) {
+                        return (false, false);
+                    }
+                    let mut t = eps;
+                    for _ in 0..max_steps {
+                        let q = axpy(p, t, n);
+                        if !self.inside_one(q) {
+                            return (true, false);
+                        }
+                        let d = self.closest_one(q).0.sqrt();
+                        t += if d > eps { d } else { eps };
+                        if !(t < tg) {
+                            return (false, false);
+                        }
+                    }
+                    (false, true)
+                })
+                .collect()
+        });
+        let nun = res.iter().filter(|r| r.1).count();
+        let thin: Vec<bool> = res.into_iter().map(|r| r.0).collect();
+        Ok((thin.into_pyarray(py), nun))
+    }
+
+    /// through_wall(a[n, 3], b[n, 3], tn[ntri, 3], samples, cos_opposite) -> (hits, mids[k, 3]):
+    /// the sampling of diagnose.through_wall for each line a -> b on its own: the samples
+    /// outside, the closest triangles at the first and the last of them, and whether
+    /// their normals are opposite
+    fn through_wall<'py>(
+        &self,
+        py: Python<'py>,
+        a: PyReadonlyArray2<'py, f64>,
+        b: PyReadonlyArray2<'py, f64>,
+        tn: PyReadonlyArray2<'py, f64>,
+        samples: usize,
+        cos_opposite: f64,
+    ) -> PyResult<(usize, Bound<'py, PyArray2<f64>>)> {
+        let pa = points(&a)?;
+        let pb = points(&b)?;
+        let nrm = points(&tn)?;
+        if pa.len() != pb.len() || nrm.len() != self.t.len() || samples == 0 {
+            return Err(pyo3::exceptions::PyValueError::new_err("inconsistent line data"));
+        }
+        let ts: Vec<f64> = (0..samples).map(|k| (k as f64 + 0.5) / samples as f64).collect();
+        let res: Vec<Option<V3>> = py.detach(|| {
+            pa.par_iter()
+                .zip(pb.par_iter())
+                .map(|(&a, &b)| {
+                    let d = sub(b, a);
+                    let q = |t: f64| [a[0] + t * d[0], a[1] + t * d[1], a[2] + t * d[2]];
+                    let first = ts.iter().position(|&t| !self.inside_one(q(t)))?;
+                    let last = (first..samples).rev().find(|&k| !self.inside_one(q(ts[k]))).unwrap_or(first);
+                    let t1 = self.closest_one(q(ts[first])).2;
+                    let t2 = self.closest_one(q(ts[last])).2;
+                    let (n1, n2) = (nrm[t1], nrm[t2]);
+                    let c = (n1[0] * n2[0] + n1[2] * n2[2]) + n1[1] * n2[1];     // np.einsum order
+                    if c < cos_opposite {
+                        Some([0.5 * (a[0] + b[0]), 0.5 * (a[1] + b[1]), 0.5 * (a[2] + b[2])])
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        });
+        let mids: Vec<V3> = res.into_iter().flatten().collect();
+        Ok((mids.len(), vec3_array(py, mids)?))
+    }
+
     fn __len__(&self) -> usize {
         self.t.len()
     }
 }
 
 // ------------------------------------------------------------------------- SegSet
+impl SegSet {
+    /// distance to the closest point (exactly as closest() gives it)
+    pub(crate) fn closest_d(&self, q: V3) -> f64 {
+        self.bvh
+            .closest(q, |i| {
+                let c = closest_seg(q, self.s[i][0], self.s[i][1]);
+                (dist2(q, c), c)
+            })
+            .0
+            .sqrt()
+    }
+}
+
 /// Set of segments (feature edges): SegSet(seg[n, 2, 3])
 #[pyclass(frozen)]
 struct SegSet {
@@ -892,11 +1006,17 @@ fn poly_cell<'py>(
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<TriMesh>()?;
     m.add_class::<SegSet>()?;
+    m.add_class::<dcut::CutKernel>()?;
+    m.add_function(wrap_pyfunction!(merge::merge_cells, m)?)?;
+    m.add_function(wrap_pyfunction!(merge::pyset_order, m)?)?;
     m.add_function(wrap_pyfunction!(face_geometry, m)?)?;
     m.add_function(wrap_pyfunction!(cell_geometry, m)?)?;
     m.add_function(wrap_pyfunction!(poly_cell, m)?)?;
     m.add_function(wrap_pyfunction!(cut::cut_batch, m)?)?;
     m.add_function(wrap_pyfunction!(layers::jacobi_band, m)?)?;
     m.add_function(wrap_pyfunction!(layers::cells_bad, m)?)?;
+    m.add_function(wrap_pyfunction!(octree::build_cells, m)?)?;
+    m.add_function(wrap_pyfunction!(octree::balance, m)?)?;
+    m.add_function(wrap_pyfunction!(octree::leaf_bad, m)?)?;
     Ok(())
 }

@@ -165,6 +165,7 @@ def make_chord_hook(feat):
             x = feat._rs.pierce([pos[v] for v in poly], pos[a], pos[b],
                                 [pos[v] for v in poly if phi[v] < 0])
             return None if x is None else list(x)
+        chord_rs.feat = feat                 # the Rust cut kernel pierces itself
         return chord_rs
 
     def chord(ctx, poly, a, b):
@@ -411,6 +412,7 @@ def make_feature_hook(feat, h_of_cell, min_bend=0.03, reach=0.75):
         m = len(loop)
         return [[loop[i], loop[(i + 1) % m], vid] for i in range(m)]
 
+    hook.feat, hook.reach = feat, reach      # for the Rust cut kernel's quick test
     return hook, state
 
 
@@ -418,6 +420,16 @@ def _leaf_bad(P, leaves, fptr, fverts, cptr, csize, flat_at=None, flat_angle=2.0
     """octree leaves (with moved vertices) where some face does not clearly see the
     cell centre - non-convex or inverted.  flat_at: vertices (mask) that must also keep
     a face corner (not pushed straight, at flat_angle degrees or less)"""
+    if _core is not None and hasattr(_core, "leaf_bad"):
+        return _core.leaf_bad(np.ascontiguousarray(P, float), np.asarray(leaves, np.int64),
+                              np.asarray(fptr, np.int64), np.asarray(fverts, np.int64),
+                              np.asarray(cptr, np.int64), np.ascontiguousarray(csize, float),
+                              None if flat_at is None else np.ascontiguousarray(flat_at, bool),
+                              float(np.sin(np.radians(flat_angle))))
+    return _leaf_bad_py(P, leaves, fptr, fverts, cptr, csize, flat_at, flat_angle)
+
+
+def _leaf_bad_py(P, leaves, fptr, fverts, cptr, csize, flat_at=None, flat_angle=2.0):
     occs = np.concatenate([np.arange(cptr[c], cptr[c + 1]) for c in leaves.tolist()])
     lens = cptr[leaves + 1] - cptr[leaves]
     owner_ = np.repeat(np.arange(len(leaves)), lens)
@@ -484,6 +496,66 @@ def _merged_face_ok(P, loop, parts, nrms, cmin, flat_tol):
     return bool(np.all(at > 1e-9 * a))
 
 
+def _join_cell_faces(P, polys, cmin, cpart, flat_tol):
+    """merge_coplanar_wall_faces for the boundary faces of one cell in one patch:
+    (faces, number of faces joined away)"""
+    joined = 0
+    nrm = []
+    for q in polys:
+        Q = P[q]
+        s = np.cross(Q - Q.mean(0), np.roll(Q, -1, 0) - Q.mean(0)).sum(0)
+        nrm.append(s / max(np.linalg.norm(s), 1e-300))
+    par = list(range(len(polys)))
+
+    def fnd(i):
+        while par[i] != i:
+            par[i] = par[par[i]]; i = par[i]
+        return i
+    emap = {}
+    for i, q in enumerate(polys):
+        for k in range(len(q)):
+            emap[(q[k], q[(k + 1) % len(q)])] = i
+    for (a, b), i in emap.items():
+        j = emap.get((b, a))
+        if j is not None and j != i and float(np.dot(nrm[i], nrm[j])) > cmin:
+            par[fnd(i)] = fnd(j)
+    groups = {}
+    for i in range(len(polys)):
+        groups.setdefault(fnd(i), []).append(i)
+    res = []
+    for ids in groups.values():
+        if len(ids) == 1:
+            res.append(polys[ids[0]]); continue
+        de = {}
+        for i in ids:
+            q = polys[i]
+            for k in range(len(q)):
+                e = (q[k], q[(k + 1) % len(q)])
+                de[e] = de.get(e, 0) + 1
+        segs = [e for e in de if (e[1], e[0]) not in de]
+        nxt = {}
+        ok = True
+        for a, b in segs:
+            if a in nxt:
+                ok = False; break
+            nxt[a] = b
+        loop = []
+        a = a0 = None
+        if ok and segs:
+            a0 = segs[0][0]; a = a0
+            for _ in range(len(segs) + 1):
+                loop.append(a); a = nxt.get(a)
+                if a is None or a == a0:
+                    break
+        if (ok and a0 is not None and a == a0 and len(loop) == len(segs) and len(loop) >= 3
+                and _merged_face_ok(P, loop, [polys[i] for i in ids], [nrm[i] for i in ids],
+                                    cpart, flat_tol)):
+            res.append(loop); joined += len(ids) - 1
+        else:
+            res.extend(polys[i] for i in ids)
+    return res, joined
+
+
 def merge_coplanar_wall_faces(P, nn, vv, owner, nI, patches, max_angle=5.0):
     """Join the boundary faces of one cell that lie in one plane, belong to one patch and
     share edges into a single face.  Cut cells can carry a flat wall split into several
@@ -503,76 +575,36 @@ def merge_coplanar_wall_faces(P, nn, vv, owner, nI, patches, max_angle=5.0):
     new_p, start, joined = [], nI, 0
     for p in patches:
         f0, nf = p["startFace"], p["nFaces"]
-        fl, ol = [], []
-        f = f0
-        while f < f0 + nf:
-            g = f
-            while g < f0 + nf and owner[g] == owner[f]:
-                g += 1
+        # runs of faces of one cell: only those with several faces can join; the others
+        # are copied as they are, a range of faces at a time
+        o = np.asarray(owner[f0:f0 + nf])
+        rs = np.flatnonzero(np.concatenate([[True], o[1:] != o[:-1]])) + f0
+        re_ = np.concatenate([rs[1:], [f0 + nf]])
+        multi = np.flatnonzero(re_ - rs > 1)
+        pn, pv, po = [], [], []
+        nfo = 0
+        prev = f0
+        for m in multi.tolist():
+            f, g = int(rs[m]), int(re_[m])
+            if f > prev:
+                pn.append(nn[prev:f]); pv.append(vv[ptr[prev]:ptr[f]]); po.append(owner[prev:f])
+                nfo += f - prev
             polys = [vv[ptr[k]:ptr[k + 1]].tolist() for k in range(f, g)]
-            if len(polys) > 1:
-                nrm = []
-                for q in polys:
-                    Q = P[q]
-                    s = np.cross(Q - Q.mean(0), np.roll(Q, -1, 0) - Q.mean(0)).sum(0)
-                    nrm.append(s / max(np.linalg.norm(s), 1e-300))
-                par = list(range(len(polys)))
-
-                def fnd(i):
-                    while par[i] != i:
-                        par[i] = par[par[i]]; i = par[i]
-                    return i
-                emap = {}
-                for i, q in enumerate(polys):
-                    for k in range(len(q)):
-                        emap[(q[k], q[(k + 1) % len(q)])] = i
-                for (a, b), i in emap.items():
-                    j = emap.get((b, a))
-                    if j is not None and j != i and float(np.dot(nrm[i], nrm[j])) > cmin:
-                        par[fnd(i)] = fnd(j)
-                groups = {}
-                for i in range(len(polys)):
-                    groups.setdefault(fnd(i), []).append(i)
-                res = []
-                for ids in groups.values():
-                    if len(ids) == 1:
-                        res.append(polys[ids[0]]); continue
-                    de = {}
-                    for i in ids:
-                        q = polys[i]
-                        for k in range(len(q)):
-                            e = (q[k], q[(k + 1) % len(q)])
-                            de[e] = de.get(e, 0) + 1
-                    segs = [e for e in de if (e[1], e[0]) not in de]
-                    nxt = {}
-                    ok = True
-                    for a, b in segs:
-                        if a in nxt:
-                            ok = False; break
-                        nxt[a] = b
-                    loop = []
-                    a = a0 = None
-                    if ok and segs:
-                        a0 = segs[0][0]; a = a0
-                        for _ in range(len(segs) + 1):
-                            loop.append(a); a = nxt.get(a)
-                            if a is None or a == a0:
-                                break
-                    if (ok and a0 is not None and a == a0 and len(loop) == len(segs) and len(loop) >= 3
-                            and _merged_face_ok(P, loop, [polys[i] for i in ids], [nrm[i] for i in ids],
-                                                cpart, flat_tol)):
-                        res.append(loop); joined += len(ids) - 1
-                    else:
-                        res.extend(polys[i] for i in ids)
-                polys = res
-            for q in polys:
-                fl.append(q); ol.append(owner[f])
-            f = g
-        out_n.append(np.array([len(q) for q in fl], np.int64))
-        out_v.append(np.array([v for q in fl for v in q], np.int64))
-        out_o.append(np.array(ol, np.int64))
-        new_p.append(dict(p, startFace=start, nFaces=len(fl)))
-        start += len(fl)
+            polys, nj = _join_cell_faces(P, polys, cmin, cpart, flat_tol)
+            joined += nj
+            pn.append(np.array([len(q) for q in polys], np.int64))
+            pv.append(np.array([v for q in polys for v in q], np.int64))
+            po.append(np.full(len(polys), owner[f], np.int64))
+            nfo += len(polys)
+            prev = g
+        if f0 + nf > prev:
+            pn.append(nn[prev:f0 + nf]); pv.append(vv[ptr[prev]:ptr[f0 + nf]]); po.append(owner[prev:f0 + nf])
+            nfo += f0 + nf - prev
+        out_n += [np.asarray(x, np.int64) for x in pn]
+        out_v += [np.asarray(x, np.int64) for x in pv]
+        out_o += [np.asarray(x, np.int64) for x in po]
+        new_p.append(dict(p, startFace=start, nFaces=nfo))
+        start += nfo
     return (np.concatenate(out_n), np.concatenate(out_v), np.concatenate(out_o), new_p, joined)
 
 
@@ -602,7 +634,7 @@ def _piece_bad(pos, comp, h):
     return bool(np.any(np.einsum("ij,ij->i", Sf, Cf - cc) < 0.05 * np.linalg.norm(Sf, axis=1) * h))
 
 
-def surface_contact(dom, pts, phi, cells, faces_of, csize, push=0.2):
+def surface_contact(dom, pts, phi, cells, faces_of, csize, push=0.2, face_ok=None):
     """Faces touching the surface along more than a vertex (vertices with phi == 0,
     typically snapped onto a wall next to a concave edge).  Interpolating phi there
     chamfers the concave edge by up to a cell size, differently at every cell, which
@@ -614,16 +646,20 @@ def surface_contact(dom, pts, phi, cells, faces_of, csize, push=0.2):
     - faces lying on the surface (all vertices with phi == 0, centre on the surface):
       dropped from the cells whose side of the face is solid (the cell on the fluid
       side keeps them as walls) -> {cell: {face id}}.  Sampled a little off the face
-      into the cell, at the centre and towards every vertex; all must be solid."""
+      into the cell, at the centre and towards every vertex; all must be solid.
+
+    face_ok(ci): flags of the cell's faces that can matter (the others are skipped)."""
     ekeys, esamp, etol, eends = [], [], [], []
     dcell, dfid, dctr, dsamp, dgrp, dtol = [], [], [], [], [], []
     seen = set()
     for ci in cells:
         fl = faces_of(ci)
-        allv = [v for _, p in fl for v in p]
-        cc = pts[allv].mean(0)
+        cc = None
         h = csize[ci]
-        for fid, p in fl:
+        ok = face_ok(ci) if face_ok is not None else None
+        for j, (fid, p) in enumerate(fl):
+            if ok is not None and not ok[j]:
+                continue
             ph = phi[p]
             z = ph == 0
             if z.all():
@@ -634,6 +670,8 @@ def surface_contact(dom, pts, phi, cells, faces_of, csize, push=0.2):
                 if nn_ == 0:
                     continue
                 nrm /= nn_
+                if cc is None:
+                    cc = pts[[v for _, q in fl for v in q]].mean(0)
                 if np.dot(cc - cf, nrm) < 0:
                     nrm = -nrm
                 g = len(dcell)
@@ -771,6 +809,17 @@ def _unique_points(p):
     return p[o[keep]]
 
 
+def _nearest_in(pts, keep, q):
+    """cKDTree(pts).query(q) over the points of the mask keep only: (distance, index into
+    pts).  A tree over all the vertices costs more than the few queries it answers; the
+    callers keep every vertex that can be near enough to matter (inf, 0 when none)."""
+    idx = np.flatnonzero(keep)
+    if not len(idx):
+        return np.full(len(q), np.inf), np.zeros(len(q), np.int64)
+    d, j = cKDTree(pts[idx]).query(q)
+    return d, idx[j]
+
+
 def _points_kd(p):
     """KD-tree for nearest-distance queries of the sample points p (distances only).
     Sliding-midpoint splits without shrinking the node boxes build ~2.5x faster than
@@ -778,11 +827,143 @@ def _points_kd(p):
     return cKDTree(_unique_points(p), balanced_tree=False, compact_nodes=False)
 
 
-def cut_with_fallback(ctx, items, shared_cap, hk, csize, max_iter=4):
+class _PosView:
+    """positions for a Python hook called from the Rust cut kernel: the vertices it was
+    given, and the ones it adds (ids from base on)"""
+
+    def __init__(self, base, known):
+        self.base, self.known, self.added = base, known, []
+
+    def __getitem__(self, v):
+        return self.known[v] if v < self.base else self.added[v - self.base]
+
+    def __len__(self):
+        return self.base + len(self.added)
+
+    def append(self, x):
+        self.added.append([float(c) for c in x])
+
+
+class _OnFeat:
+    def __init__(self, s):
+        self.s, self.new = set(s), []
+
+    def __contains__(self, v):
+        return v in self.s
+
+    def add(self, v):
+        self.s.add(v)
+        self.new.append(v)
+
+
+class _HookCtx:
+    """what the hooks read from / add to the CutContext"""
+
+    def __init__(self, pos, phi, onfeat=()):
+        self.pos, self.phi, self.onfeat = pos, phi, onfeat
+        self.new_vertices, self.new_parents = [], []
+
+
+class _FaceOcc:
+    """{face id: [pieces holding it]} (pieces in order, a piece once per face it has)
+    looked up in the sorted face ids instead of a dict built over every face"""
+
+    def __init__(self, key, cell):
+        o = np.argsort(key, kind="stable")
+        self.k, self.c = key[o], cell[o]
+
+    def get(self, fid, default=()):
+        a = int(np.searchsorted(self.k, fid))
+        b = int(np.searchsorted(self.k, fid, side="right"))
+        return self.c[a:b].tolist() if b > a else default
+
+
+def _rust_merge_ok():
+    return _core is not None and hasattr(_core, "merge_cells")
+
+
+def _rust_cut_ok(ctx, hk):
+    if _core is None or not hasattr(_core, "CutKernel"):
+        return False
+    ch = ctx.chord_hook
+    if ch is not None and getattr(getattr(ch, "feat", None), "_rs", None) is None:
+        return False
+    return not hk or getattr(getattr(hk[0], "feat", None), "_rs", None) is not None
+
+
+def _cut_with_fallback_rs(ctx, items, shared_cap, hk, csize, P0, max_iter=4):
+    """cut_with_fallback with the cuts in the Rust kernel (the same results and ids);
+    P0: array of the first len(P0) positions of the context.  The context's state is
+    brought up to date afterwards."""
+    hook = hk[0] if hk else None
+    st = hk[1] if hk else {}
+    n0 = len(P0)
+    Pa = np.concatenate([np.asarray(P0, float), np.array(ctx.pos[n0:], float).reshape(-1, 3)])
+    pa = np.array(ctx.phi, float)
+    pinch_cb = cap_cb = None
+    if ctx.pinch_hook is not None:
+        ph = ctx.pinch_hook
+
+        def pinch_cb(poly, a, b, cand, pos, phi):
+            return ph(_HookCtx(pos, phi), poly, a, b, cand)
+    if hook is not None:
+        def cap_cb(loop, P, flags, base, leaf, forbid):
+            st["cell"] = leaf; st["forbid"] = forbid; st["did"] = False
+            c = _HookCtx(_PosView(base, dict(zip(loop, P))), [],
+                         _OnFeat(v for v, f in zip(loop, flags) if f))
+            polys = hook(c, loop)
+            return [list(q) for q in polys], c.pos.added, c.onfeat.new, bool(st["did"])
+    ch = ctx.chord_hook
+    K = _core.CutKernel(Pa, pa, int(ctx.next_id), bool(shared_cap), ctx.zero_edge, ctx.plain_faces,
+                        ctx.onfeat, ctx.cache, ctx.subids, ctx.chord_cache, ctx.pinch_cache,
+                        ch.feat._rs if ch is not None else None,
+                        hook.feat._rs if hook is not None else None,
+                        float(hook.reach) if hook is not None else 0.0,
+                        np.ascontiguousarray(csize, float), pinch_cb, cap_cb, float(ctx.pinch_min_area))
+    del Pa, pa
+    K.set_items(items)
+    n = len(items)
+    used = K.cut(list(range(n)), [False] * n)
+    forbid = set()
+    nfb = 0
+    for _ in range(max_iter):
+        bad = K.bad_items([k for k in range(n) if used[k][0] or used[k][1]])
+        if not bad:
+            break
+        redo = set(bad)
+        for k in bad:
+            forbid.add(k)
+            for key in used[k][0]:
+                K.forbid_chord(key)
+                redo.update(K.items_of_face(key[0]))
+        nfb += len(bad)
+        ks = sorted(redo)
+        for k, u in zip(ks, K.cut(ks, [k in forbid for k in ks])):
+            used[k] = u
+    nsharp = sum(1 for ch_, did in used if ch_ or did)
+    res = K.results()
+    newp, newv, newpar, nid, cd, sd, clog, nf = K.export()
+    del K
+    ctx.pos.extend(newp.tolist())
+    ctx.phi.extend([0.0] * len(newp))
+    ctx.new_vertices.extend(newv)
+    ctx.new_parents.extend(newpar)
+    ctx.next_id = nid
+    ctx.cache.update(cd)
+    ctx.subids.update(sd)
+    for which, key, val in clog:
+        (ctx.chord_cache if which == 0 else ctx.pinch_cache)[key] = val
+    ctx.onfeat.update(nf)
+    return res, nsharp, nfb
+
+
+def cut_with_fallback(ctx, items, shared_cap, hk, csize, max_iter=4, P0=None):
     """Cut items [(faces, parent_leaf)].  Cells where the feature refinement (bent face
     chords, split caps) produced a non-convex piece are re-cut without it, together
     with the cells sharing those faces.  Returns ([(neg_comps, pos_comps)], n_sharp,
-    n_fallback)."""
+    n_fallback).  P0 (array of the context's first positions): cut in Rust."""
+    if P0 is not None and _rust_cut_ok(ctx, hk):
+        return _cut_with_fallback_rs(ctx, items, shared_cap, hk, csize, P0, max_iter)
     hook = hk[0] if hk else None
     st = hk[1] if hk else {}
     res = [None] * len(items)
@@ -1084,6 +1265,13 @@ def _thin_gap(dom, p, into, tg, eps, max_steps=512):
     Marches by the distance to the STL - no wall can be closer, so none is skipped; a step
     falls back to eps only where the walk grazes another wall, and there the inside test
     still catches any wall thicker than eps.  Returns (mask, n_unresolved)."""
+    if dom._rs is not None and hasattr(dom._rs, "thin_gap"):     # per sample, in parallel
+        return dom._rs.thin_gap(np.ascontiguousarray(p, float), np.ascontiguousarray(into, float),
+                                float(tg), float(eps), int(max_steps))
+    return _thin_gap_py(dom, p, into, tg, eps, max_steps)
+
+
+def _thin_gap_py(dom, p, into, tg, eps, max_steps=512):
     thin = np.zeros(len(p), bool)
     t = np.full(len(p), eps)
     act = np.nonzero(dom.inside(p + eps * into))[0]
@@ -1285,8 +1473,8 @@ def generate(cfg, log=print):
             # them are strongly non-orthogonal.  Split it: the level transition moves off
             # the wall, into whole cells.
             c = oc.centers(); hl = oc.leaf_sizes()
-            near = (oc.lev < Lmax) & (dom.approx_distance(c, upper=float(hl.max()) + dom._rmax)
-                                      < 0.9 * hl + dom._rmax)
+            near = oc.lev < Lmax
+            near[near] = dom.approx_below(c[near], 0.9 * hl[near] + dom._rmax)
             cand = np.nonzero(near)[0]
             fr, cut = _fluid_fraction(dom, c[cand], hl[cand])
             cand = cand[cut & (fr > 0) & (fr < thr)]
@@ -1372,6 +1560,11 @@ def generate(cfg, log=print):
     no_free = np.zeros(len(pts), bool)     # free projections that broke a cell: not allowed
     msgs = []
     occ_leaf = np.repeat(f_cell, fn)
+    leaf_vptr = fptr[cptr[:-1]]                 # vertex occurrences by leaf (each has faces)
+
+    def leaf_any(m):
+        """per leaf: some vertex of its faces in the mask m"""
+        return np.logical_or.reduceat(m[fverts], leaf_vptr)
 
     def side_width(kv, side):
         """Thickness of the fluid (side -1) / solid (side 1) at the vertices kv, from the
@@ -1401,9 +1594,8 @@ def generate(cfg, log=print):
         on = []
         lim = np.where(no_far, tol_f, tol_f2)
         if len(feat.corners):
-            kd = cKDTree(pts)
-            d, j = kd.query(feat.corners)
-            del kd
+            # a vertex within lim of a corner (on the surface) is within lim of the surface
+            d, j = _nearest_in(pts, np.abs(phi) < 2 * float(lim.max()) + hmin, feat.corners)
             for ci_, (dd, jj) in enumerate(zip(d.tolist(), j.tolist())):
                 if movable[jj] and not snapped[jj] and dd < lim[jj]:
                     far_snap[jj] = dd >= tol_f[jj]
@@ -1426,8 +1618,7 @@ def generate(cfg, log=print):
             cand = movable & ~snapped & (phi > 0) & (phi < 2 * tol_cc + hmin)
             c_sel, c_X, c_d = [], [], []
             if len(concave.corners):
-                kd = cKDTree(pts)
-                d, j = kd.query(concave.corners)
+                d, j = _nearest_in(pts, np.abs(phi) < 2 * float(lim.max()) + hmin, concave.corners)
                 for X, dd, jj in zip(concave.corners, d.tolist(), j.tolist()):
                     if cand[jj] and dd < lim[jj]:
                         c_sel.append(jj); c_X.append(X); c_d.append(dd); cand[jj] = False
@@ -1437,7 +1628,8 @@ def generate(cfg, log=print):
             ok = d < lim[sel]
             if ok.any():
                 dn, _ = cKDTree(pts[sel[ok]]).query(cp[ok])       # nearest solid candidate
-                d0, _ = cKDTree(np.concatenate([pts, c_X])).query(cp[ok])   # a vertex there already
+                d0, _ = _nearest_in(np.concatenate([pts, c_X]),               # a vertex there already
+                                    np.concatenate([np.abs(phi) < hmin, np.ones(len(c_X), bool)]), cp[ok])
                 ok[ok] = (d[ok] <= dn * (1 + 1e-9)) & (d0 > 1e-6 * hmin)
             sel, cp, d = sel[ok], cp[ok], d[ok]
             _, first = np.unique(np.round(cp / (1e-6 * hmin)).astype(np.int64), axis=0, return_index=True)
@@ -1450,10 +1642,7 @@ def generate(cfg, log=print):
             # or fin narrower than ~1.5 cells) would vanish there.  Those are not snapped.
             gone = (phi0 > 0) & (phi <= 0)
             gone[sel] = True
-            nkeep = np.bincount(occ_leaf, ((phi0 > 0) & ~gone)[fverts], nleaf)
-            nfluid = np.bincount(occ_leaf, (phi0 < 0)[fverts], nleaf)
-            nlost = np.bincount(occ_leaf, gone[fverts], nleaf)
-            lost = (nlost > 0) & (nkeep == 0) & (nfluid > 0)
+            lost = leaf_any(gone) & ~leaf_any((phi0 > 0) & ~gone) & leaf_any(phi0 < 0)
             nthin = 0
             if lost.any():
                 occ = lost[occ_leaf]
@@ -1492,10 +1681,7 @@ def generate(cfg, log=print):
         for side, label in ((-1.0, "fluid vertices to the middle of thin gaps"),
                             (1.0, "solid vertices to the middle of thin walls")):
             on = side * phi_d > 0
-            nside = np.bincount(occ_leaf, on[fverts], nleaf)
-            nkeep = np.bincount(occ_leaf, (on & ~snap)[fverts], nleaf)
-            nother = np.bincount(occ_leaf, (-side * phi_d > 0)[fverts], nleaf)
-            lost = (nside > 0) & (nkeep == 0) & (nother > 0)
+            lost = leaf_any(on) & ~leaf_any(on & ~snap) & leaf_any(-side * phi_d > 0)
             if not lost.any():
                 continue
             occ = lost[occ_leaf]
@@ -1545,7 +1731,7 @@ def generate(cfg, log=print):
                 sel, cp, d = sel[ok], cp[ok], d[ok]
             if len(sel):
                 dn, _ = cKDTree(pts[sel]).query(cp)               # nearest candidate
-                d0, _ = cKDTree(pts).query(cp)                    # a vertex there already
+                d0, _ = _nearest_in(pts, np.abs(phi_d) < hmin, cp)   # a vertex there already
                 ok = (d <= dn * (1 + 1e-9)) & (d0 > 1e-6 * hmin)
                 sel, cp, d = sel[ok], cp[ok], d[ok]
                 _, first = np.unique(np.round(cp / (1e-6 * hmin)).astype(np.int64), axis=0, return_index=True)
@@ -1734,11 +1920,22 @@ def generate(cfg, log=print):
             cen /= np.bincount(own_b, minlength=len(cand_b))[:, None]
             _, dce = dom_ccv.closest(cen)
             cb = cand_b[dce < csize[cand_b]].tolist()
-    ctx.zero_edge, drop = surface_contact(dom, pts, phi_d, cl + cb, leaf_faces, csize)
+    # only cells with a face that can matter there (several surface vertices) are visited:
+    # the same faces in the same order, without a Python pass over every cut cell
+    fz = np.add.reduceat((phi_d[fverts] == 0).astype(np.int64), fptr[:-1])
+    fneg = np.logical_or.reduceat(phi_d[fverts] < 0, fptr[:-1])
+    fpos = np.logical_or.reduceat(phi_d[fverts] > 0, fptr[:-1])
+    f_sc = (fz == fn) | ((fz >= 2) & fneg & fpos)
+    c_sc = np.logical_or.reduceat(f_sc, cptr[:-1])
+    c_cs = np.logical_or.reduceat(~fpos & fneg & (fz >= 3), cptr[:-1])
+    del fz, fneg, fpos
+    ctx.zero_edge, drop = surface_contact(dom, pts, phi_d, [c for c in cl + cb if c_sc[c]], leaf_faces, csize,
+                                          face_ok=lambda ci: f_sc[cptr[ci]:cptr[ci + 1]].tolist())
+    del f_sc
     log(f"surface contact: {sum(v == 1 for v in ctx.zero_edge.values())} face edges in the solid,"
         f" {sum(len(s) for s in drop.values())} wall faces dropped from solid-side cells")
     # faces partly on the wall: split; the contact part is kept by the fluid-side cell
-    splits = contact_splits(dom, pts, phi_d, cl + cb, leaf_faces, csize)
+    splits = contact_splits(dom, pts, phi_d, [c for c in cl + cb if c_cs[c]], leaf_faces, csize)
     split_keep = {}
     if splits:
         sk = np.array(list(splits), np.int64)
@@ -1889,7 +2086,7 @@ def generate(cfg, log=print):
                     bulk_alive[ci] = False
                     items.append((take_clipped(leaf_faces(ci)), ci))
                     cl.append(ci)
-    res, nsh, nfb = cut_with_fallback(ctx, items, False, hk, csize)
+    res, nsh, nfb = cut_with_fallback(ctx, items, False, hk, csize, P0=pts)
     del items
     for ci, (negc, _) in zip(cl, res):
         for comp in negc:
@@ -2003,7 +2200,7 @@ def generate(cfg, log=print):
             P = np.concatenate([P, newpts])
             par = np.array(newpar, np.int64).reshape(-1, 2)
         else:
-            res, zsh, zfb = cut_with_fallback(ctx, [(pc[0], pc[1]) for pc in tocut], True, zh, csize)
+            res, zsh, zfb = cut_with_fallback(ctx, [(pc[0], pc[1]) for pc in tocut], True, zh, csize, P0=P)
             next_id = ctx.next_id
             P = np.array(positions)
             newv = np.array(ctx.new_vertices, np.int64)
@@ -2054,23 +2251,20 @@ def generate(cfg, log=print):
 
     # ------------------------------------------------------------ small-cell merging
     nP = len(pieces)
-    occ = {}
-    for pi, pc in enumerate(pieces):
-        for k, (fid, poly) in enumerate(pc[0]):
-            occ.setdefault(fid, []).append(pi)
     # bulk neighbour of an original octree face key
     bsel = np.nonzero(bulk_alive[f_cell])[0]
     key2bulk = np.full(M_nkeys, -1, np.int64)
     key2bulk[f_key[bsel]] = f_cell[bsel]
-    py_polys, py_cell, py_key = [], [], []
-    for pi, pc in enumerate(pieces):
-        for fid, poly in pc[0]:
-            py_polys.append(poly); py_cell.append(pi); py_key.append(fid)
-    py_cell = np.array(py_cell, np.int64); py_key = np.array(py_key, np.int64)
+    py_polys = [poly for pc in pieces for _, poly in pc[0]]
+    py_key = np.fromiter((fid for pc in pieces for fid, _ in pc[0]), np.int64, count=len(py_polys))
+    py_cell = np.repeat(np.arange(nP, dtype=np.int64), [len(pc[0]) for pc in pieces]).astype(np.int64)
+    occ = _FaceOcc(py_key, py_cell)       # face id -> pieces holding it, in piece order
     vol = np.zeros(nP)
     farea = {}
+    p_n = np.zeros(0, np.int64); p_verts = np.zeros(0, np.int64)
     if nP:
         ffp = quality.FlatFaces(py_polys)
+        p_n, p_verts = ffp.n, ffp.v
         Cf, Sf = quality.face_geometry(P, ffp)
         ref = np.zeros((nP, 3)); ref[py_cell] = Cf
         cnt_ = np.bincount(py_cell, minlength=nP)
@@ -2204,7 +2398,20 @@ def generate(cfg, log=print):
         return min(1.0, float(c.min()))
 
     merged = rejected = 0
-    for qi, pi in enumerate(small.tolist()):
+    rust_merge = _rust_merge_ok()
+    if rust_merge:
+        # the same greedy loop in Rust (candidates in this set order, same arithmetic)
+        par_, mem_, bmem_, gvol_, merged, rejected = _core.merge_cells(
+            np.ascontiguousarray(P, float), [pc[0] for pc in pieces], [int(z) for z in zone_of],
+            np.ascontiguousarray(bulk_zone, np.int64), np.ascontiguousarray(cptr, np.int64),
+            np.ascontiguousarray(fptr, np.int64), np.ascontiguousarray(fverts, np.int64),
+            np.ascontiguousarray(f_key, np.int64), kb1, kb2, small.tolist(), int(nsmall), gvol.tolist(),
+            hexvol.tolist(), beta, [float(csize[pc[1]]) for pc in pieces], float(cos_lim))
+        parent[:] = par_
+        members.update(mem_)
+        bulk_members.update(bmem_)
+        gvol[:] = gvol_
+    for qi, pi in enumerate([] if rust_merge else small.tolist()):
         if find(pi) != pi or (qi < nsmall and gvol[pi] >= beta * hexvol[pi]):
             continue
         fa = node_faces(pi)
@@ -2295,8 +2502,7 @@ def generate(cfg, log=print):
     bn = fn[bsel]
     b_off = np.repeat(fptr[bsel] - np.concatenate([[0], np.cumsum(bn)[:-1]]), bn)
     b_verts = fverts[np.arange(int(bn.sum())) + b_off]
-    pn = np.array([len(p) for p in py_polys], np.int64)
-    p_verts = np.fromiter((v for p in py_polys for v in p), np.int64, count=int(pn.sum()))
+    pn = p_n                                  # the pieces' faces, flattened above
     del py_polys
     o_n = np.concatenate([bn, pn])
     o_ptr = np.concatenate([[0], np.cumsum(o_n)])

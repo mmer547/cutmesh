@@ -8,7 +8,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from cutmesh.geometry import Surface               # noqa: E402
-from cutmesh.mesher import _thin_gap, merge_coplanar_wall_faces   # noqa: E402
+from cutmesh.mesher import _thin_gap, _thin_gap_py, merge_coplanar_wall_faces   # noqa: E402
 
 
 def merge(P, faces):
@@ -92,6 +92,27 @@ class ThinGap(unittest.TestCase):
         thin, nun = _thin_gap(dom, p, into, 8.0, 0.01)
         self.assertEqual(nun, 0)
         self.assertEqual(thin.tolist(), [True, False])
+
+    def test_rust_matches_python(self):
+        # the per-sample Rust walk gives the masks and counts of the NumPy passes
+        outer = box((-5, -5, 0), (5, 5, 20))
+        plate = flip(box((-4, -4, 0.4), (4, 4, 0.6)))
+        slot = flip(box((-3, -0.05, 5), (3, 0.05, 15)))
+        dom = Surface([("w", np.concatenate([outer, plate, slot]))])
+        dom.build_search(0.05)
+        if dom._rs is None or not hasattr(dom._rs, "thin_gap"):
+            self.skipTest("Rust extension not built")
+        p, ti = dom.samples(0.3)
+        T = dom.tris[ti]
+        nrm = np.cross(T[:, 1] - T[:, 0], T[:, 2] - T[:, 0])
+        nrm /= np.linalg.norm(nrm, axis=1)[:, None]
+        into = np.where(dom.inside(p - 0.01 * nrm)[:, None], -nrm, nrm)
+        for tg, steps in ((8.0, 512), (0.5, 512), (12.0, 3)):
+            a = _thin_gap_py(dom, p, into, tg, 0.01, steps)
+            b = _thin_gap(dom, p, into, tg, 0.01, steps)
+            np.testing.assert_array_equal(a[0], b[0])
+            self.assertEqual(a[1], b[1])
+            self.assertGreater(int(a[0].sum()), 0)
 
 
 if __name__ == "__main__":
