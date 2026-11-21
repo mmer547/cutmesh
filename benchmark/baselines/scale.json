@@ -1,0 +1,222 @@
+{
+ "suite": "scale",
+ "date": "2026-11-21 18:07:45",
+ "python": "3.11.9",
+ "platform": "Windows AMD64 AMD64 Family 26 Model 112 Stepping 0, AuthenticAMD | Python 3.11.9 | NumPy 2.4.6",
+ "args": {
+  "worker": null,
+  "jobs": 1,
+  "only": null,
+  "timeout": 900,
+  "vol_tol": 0.01,
+  "set": [],
+  "cells_across": null,
+  "keep": false,
+  "no_images": true,
+  "strict": false,
+  "save_baseline": true,
+  "same_mesh": true
+ },
+ "results": [
+  {
+   "name": "tilted_1m",
+   "stl": "examples/stirred_tank/tank_tilted.stl",
+   "expect": "valid",
+   "input": {
+    "triangles": 960,
+    "vertices": 482,
+    "edges": 1440,
+    "euler": 2,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "inconsistentEdges": 0,
+    "degenerateTris": 0,
+    "duplicateTris": 0,
+    "components": 1,
+    "signedVolume": 0.021078660528984456,
+    "bbox": [
+     [
+      -0.143325524,
+      -0.2358316655,
+      -0.06425173463
+     ],
+     [
+      0.2317089406,
+      0.1425299451,
+      0.3353295106
+     ]
+    ],
+    "diag": 0.6659380823719215,
+    "closed": true,
+    "oriented": true,
+    "clean": true,
+    "solids": [
+     "tankWall",
+     "bottom",
+     "top",
+     "impeller",
+     "shaft"
+    ]
+   },
+   "quality": {
+    "nPoints": 1127308,
+    "nCells": 983169,
+    "nFaces": 3145643,
+    "nInternalFaces": 3041231,
+    "upperTriangular": true,
+    "maxClosedness": 1.5974114446082328e-16,
+    "openCellEdges": 0,
+    "duplicateCellEdges": 0,
+    "minVol": 1.5906338965076177e-13,
+    "maxVol": 1.5183007273243815e-07,
+    "totalVol": 0.0210774420893311,
+    "nNegVol": 0,
+    "maxNonOrth": 67.02100320894077,
+    "avgNonOrth": 4.67282739858267,
+    "nNonOrth70": 0,
+    "maxSkewness": 12.739388453815701,
+    "nSkew4": 10,
+    "nBadPyramids": 0,
+    "nBadTetDecomp": 421,
+    "minFaceArea": 4.1531545554720235e-21
+   },
+   "steps": {
+    "geometry / search structures": 9.689,
+    "octree (1462287 leaves)": 7.702,
+    "polyhedral cells (1654138 points)": 0.924,
+    "level sets and vertex snapping": 6.738,
+    "domain cut": 11.422,
+    "zone cut 'rotor'": 1.122,
+    "assembly and small-cell merging": 4.822,
+    "patches, zones, renumbering": 4.057,
+    "leak check": 1.148,
+    "write polyMesh": 0.692,
+    "quality check": 5.838
+   },
+   "meshHash": {
+    "files": {
+     "boundary": "7a786d9e77d5da498037687b744eab7809a18191fc53c2818422b59a20e88938",
+     "cellZones": "7b299726688d53ad4bd06ac7ce10c914d65e8faf918b1dbc44aee918345011aa",
+     "faceZones": "33c2938f79c54a13ef29b653fa360b0ef0cb2b6369a676039fc35fdd573511fe",
+     "faces": "fb37a970fa1f17caea3cb01d405166224f81602de31254ef1ae7031adf6bda0f",
+     "neighbour": "30bf6924ccff28079563e3919fa0a6b10d1b5f21924da631b8c2554a5573fc24",
+     "owner": "07dc113264fd90f513849c9682d21a71fa553b32194b1cd81520ee9e1a176292",
+     "points": "30eec4725fd38f07e70225b1d3142e2c2aa83f77368d7ca71c4c36515eb3210b"
+    },
+    "digest": "889c9de216251c54c79e4bdcf18aef30194bd95afbc5628f04defecaac020df7"
+   },
+   "time": 54.721,
+   "peakMemMB": 6798.19140625,
+   "warnings": [],
+   "repairs": [],
+   "boundaryDistCells": 0.65,
+   "baseCellSize": 0.0052,
+   "volErr": -5.780441559277705e-05,
+   "status": "WARN",
+   "notes": [
+    "10 faces skewness > 4"
+   ],
+   "verdict": "ok"
+  },
+  {
+   "name": "tilted_8m",
+   "stl": "examples/stirred_tank/tank_tilted.stl",
+   "expect": "valid",
+   "input": {
+    "triangles": 960,
+    "vertices": 482,
+    "edges": 1440,
+    "euler": 2,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "inconsistentEdges": 0,
+    "degenerateTris": 0,
+    "duplicateTris": 0,
+    "components": 1,
+    "signedVolume": 0.021078660528984456,
+    "bbox": [
+     [
+      -0.143325524,
+      -0.2358316655,
+      -0.06425173463
+     ],
+     [
+      0.2317089406,
+      0.1425299451,
+      0.3353295106
+     ]
+    ],
+    "diag": 0.6659380823719215,
+    "closed": true,
+    "oriented": true,
+    "clean": true,
+    "solids": [
+     "tankWall",
+     "bottom",
+     "top",
+     "impeller",
+     "shaft"
+    ]
+   },
+   "quality": {
+    "nPoints": 8901955,
+    "nCells": 8256407,
+    "nFaces": 25660275,
+    "nInternalFaces": 25188064,
+    "upperTriangular": true,
+    "maxClosedness": 1.6152367994052106e-16,
+    "openCellEdges": 0,
+    "duplicateCellEdges": 0,
+    "minVol": 1.1795223710247836e-14,
+    "maxVol": 1.492814541555146e-08,
+    "totalVol": 0.02107840646797776,
+    "nNegVol": 0,
+    "maxNonOrth": 69.3629843591666,
+    "avgNonOrth": 2.5839139325935,
+    "nNonOrth70": 0,
+    "maxSkewness": 5.90076819402423,
+    "nSkew4": 16,
+    "nBadPyramids": 0,
+    "nBadTetDecomp": 895,
+    "minFaceArea": 2.422412491509504e-11
+   },
+   "steps": {
+    "geometry / search structures": 45.41,
+    "octree (11884553 leaves)": 46.867,
+    "polyhedral cells (12749734 points)": 6.257,
+    "level sets and vertex snapping": 46.854,
+    "domain cut": 53.67,
+    "zone cut 'rotor'": 9.678,
+    "assembly and small-cell merging": 41.818,
+    "patches, zones, renumbering": 23.74,
+    "leak check": 8.462,
+    "write polyMesh": 4.784,
+    "quality check": 51.049
+   },
+   "meshHash": {
+    "files": {
+     "boundary": "0495023c703735adce7c8e40c5461edd5d68b335b6e4b0891322e04560e728a1",
+     "cellZones": "2ce1eb0fe3c69b706026bc43231fa5da1203bcf5b19714263a519002dead9031",
+     "faceZones": "3218267cfb405ee8bb1a12d0fb9173eb0d77d4e1ae69b7d7d6d00c76a75e5920",
+     "faces": "9a3698dd8b9bffed431488e55549c9c52d267c3d1a6e4509e94bbfde29bd8e73",
+     "neighbour": "467c01de6572972b045f773000b6fa34707eb671ca881c8b1a0feb29316f7b98",
+     "owner": "88028f300ce6e4cbc499eaf7c2d2c7962b7f1fe626962287993517c4fb1d776f",
+     "points": "5772470c6eb41a2e30545b2e83fe35a46557b48d55e665577c97b17c34fe0526"
+    },
+    "digest": "e196e2f0bb1da3fd5b4a03cde04f6eb9b49aad9568d8c0943200ce9aa5c1c8d4"
+   },
+   "time": 339.668,
+   "peakMemMB": 46284.3203125,
+   "warnings": [],
+   "repairs": [],
+   "boundaryDistCells": 0.66,
+   "baseCellSize": 0.0024,
+   "volErr": -1.2052995793765398e-05,
+   "status": "WARN",
+   "notes": [
+    "16 faces skewness > 4"
+   ],
+   "verdict": "ok"
+  }
+ ]
+}

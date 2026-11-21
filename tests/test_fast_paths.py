@@ -242,6 +242,25 @@ class NumpyOrder(unittest.TestCase):
         s = a * a
         np.testing.assert_array_equal(np.linalg.norm(a, axis=1), np.sqrt((s[:, 0] + s[:, 1]) + s[:, 2]))
 
+    def test_vector_products(self):
+        # 1-D np.dot (and np.linalg.norm = its square root) is fma(a2,b2, fma(a1,b1, a0 b0));
+        # a row of an (m, 3) @ (3,) product with m >= 2 is fma(a2,b2, fma(a0,b0, a1 b1))
+        # (wallmerge.rs)
+        from fractions import Fraction as F
+
+        def fma(x, y, z):
+            return float(F(x) * F(y) + F(z))
+        rng = np.random.default_rng(6)
+        for _ in range(400):
+            a = rng.normal(size=3) * rng.uniform(0, 10)
+            b = rng.normal(size=3)
+            self.assertEqual(float(np.dot(a, b)), fma(a[2], b[2], fma(a[1], b[1], a[0] * b[0])))
+            self.assertEqual(float(np.linalg.norm(a)), float(np.sqrt(fma(a[2], a[2], fma(a[1], a[1], a[0] * a[0])))))
+            m = int(rng.integers(2, 40))
+            M = rng.normal(size=(m, 3)) * rng.uniform(0, 10, (m, 1))
+            ref = [fma(r[2], b[2], fma(r[0], b[0], r[1] * b[1])) for r in M]
+            self.assertEqual((M @ b).tolist(), ref)
+
 
 @unittest.skipUnless(geometry.rust_available() and hasattr(geometry._core, "CutKernel"),
                      "Rust extension not built")
@@ -254,8 +273,18 @@ class RustCutKernel(unittest.TestCase):
         with open(p, "w") as f:
             json.dump(cfg, f)
         A = mesher.generate(mesher.load_config(p), log=lambda s: None)
+
+        real = mesher._core
+
+        class Hidden:                          # the extension without the stage-A kernels
+            def __getattr__(self, k):
+                if k in ("merge_wall_faces", "contact_candidates", "surface_contact_samples",
+                         "split_samples", "cut_batch_csr"):
+                    raise AttributeError(k)
+                return getattr(real, k)
         with mock.patch.object(mesher, "_rust_cut_ok", lambda ctx, hk: False), \
-                mock.patch.object(mesher, "_rust_merge_ok", lambda: False):
+                mock.patch.object(mesher, "_rust_merge_ok", lambda: False), \
+                mock.patch.object(mesher, "_core", Hidden()):
             B = mesher.generate(mesher.load_config(p), log=lambda s: None)
         np.testing.assert_array_equal(A["points"], B["points"])
         for k in ("owner", "neighbour"):
@@ -316,6 +345,118 @@ class RustLeakCheck(unittest.TestCase):
         self.assertGreater(n0, 0)
         self.assertEqual(n0, n1)
         np.testing.assert_array_equal(X0, X1)
+
+
+@unittest.skipUnless(geometry.rust_available() and hasattr(geometry._core, "merge_wall_faces"),
+                     "Rust extension not built")
+class RustWallMerge(unittest.TestCase):
+    """merge_coplanar_wall_faces in Rust gives the faces of the Python version"""
+
+    def faces(self, seed):
+        # a gently curved wall (folds of a few degrees around the 5 degree limit) split
+        # into quads and triangles; runs of faces belong to one cell, some loops are
+        # broken or reversed
+        rng = np.random.default_rng(seed)
+        n = 14
+        x, y = np.meshgrid(np.arange(n + 1.0), np.arange(n + 1.0), indexing="ij")
+        z = 0.03 * rng.uniform(0.5, 2.0) * (x - n / 2) ** 2 / n + rng.normal(0, 0.002, x.shape)
+        P = np.stack([x, y, z], -1).reshape(-1, 3) * 0.01
+        vid = np.arange((n + 1) ** 2).reshape(n + 1, n + 1)
+        polys = []
+        for i in range(n):
+            for j in range(n):
+                a, b, c, d = vid[i, j], vid[i + 1, j], vid[i + 1, j + 1], vid[i, j + 1]
+                r = rng.uniform()
+                if r < 0.3:
+                    polys += [[a, b, c], [a, c, d]]
+                elif r < 0.35:
+                    polys += [[a, b, c, d][::-1]]
+                else:
+                    polys += [[a, b, c, d]]
+        nI = 5
+        internal = [[0, 1, 2]] * nI
+        own, cell, k = [], 0, 0
+        while k < len(polys):
+            m = int(rng.integers(1, 9))
+            own += [cell] * min(m, len(polys) - k)
+            k += m
+            cell += 1
+        allp = internal + polys
+        nn = np.array([len(q) for q in allp], np.int64)
+        vv = np.array([v for q in allp for v in q], np.int64)
+        owner = np.array(list(range(nI)) + own, np.int64)
+        h = len(polys) // 2
+        patches = [dict(name="a", type="wall", startFace=nI, nFaces=h),
+                   dict(name="b", type="wall", startFace=nI + h, nFaces=len(polys) - h)]
+        return P, nn, vv, owner, nI, patches
+
+    def test_same_faces(self):
+        joined = 0
+        for seed in range(25):
+            args = self.faces(seed)
+            for ang in (5.0, 2.0, 20.0):
+                a = mesher.merge_coplanar_wall_faces(*args, max_angle=ang)
+                b = mesher._merge_coplanar_wall_faces_py(*args, max_angle=ang)
+                for x, y in zip(a[:3], b[:3]):
+                    np.testing.assert_array_equal(x, y)
+                self.assertEqual(a[3], b[3])
+                self.assertEqual(a[4], b[4])
+                joined += a[4]
+        self.assertGreater(joined, 100)
+
+
+@unittest.skipUnless(geometry.rust_available() and hasattr(geometry._core, "cut_batch_csr"),
+                     "Rust extension not built")
+class RustCutBatch(unittest.TestCase):
+    """the parallel cut (cut_batch_csr) numbers vertices and faces as the sequential one"""
+
+    def test_same_as_sequential(self):
+        n = 9
+        vid = np.arange((n + 1) ** 3).reshape(n + 1, n + 1, n + 1)
+        g = np.stack(np.meshgrid(*[np.arange(n + 1.0)] * 3, indexing="ij"), -1).reshape(-1, 3) / n
+        fkey, cells = {}, []
+
+        def face(q):
+            k = tuple(sorted(q))
+            return fkey.setdefault(k, len(fkey))
+        for i in range(n):
+            for j in range(n):
+                for k in range(n):
+                    v = vid[i:i + 2, j:j + 2, k:k + 2]
+                    quads = [[v[0, 0, 0], v[0, 0, 1], v[0, 1, 1], v[0, 1, 0]], [v[1, 0, 0], v[1, 1, 0], v[1, 1, 1], v[1, 0, 1]],
+                             [v[0, 0, 0], v[1, 0, 0], v[1, 0, 1], v[0, 0, 1]], [v[0, 1, 0], v[0, 1, 1], v[1, 1, 1], v[1, 1, 0]],
+                             [v[0, 0, 0], v[0, 1, 0], v[1, 1, 0], v[1, 0, 0]], [v[0, 0, 1], v[1, 0, 1], v[1, 1, 1], v[0, 1, 1]]]
+                    cells.append([(face(q), [int(x) for x in q]) for q in quads])
+        for r, snap in ((0.37, 0.0), (0.41, 0.03)):
+            phi = np.linalg.norm(g - 0.5, axis=1) - r
+            phi[np.abs(phi) < snap] = 0.0              # vertices on the surface
+            for shared in (True, False):
+                nid = len(fkey)
+                P = mesher._Pieces.from_lists([[c, 0, 0] for c in cells])
+                (it, side, cf, ck, cv, cvv), np1, par1, nid1 = geometry._core.cut_batch_csr(
+                    g, phi, nid, *P.csr(), shared, {})
+                res, np2, par2, nid2 = geometry._core.cut_batch(g, phi, nid, cells, shared, {})
+                self.assertEqual((nid1, par1), (nid2, par2))
+                np.testing.assert_array_equal(np1, np2)
+                flat = [(k, s, comp) for k, (negc, posc) in enumerate(res)
+                        for s, cs in ((0, negc), (1, posc)) for comp in cs]
+                A = mesher._Pieces(it, side, cf, ck, cv, cvv)
+                self.assertEqual(len(flat), len(A))
+                for i, (k, s, comp) in enumerate(flat):
+                    self.assertEqual((A.leaf[i], A.zone[i]), (k, s))
+                    self.assertEqual(A.faces(i), [(f, list(p)) for f, p in comp])
+                self.assertGreater(len(np1), 10)
+
+
+@unittest.skipUnless(geometry.rust_available() and hasattr(geometry._core, "argsort_stable"),
+                     "Rust extension not built")
+class RustArgsort(unittest.TestCase):
+    def test_stable(self):
+        rng = np.random.default_rng(7)
+        for n, hi in ((0, 1), (1, 5), (1000, 3), (300000, 1000), (300000, 2 ** 40)):
+            a = rng.integers(-hi, hi, n).astype(np.int64)
+            np.testing.assert_array_equal(mesher._argsort_stable(a), np.argsort(a, kind="stable"))
+            np.testing.assert_array_equal(geometry._core.argsort_stable(a), np.argsort(a, kind="stable"))
 
 
 def l_prism(c=0.037, L=0.1, H=0.03, ang=(7.0, 5.0, 11.0)):
