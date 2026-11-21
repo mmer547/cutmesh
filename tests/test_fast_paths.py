@@ -328,7 +328,8 @@ class RustCutKernel(unittest.TestCase):
             def __getattr__(self, k):
                 if k in ("merge_wall_faces", "contact_candidates", "surface_contact_samples",
                          "split_samples", "cut_batch_csr", "face_sign_counts", "vertex_min",
-                         "leaf_any", "leaf_vertices", "finer_face_neighbour", "leaf_min"):
+                         "leaf_any", "leaf_vertices", "finer_face_neighbour", "leaf_min",
+                         "PlaneClipRs"):
                     raise AttributeError(k)
                 return getattr(real, k)
         with mock.patch.object(mesher, "_rust_cut_ok", lambda ctx, hk: False), \
@@ -545,6 +546,74 @@ class RustFaceOps(unittest.TestCase):
             x[rng.random(nv) < 0.01] = np.nan
             np.testing.assert_array_equal(geometry._core.leaf_min(x, vptr, fverts),
                                           np.minimum.reduceat(np.minimum.reduceat(x[fverts], fptr[:-1]), cptr[:-1]))
+
+
+@unittest.skipUnless(geometry.rust_available() and hasattr(geometry._core, "PlaneClipRs"),
+                     "Rust extension not built")
+class RustPlaneClip(unittest.TestCase):
+    """featclip.PlaneClip in Rust (attach_rust) answers as the Python code"""
+
+    def test_same_as_python(self):
+        from test_exact_cut import turned_cube
+        from cutmesh.featclip import PlaneClip
+        with tempfile.TemporaryDirectory() as d:
+            turned_cube(os.path.join(d, "c.stl"))
+            dom = geometry.Surface(geometry.read_stl(os.path.join(d, "c.stl")))
+        feat = geometry.FeatureSet(dom.feature_edges(30.0), L=dom.L)
+        rng = np.random.default_rng(12)
+        h = 0.11
+        g = np.arange(-1.0, 1.0 + 1e-9, h) + 0.013
+        n = len(g)
+        pts = np.stack(np.meshgrid(g, g, g, indexing="ij"), -1).reshape(-1, 3)
+        phi = dom.sdf(pts)
+        snap = np.abs(phi) < 0.25 * h                   # vertices on the walls, as snapped
+        cp, _, _ = dom.closest(pts[snap])
+        pts[snap] = cp
+        phi[snap] = 0.0
+        A = PlaneClip(dom, pts, phi, h, feat)
+        B = PlaneClip(dom, pts, phi, h, feat)
+        A.zero_edge = B.zero_edge = {}
+        B.attach_rust(geometry._core)
+        self.assertIsNotNone(B._rs)
+        vid = np.arange(n ** 3).reshape(n, n, n)
+        faces, cells = {}, []
+        for i in range(n - 1):
+            for j in range(n - 1):
+                for k in range(n - 1):
+                    v = vid[i:i + 2, j:j + 2, k:k + 2]
+                    if np.abs(phi[v.ravel()]).min() > 1.5 * h:
+                        continue
+                    quads = [[v[0, 0, 0], v[0, 0, 1], v[0, 1, 1], v[0, 1, 0]], [v[1, 0, 0], v[1, 1, 0], v[1, 1, 1], v[1, 0, 1]],
+                             [v[0, 0, 0], v[1, 0, 0], v[1, 0, 1], v[0, 0, 1]], [v[0, 1, 0], v[0, 1, 1], v[1, 1, 1], v[1, 1, 0]],
+                             [v[0, 0, 0], v[0, 1, 0], v[1, 1, 0], v[1, 0, 0]], [v[0, 0, 1], v[1, 0, 1], v[1, 1, 1], v[0, 1, 1]]]
+                    fl = [(faces.setdefault(tuple(sorted(int(x) for x in q)), len(faces)), [int(x) for x in q])
+                          for q in quads]
+                    cells.append(fl)
+        ncut = 0
+        for fl in cells:
+            for fid, poly in fl:
+                for p in (poly, poly[::-1]):          # the other cell sees it reversed
+                    ra, pa = A.clip_face(fid, p)
+                    rb, pb = B.clip_face(fid, p)
+                    self.assertEqual(ra, rb)
+                    np.testing.assert_array_equal(np.reshape(pa, (-1, 3)), np.reshape(pb, (-1, 3)))
+                    self.assertEqual(A.ls_compatible(fid, p), B.ls_compatible(fid, p))
+                    ncut += any(r[0] != "v" for r in ra)
+                self.assertEqual(list(A.face_planes.get(fid, ())), list(B.face_planes.get(fid, ())))
+        self.assertGreater(ncut, 50)
+        Ps = [pts[np.unique([v for _, p in fl for v in p])] for fl in cells]
+        rs = [1.5 * float(np.linalg.norm(P - P.mean(0), axis=1).max()) for P in Ps]
+        self.assertEqual(A.convex_many(Ps, rs), B.convex_many(Ps, rs))
+        for P, r in list(zip(Ps, rs))[::7]:
+            ca, pa = A.convex_at(P, r)
+            cb, pb = B.convex_at(P, r)
+            self.assertEqual((ca, list(pa)), (cb, list(pb)))
+        self.assertTrue(any(B.convex_many(Ps, rs)) and not all(B.convex_many(Ps, rs)))
+        for _ in range(200):
+            tris = np.sort(rng.choice(len(dom.tris), int(rng.integers(1, 9)), replace=False))
+            pl = A.planes(tris)
+            self.assertEqual(pl, B.planes(tris))
+            np.testing.assert_array_equal(A.groups(pl), B.groups(pl))
 
 
 @unittest.skipUnless(geometry.rust_available() and hasattr(geometry._core, "argsort_stable"),

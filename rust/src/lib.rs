@@ -20,6 +20,7 @@ mod contact;
 mod sortutil;
 mod csr;
 mod faceops;
+mod featclip;
 mod quality;
 mod sampling;
 
@@ -326,6 +327,41 @@ struct TriMesh {
 }
 
 impl TriMesh {
+    /// the triangles within distance rad of q (sorted ids)
+    pub(crate) fn near_one(&self, q: V3, rad: f64) -> Vec<i64> {
+        let mut out: Vec<i64> = Vec::new();
+        if self.bvh.nodes.is_empty() || !(rad >= 0.0) {
+            return out;
+        }
+        let r2 = rad * rad;
+        let mut stack: Vec<u32> = vec![0];
+        while let Some(ni) = stack.pop() {
+            let n = &self.bvh.nodes[ni as usize];
+            if box_d2(n, q) > r2 {
+                continue;
+            }
+            if n.count > 0 {
+                for &i in &self.bvh.prims[n.start as usize..(n.start + n.count) as usize] {
+                    let [a, b, c] = self.t[i as usize];
+                    if dist2(closest_tri(q, a, b, c), q) <= r2 {
+                        out.push(i as i64);
+                    }
+                }
+            } else {
+                stack.push(n.start);
+                stack.push(n.right);
+            }
+        }
+        out.sort_unstable();
+        out
+    }
+
+    /// signed distance of one point (negative inside), as sdf()
+    pub(crate) fn sdf_one(&self, q: V3) -> f64 {
+        let d = self.closest_one(q).0.sqrt();
+        if self.inside_one(q) { -d } else { d }
+    }
+
     fn closest_one(&self, p: V3) -> (f64, V3, usize) {
         self.bvh.closest(p, |i| {
             let [a, b, c] = self.t[i];
@@ -558,33 +594,7 @@ impl TriMesh {
         let per: Vec<Vec<i64>> = py.detach(|| {
             pts.par_iter()
                 .zip(rr.par_iter())
-                .map(|(&q, &rad)| {
-                    let mut out: Vec<i64> = Vec::new();
-                    if self.bvh.nodes.is_empty() || !(rad >= 0.0) {
-                        return out;
-                    }
-                    let r2 = rad * rad;
-                    let mut stack: Vec<u32> = vec![0];
-                    while let Some(ni) = stack.pop() {
-                        let n = &self.bvh.nodes[ni as usize];
-                        if box_d2(n, q) > r2 {
-                            continue;
-                        }
-                        if n.count > 0 {
-                            for &i in &self.bvh.prims[n.start as usize..(n.start + n.count) as usize] {
-                                let [a, b, c] = self.t[i as usize];
-                                if dist2(closest_tri(q, a, b, c), q) <= r2 {
-                                    out.push(i as i64);
-                                }
-                            }
-                        } else {
-                            stack.push(n.start);
-                            stack.push(n.right);
-                        }
-                    }
-                    out.sort_unstable();
-                    out
-                })
+                .map(|(&q, &rad)| self.near_one(q, rad))
                 .collect()
         });
         let mut ptr = Vec::with_capacity(per.len() + 1);
@@ -602,10 +612,7 @@ impl TriMesh {
         let pts = points(&p)?;
         let r: Vec<f64> = py.detach(|| {
             pts.par_iter()
-                .map(|&q| {
-                    let d = self.closest_one(q).0.sqrt();
-                    if self.inside_one(q) { -d } else { d }
-                })
+                .map(|&q| self.sdf_one(q))
                 .collect()
         });
         Ok(r.into_pyarray(py))
@@ -1065,6 +1072,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<TriMesh>()?;
     m.add_class::<SegSet>()?;
     m.add_class::<dcut::CutKernel>()?;
+    m.add_class::<featclip::PlaneClipRs>()?;
     m.add_function(wrap_pyfunction!(merge::merge_cells, m)?)?;
     m.add_function(wrap_pyfunction!(merge::merge_cells_csr, m)?)?;
     m.add_function(wrap_pyfunction!(merge::pyset_order, m)?)?;
