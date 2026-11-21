@@ -1251,21 +1251,33 @@ def _auto_gap_samples(dom, h0, region_level, nacross, lmax):
     if not len(cand):
         return [], 0
     cand = _tri_neighbours(dom, np.unique(cand))
+    reused = None
+    if finest_coarse is not None:
+        # Keep only the coarse widths of the fine pass's triangles; drop the rest of the
+        # coarse pass (finest spacing over every lmax - 1 wall) before sampling again.
+        coarse_ti, coarse_w = finest_coarse
+        reused = coarse_w[np.isin(coarse_ti, cand)]
+    finest_coarse = coarse_ti = coarse_w = p = ids = ti = w = None
     p, ids = _interior_samples(dom.tris[cand], h0 / 2 ** lmax)
     ti = cand[ids]
     lw = tri_level[ti]
-    if finest_coarse is None:
+    if reused is None:
         w = _gap_widths(dom, p, ti, lw, h0, nacross, eps)
     else:
         # Both subdivisions visit pieces breadth-first in original triangle order.
         # At the same spacing, filtering to their common parents gives identical rows.
-        coarse_ti, coarse_w = finest_coarse
         reuse = lw == lmax - 1
         w = np.empty(len(p))
-        w[reuse] = coarse_w[np.isin(coarse_ti, cand)]
+        w[reuse] = reused
         if not reuse.all():
             fresh = ~reuse
             w[fresh] = _gap_widths(dom, p[fresh], ti[fresh], lw[fresh], h0, nacross, eps)
+    return _gap_levels(p, lw, w, h0, nacross, lmax)
+
+
+def _gap_levels(p, lw, w, h0, nacross, lmax):
+    """Group the fine wall samples p (surface level lw, gap width w) by target level:
+    ([(level, samples, n_unresolved)], n_unresolved), as _auto_gap_samples returns."""
     with np.errstate(divide="ignore"):
         need = np.ceil(np.log2(nacross * h0 / w)).astype(float)
     need = np.where(np.isfinite(w), need, -1)

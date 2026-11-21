@@ -13,6 +13,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, ".."))
 sys.path.insert(0, os.path.join(HERE, "..", "examples", "stirred_tank"))
 
+from cutmesh import mesher                                 # noqa: E402
 from cutmesh.geometry import Surface                       # noqa: E402
 from cutmesh.mesher import _auto_gap_samples, _interior_samples   # noqa: E402
 import make_geometry as tank                               # noqa: E402
@@ -96,6 +97,43 @@ class AutoGapSamples(unittest.TestCase):
         np.testing.assert_array_equal(pts, expected)
         coarse, _ = _interior_samples(dom.tris[dom.region == 1], h0 / 8)
         np.testing.assert_array_equal(np.concatenate(high_probes), coarse)
+
+    def test_reused_widths_match_recomputed(self):
+        # a channel 0.05 wide in y: walls of level lmax - 1 reuse their coarse widths,
+        # walls of level lmax - 2 are measured again; both must give what measuring every
+        # fine sample gives
+        T = box((0, 0, 0), (1, 0.05, 1))[0][1]
+        dom = Surface([("reused", T[::2]), ("fresh", T[1::2])])
+        dom.build_search(0.01)
+        h0, nacross, lmax = 0.5, 2.0, 4
+        rl = np.array([lmax - 1, lmax - 2])
+        cands, rows = [], []
+        real_neighbours, real_widths = mesher._tri_neighbours, mesher._gap_widths
+
+        def neighbours(dom, tri):
+            cands.append(real_neighbours(dom, tri))
+            return cands[-1]
+
+        def widths(dom, p, *args):
+            rows.append(len(p))
+            return real_widths(dom, p, *args)
+
+        with mock.patch.object(mesher, "_tri_neighbours", neighbours), \
+                mock.patch.object(mesher, "_gap_widths", widths):
+            groups, nun = _auto_gap_samples(dom, h0, rl, nacross, lmax)
+        cand, = cands
+        p, ids = _interior_samples(dom.tris[cand], h0 / 2 ** lmax)
+        lw = rl[dom.region][cand[ids]]
+        self.assertTrue((lw == lmax - 1).any() and (lw == lmax - 2).any())
+        self.assertLess(rows[-1], len(p))           # the fine pass measured only some rows
+        w = real_widths(dom, p, cand[ids], lw, h0, nacross, 1e-3 * h0 / 2 ** lmax)
+        want, want_nun = mesher._gap_levels(p, lw, w, h0, nacross, lmax)
+        self.assertGreater(want_nun, 0)             # 0.05 needs more than 2 cells of level 4
+        self.assertEqual(nun, want_nun)
+        self.assertEqual([g[0] for g in groups], [g[0] for g in want])
+        for (_, got_p, got_n), (_, want_p, want_n) in zip(groups, want):
+            np.testing.assert_array_equal(got_p, want_p)
+            self.assertEqual(got_n, want_n)
 
     def test_stator_gap(self):
         # stirred tank with a fixed ring 0.5 mm outside the blade corners: only the ring's

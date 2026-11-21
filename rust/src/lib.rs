@@ -514,13 +514,12 @@ impl TriMesh {
             return Err(pyo3::exceptions::PyValueError::new_err("inconsistent gap samples"));
         }
         let widths: Vec<f64> = py.detach(|| {
-            let normals: Vec<V3> = self.t.iter().map(|&[a, b, c]| {
-                let n = cross(sub(b, a), sub(c, a));
-                let mag = dot(n, n).sqrt().max(1e-300);
-                n.map(|x| x / mag)
-            }).collect();
+            // Normals of the sampled triangles only: a fine pass may touch few of a large STL.
             p.par_iter().enumerate().map(|(i, &q)| {
-                let n = normals[triangles[i] as usize];
+                let [ta, tb, tc] = self.t[triangles[i] as usize];
+                let n = cross(sub(tb, ta), sub(tc, ta));
+                let mag = dot(n, n).sqrt().max(1e-300);
+                let n = n.map(|x| x / mag);
                 let back = self.inside_one(axpy(q, -probe, n));
                 let flip = if probe == eps || self.inside_one(axpy(q, probe, n)) != back {
                     back
