@@ -13,6 +13,7 @@
   <nav class="site-nav">
     <a href="manual.html" aria-current="page">マニュアル</a>
     <a href="examples.html">実行例</a>
+    <a href="meshdict.html">meshDict 作成</a>
     <a href="https://github.com/mmer547/cutmesh">GitHub</a>
   </nav>
 </div></header>
@@ -103,6 +104,7 @@ python run.py                         # 断面図も欲しい場合 → slice_z.
 
 <h2 id="meshdict">meshDict.json</h2>
 <p><code>_</code> または <code>//</code> で始まるキーはコメントとして無視されます。知らないキーは警告されます（綴りの誤りで設定が黙って無視されないように）。</p>
+<p class="note">フォームで作ることもできます: <a href="meshdict.html">meshDict 作成</a>（STL の solid 名と大きさを読み、入力をその場で検査します）。エディターの補完には <a href="meshdict.schema.json">JSON Schema</a> が使えます。</p>
 
 <h3 id="md-basic">基本</h3>
 <div class="table-wrap"><table>
