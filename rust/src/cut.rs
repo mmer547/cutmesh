@@ -436,7 +436,43 @@ pub fn cut_batch<'py>(
     shared_cap: bool,
     zero_edge: HashMap<(i64, i64, i64), i64>,
 ) -> PyResult<(Vec<CellResult>, Bound<'py, PyArray2<f64>>, Vec<(i64, i64)>, i64)> {
-    let mut pos = crate::points(&points)?;
+    let (res, newp, parents, nid) = cut_cells(py, &points, &phi, next_face_id, cells, shared_cap, &zero_edge)?;
+    Ok((res, vec3_array(py, newp)?, parents, nid))
+}
+
+/// cut_batch with the cells and the results as flat arrays (csr.rs):
+///   -> ((item, side, face ptr, face ids, vertex ptr, vertices), new points, new parents,
+///       next_face_id)
+#[pyfunction]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+pub fn cut_batch_csr<'py>(
+    py: Python<'py>,
+    points: PyReadonlyArray2<'py, f64>,
+    phi: PyReadonlyArray1<'py, f64>,
+    next_face_id: i64,
+    fptr: PyReadonlyArray1<'py, i64>,
+    key: PyReadonlyArray1<'py, i64>,
+    vptr: PyReadonlyArray1<'py, i64>,
+    verts: PyReadonlyArray1<'py, i64>,
+    shared_cap: bool,
+    zero_edge: HashMap<(i64, i64, i64), i64>,
+) -> PyResult<(crate::csr::CsrOut<'py>, Bound<'py, PyArray2<f64>>, Vec<(i64, i64)>, i64)> {
+    let cells = crate::csr::read_cells(&fptr, &key, &vptr, &verts)?;
+    let (res, newp, parents, nid) = cut_cells(py, &points, &phi, next_face_id, cells, shared_cap, &zero_edge)?;
+    Ok((crate::csr::write_results(py, &res, false), vec3_array(py, newp)?, parents, nid))
+}
+
+#[allow(clippy::type_complexity)]
+fn cut_cells(
+    py: Python<'_>,
+    points: &PyReadonlyArray2<'_, f64>,
+    phi: &PyReadonlyArray1<'_, f64>,
+    next_face_id: i64,
+    cells: Vec<Vec<Face>>,
+    shared_cap: bool,
+    zero_edge: &HashMap<(i64, i64, i64), i64>,
+) -> PyResult<(Vec<CellResult>, Vec<V3>, Vec<(i64, i64)>, i64)> {
+    let mut pos = crate::points(points)?;
     let mut ph: Vec<f64> = phi.as_array().to_vec();
     if ph.len() != pos.len() {
         return Err(pyo3::exceptions::PyValueError::new_err("phi and points differ in length"));
@@ -453,7 +489,7 @@ pub fn cut_batch<'py>(
             subids: HashMap::new(),
             next_id: next_face_id,
             new_parents: Vec::new(),
-            zero_edge: &zero_edge,
+            zero_edge,
         };
         let mut res: Vec<CellResult> = Vec::with_capacity(cells.len());
         for c in cells {
@@ -465,5 +501,5 @@ pub fn cut_batch<'py>(
         (res, parents, ct.next_id)
     });
     let newp: Vec<V3> = pos[n0..].to_vec();
-    Ok((res, vec3_array(py, newp)?, parents, nid))
+    Ok((res, newp, parents, nid))
 }
