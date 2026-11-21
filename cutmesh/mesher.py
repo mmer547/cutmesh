@@ -1741,14 +1741,20 @@ def generate(cfg, log=print):
         vs = fverts[o:fp[-1]].tolist()
         return [(k, vs[fp[j] - o:fp[j + 1] - o]) for j, k in enumerate(f_key[a:b].tolist())]
 
-    def classify_leaves(phi, leaves):
-        """-1 all vertices <= 0, +1 all >= 0 (and some > 0), 0 straddling."""
+    def face_signs(phi):
+        """per face: the number of vertices with phi < 0, > 0 and == 0"""
+        if _core is not None and hasattr(_core, "face_sign_counts"):
+            return _core.face_sign_counts(np.ascontiguousarray(phi, float), fptr, fverts)
         pv = phi[fverts]
-        hn = np.maximum.reduceat((pv < 0).astype(np.int8), fptr[:-1])
-        hp = np.maximum.reduceat((pv > 0).astype(np.int8), fptr[:-1])
-        cn = np.maximum.reduceat(hn, cptr[:-1])[leaves]
-        cp_ = np.maximum.reduceat(hp, cptr[:-1])[leaves]
-        return np.where(cp_ == 0, -1, np.where(cn == 0, 1, 0))
+        return tuple(np.add.reduceat(m.astype(np.int32), fptr[:-1]) for m in (pv < 0, pv > 0, pv == 0))
+
+    def classify_leaves(phi, leaves, signs=None):
+        """-1 all vertices <= 0, +1 all >= 0 (and some > 0), 0 straddling.  signs:
+        face_signs(phi) if known."""
+        nneg, npos, _ = face_signs(phi) if signs is None else signs
+        cn = np.logical_or.reduceat(nneg > 0, cptr[:-1])[leaves]
+        cp_ = np.logical_or.reduceat(npos > 0, cptr[:-1])[leaves]
+        return np.where(~cp_, -1, np.where(~cn, 1, 0))
 
     # ------------------------------------------------------------ level sets + snapping
     alpha = float(cfg["snapTolerance"])
@@ -2098,7 +2104,8 @@ def generate(cfg, log=print):
 
     # ------------------------------------------------------------ pass 1: domain cut
     # Uncut leaves stay in flat arrays ("bulk"); only cut cells become python pieces.
-    cls = classify_leaves(phi_d, np.arange(nleaf))
+    signs_d = face_signs(phi_d)
+    cls = classify_leaves(phi_d, np.arange(nleaf), signs_d)
     bulk_alive = cls < 0
     bulk_zone = np.full(nleaf, -1, np.int64)
     cut_leaves = np.nonzero(cls == 0)[0]
@@ -2110,8 +2117,11 @@ def generate(cfg, log=print):
         ctx.chord_hook = make_chord_hook(dom_feat)
         ctx.onfeat = set(on_feat_d.tolist())
     if dom_ccv is not None and dom_ccv._kd is not None:
-        vh_ = np.full(len(pts), np.inf)
-        np.minimum.at(vh_, fverts, np.repeat(csize[f_cell], fn))
+        if _core is not None and hasattr(_core, "vertex_min"):
+            vh_ = _core.vertex_min(len(pts), fptr, fverts, np.ascontiguousarray(csize[f_cell], float))
+        else:
+            vh_ = np.full(len(pts), np.inf)
+            np.minimum.at(vh_, fverts, np.repeat(csize[f_cell], fn))
         ctx.pinch_hook = make_pinch_hook(dom, dom_ccv, lambda v: vh_[v] if v < len(vh_) else hmin)
     pieces = []        # [faces, parent_leaf, zone]
     cl = cut_leaves.tolist()
@@ -2120,27 +2130,29 @@ def generate(cfg, log=print):
         # Uncut cells at a concave edge: a vertex on the edge and the wall vertices next
         # to it can enclose the wedge of solid (all phi <= 0).  Those faces are split
         # along the chord through the edge vertex and the cell drops the wedge (below).
-        zf = (phi_d[fverts] == 0).astype(np.int64)
-        zc = np.add.reduceat(zf, fptr[:-1])
+        zc = signs_d[2]
         fz = (zc >= 3) | (zc == fn)
         cz = np.maximum.reduceat(fz.astype(np.int8), cptr[:-1]) > 0
         cand_b = np.nonzero(cz & bulk_alive)[0]
         if len(cand_b):
-            occ_b = np.concatenate([np.arange(fptr[cptr[c]], fptr[cptr[c + 1]]) for c in cand_b.tolist()])
+            occ_b = _cat_ranges(fptr[cptr[cand_b]], fptr[cptr[cand_b + 1]])
             own_b = np.repeat(np.arange(len(cand_b)), fptr[cptr[cand_b + 1]] - fptr[cptr[cand_b]])
-            cen = np.zeros((len(cand_b), 3)); np.add.at(cen, own_b, pts[fverts[occ_b]])
+            # np.add.at, column by column (both add in index order)
+            xb = pts[fverts[occ_b]]
+            cen = np.stack([np.bincount(own_b, xb[:, k], len(cand_b)) for k in range(3)], 1)
+            del xb
             cen /= np.bincount(own_b, minlength=len(cand_b))[:, None]
             _, dce = dom_ccv.closest(cen)
             cb = cand_b[dce < csize[cand_b]].tolist()
     # only cells with a face that can matter there (several surface vertices) are visited:
     # the same faces in the same order, without a Python pass over every cut cell
-    fz = np.add.reduceat((phi_d[fverts] == 0).astype(np.int64), fptr[:-1])
-    fneg = np.logical_or.reduceat(phi_d[fverts] < 0, fptr[:-1])
-    fpos = np.logical_or.reduceat(phi_d[fverts] > 0, fptr[:-1])
+    fz = signs_d[2]
+    fneg = signs_d[0] > 0
+    fpos = signs_d[1] > 0
     f_sc = (fz == fn) | ((fz >= 2) & fneg & fpos)
     c_sc = np.logical_or.reduceat(f_sc, cptr[:-1])
     c_cs = np.logical_or.reduceat(~fpos & fneg & (fz >= 3), cptr[:-1])
-    del fz, fneg, fpos
+    del fz, fneg, fpos, signs_d
     ctx.zero_edge, drop = surface_contact(dom, pts, phi_d, [c for c in cl + cb if c_sc[c]], leaf_faces, csize,
                                           face_ok=lambda ci: f_sc[cptr[ci]:cptr[ci + 1]].tolist(),
                                           csr=(cptr, fptr, fverts, f_key, f_sc))
@@ -2496,11 +2508,14 @@ def generate(cfg, log=print):
         Cf, Sf = quality.face_geometry(P, ffp)
         ref = np.zeros((nP, 3)); ref[py_cell] = Cf
         cnt_ = np.bincount(py_cell, minlength=nP)
-        est = np.zeros((nP, 3)); np.add.at(est, py_cell, Cf); est /= np.maximum(cnt_, 1)[:, None]
+        # np.add.at column by column (bincount adds in the same index order)
+        est = np.stack([np.bincount(py_cell, Cf[:, k], nP) for k in range(3)], 1) if nP else np.zeros((0, 3))
+        est /= np.maximum(cnt_, 1)[:, None]
         pv = np.einsum("ij,ij->i", Sf, Cf - est[py_cell])
         vol = np.bincount(py_cell, pv, nP) / 3.0
-        cc = np.zeros((nP, 3))
-        np.add.at(cc, py_cell, pv[:, None] * (0.75 * Cf + 0.25 * est[py_cell]))
+        w_ = pv[:, None] * (0.75 * Cf + 0.25 * est[py_cell])
+        cc = np.stack([np.bincount(py_cell, w_[:, k], nP) for k in range(3)], 1)
+        del w_
         cc /= np.where(np.abs(vol) > 0, 3.0 * vol, 1.0)[:, None]
         # "bad" pieces: some face does not clearly see the centroid (non-convex cut cell)
         hp = csize[pieces.leaf]
