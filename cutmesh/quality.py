@@ -1,6 +1,7 @@
 """checkMesh-style geometry and topology checks (same formulas as OpenFOAM's
 primitiveMeshTools where practical), vectorised over flattened face lists."""
 import itertools
+from functools import cached_property
 
 import numpy as np
 
@@ -19,10 +20,16 @@ class FlatFaces:
             self.n = np.array([len(f) for f in faces], np.int64)
             self.ptr = np.concatenate([[0], np.cumsum(self.n)])
             self.v = np.fromiter(itertools.chain.from_iterable(faces), np.int64, count=int(self.ptr[-1]))
-        self.fid = np.repeat(np.arange(len(self.n)), self.n)
+
+    @cached_property
+    def fid(self):
+        return np.repeat(np.arange(len(self.n)), self.n)
+
+    @cached_property
+    def nxt(self):
         nxt = np.arange(len(self.v)) + 1
         nxt[self.ptr[1:] - 1] = self.ptr[:-1]
-        self.nxt = nxt
+        return nxt
 
 
 def face_geometry(points, ff):
@@ -105,19 +112,8 @@ def face_skewness(points, ff, Cf, Sf, C, owner, neighbour, faces=None, limit=Non
     return sk
 
 
-def check(points, faces, owner, neighbour, log=print):
-    nI = len(neighbour)
-    nC = int(max(owner.max(), neighbour.max() if len(neighbour) else 0)) + 1
-    ff = faces if isinstance(faces, FlatFaces) else FlatFaces(faces)
-    faces = ff.n                      # only len(faces) is used below
-    Cf, Sf = face_geometry(points, ff)
-    C, V = cell_geometry(nC, owner, neighbour, Cf, Sf)
-    magSf = np.linalg.norm(Sf, axis=1)
-    res = {}
-    # --- topology: upper triangular ordering
-    ok_ut = bool(np.all(owner[:nI] < neighbour))
-    key = owner[:nI] * (nC + 1) + neighbour
-    ok_order = bool(np.all(np.diff(key) >= 0))
+def _quality_metrics_py(points, ff, owner, neighbour, Cf, Sf, C, magSf):
+    nC, nI = len(C), len(neighbour)
     # --- closedness
     s = np.zeros((nC, 3)); np.add.at(s, owner, Sf); np.add.at(s, neighbour, -Sf[:nI])
     sa = np.bincount(owner, magSf, nC) + np.bincount(neighbour, magSf[:nI], nC)
@@ -150,10 +146,7 @@ def check(points, faces, owner, neighbour, log=print):
     # --- non-orthogonality / skewness
     d = C[neighbour] - C[owner[:nI]]
     cosang = np.einsum("ij,ij->i", d, Sf[:nI]) / np.maximum(np.linalg.norm(d, axis=1) * magSf[:nI], 1e-300)
-    nonorth = np.degrees(np.arccos(np.clip(cosang, -1, 1)))
     sk = face_skewness(points, ff, Cf, Sf, C, owner, neighbour)
-    skew, skew_b = sk[:nI], sk[nI:]
-    nB = len(faces) - nI
     # --- face pyramids (tets from face triangles to owner / neighbour centres)
     e = Cf[ff.fid]
     pa, pb = points[ff.v], points[ff.v[ff.nxt]]
@@ -162,17 +155,47 @@ def check(points, faces, owner, neighbour, log=print):
     neg_own = np.minimum.reduceat(vo, ff.ptr[:-1]) <= 0
     iv = ff.fid < nI
     vn = np.einsum("ij,ij->i", tri_n[iv], e[iv] - C[neighbour[ff.fid[iv]]]) / 3.0
-    neg_nei = np.zeros(len(faces), bool)
+    neg_nei = np.zeros(len(ff.n), bool)
     if nI:
         neg_nei[:nI] = np.maximum.reduceat(vn, ff.ptr[:nI]) >= 0
     # checkMesh's face-pyramid test uses the whole face (area vector + centre)
     pyr_o = np.einsum("ij,ij->i", Sf, Cf - C[owner]) / 3.0
     pyr_n = np.einsum("ij,ij->i", Sf[:nI], C[neighbour] - Cf[:nI]) / 3.0
     nPyr = int(np.sum(pyr_o <= 0) + np.sum(pyr_n <= 0))
+    return float(closed.max()), open_edges, dup, cosang, sk, nPyr, int(neg_own.sum() + neg_nei.sum())
+
+
+def check(points, faces, owner, neighbour, log=print):
+    nI = len(neighbour)
+    nC = int(max(owner.max(), neighbour.max() if len(neighbour) else 0)) + 1
+    ff = faces if isinstance(faces, FlatFaces) else FlatFaces(faces)
+    Cf, Sf = face_geometry(points, ff)
+    C, V = cell_geometry(nC, owner, neighbour, Cf, Sf)
+    magSf = np.linalg.norm(Sf, axis=1)
+    res = {}
+    # --- topology: upper triangular ordering
+    ok_ut = bool(np.all(owner[:nI] < neighbour))
+    key = owner[:nI] * (nC + 1) + neighbour
+    ok_order = bool(np.all(np.diff(key) >= 0))
+    if hasattr(_core, "quality_metrics") and points.dtype == np.float64:
+        # Keep lower-precision inputs on the original path: their edge differences
+        # are rounded in the input dtype before the face-pyramid cross products.
+        metrics = _core.quality_metrics(
+            np.ascontiguousarray(points), ff.ptr, np.ascontiguousarray(ff.v),
+            np.ascontiguousarray(owner, np.int64), np.ascontiguousarray(neighbour, np.int64),
+            Cf, Sf, C, magSf)
+    else:
+        metrics = _quality_metrics_py(points, ff, owner, neighbour, Cf, Sf, C, magSf)
+    max_closed, open_edges, dup, cosang, sk, nPyr, nBadTet = metrics
+    # Keep NumPy's vector acos and reductions for bit-identical reports.
+    nonorth = np.degrees(np.arccos(np.clip(cosang, -1, 1)))
+    skew, skew_b = sk[:nI], sk[nI:]
+    nF = len(ff.n)
+    nB = nF - nI
     res.update(
-        nPoints=len(points), nCells=nC, nFaces=len(faces), nInternalFaces=nI,
+        nPoints=len(points), nCells=nC, nFaces=nF, nInternalFaces=nI,
         upperTriangular=ok_ut and ok_order,
-        maxClosedness=float(closed.max()),
+        maxClosedness=max_closed,
         openCellEdges=open_edges, duplicateCellEdges=dup,
         minVol=float(V.min()), maxVol=float(V.max()), totalVol=float(V.sum()),
         nNegVol=int(np.sum(V <= 0)),
@@ -182,14 +205,14 @@ def check(points, faces, owner, neighbour, log=print):
         maxSkewness=float(max(skew.max() if nI else 0, skew_b.max() if nB else 0)),
         nSkew4=int(np.sum(skew > 4) + np.sum(skew_b > 4)),
         nBadPyramids=nPyr,
-        nBadTetDecomp=int(neg_own.sum() + neg_nei.sum()),
+        nBadTetDecomp=nBadTet,
         minFaceArea=float(magSf.min()),
     )
     res["_C"] = C; res["_V"] = V; res["_nonorth"] = nonorth; res["_skew"] = skew
     res["_ff"] = ff; res["_Cf"] = Cf; res["_Sf"] = Sf
     if log:
         log("  checkMesh-style report")
-        log(f"    points {res['nPoints']}, cells {nC}, faces {len(faces)} (internal {nI})")
+        log(f"    points {res['nPoints']}, cells {nC}, faces {nF} (internal {nI})")
         log(f"    upper-triangular order: {'OK' if res['upperTriangular'] else 'FAILED'}")
         log(f"    cell closedness max {res['maxClosedness']:.2e}, open cell edges {open_edges}")
         log(f"    volume min {res['minVol']:.3e} max {res['maxVol']:.3e} total {res['totalVol']:.6e}"
