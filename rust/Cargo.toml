@@ -2,6 +2,7 @@
 name = "cutmesh_core"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88" # slice::as_chunks
 description = "Fast geometry queries for cutmesh (closest point, inside test, signed distance)"
 
 [lib]
