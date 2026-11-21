@@ -6,10 +6,10 @@
   "skew": 3.07
  },
  "cylindrical": {
-  "cells": 136620,
-  "seconds": 22.6,
-  "nonOrtho": 59.8,
-  "skew": 4.28
+  "cells": 137144,
+  "seconds": 21.9,
+  "nonOrtho": 53.8,
+  "skew": 2.82
  },
  "layers": {
   "cells": 163633,
@@ -110,11 +110,11 @@
   "layerFull": 97.7
  },
  "cylindrical_layers": {
-  "cells": 233592,
-  "seconds": 28.6,
-  "nonOrtho": 64.6,
-  "skew": 4.27,
-  "layerFull": 94.3
+  "cells": 199076,
+  "seconds": 24.9,
+  "nonOrtho": 63.4,
+  "skew": 3.46,
+  "layerFull": 87.0
  },
  "sphere_layers": {
   "cells": 147636,

@@ -156,6 +156,19 @@ class TestConfig(TempDir):
         self.assertIn("name is required", msg)
         self.assertIn("either cylinder or stl", msg)
 
+    def test_cylindrical_base_checks(self):
+        ok = {"type": "cylindrical"}
+        self.assertEqual(self.validate(self.cfg(baseMesh=dict(ok, rOuter=1.0, cellSize=0.1))), [])
+        manual = {"core": {"halfWidth": 0.1, "n": 2}, "blocks": [{"rOuter": 0.5, "nr": 2}]}
+        self.assertEqual(self.validate(self.cfg(baseMesh=dict(ok, **manual))), [])
+        msg = self.errors(self.cfg(baseMesh=dict(ok, core=manual["core"])))
+        self.assertIn("both core and blocks, or neither", msg)
+        msg = self.errors(self.cfg(baseMesh=dict(ok, rOuter=1.0, **manual)))
+        self.assertIn("rOuter and cellSize are for the automatic layout", msg)
+        msg = self.errors(self.cfg(baseMesh=dict(ok, rOuter=0, cellSize="x")))
+        self.assertIn("baseMesh.rOuter", msg)
+        self.assertIn("baseMesh.cellSize", msg)
+
     def test_check_names(self):
         cfg = self.cfg(surfaceRefinement={"default": 1, "wall": 2}, patchTypes={"walls": "wall", "inlet": "patch"},
                        addLayers={"patches": ["walls", "wallz"]})

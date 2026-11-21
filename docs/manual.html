@@ -226,32 +226,43 @@ python run.py                         # 断面図も欲しい場合 → slice_z.
 OpenFOAM-12 では、このメッシュでも縁のない円筒ゾーンでも、回し始めると <code>cyclicFvPatch::makeWeights</code> の浮動小数点例外で止まりました（同じメッシュが OpenFOAM-13 では回るので、OpenFOAM-12 側の問題とみています）。</p></div>
 
 <h2 id="cylbase">円筒ベースメッシュ（<code>baseMesh</code>）</h2>
-<p>回転機械向けに、八分木の根を直交格子の代わりに軸まわりの同心ブロックにできます。</p>
-<pre><code>"baseMesh": {
-  "type": "cylindrical",
-  "origin": [0, 0, 0], "axis": [0, 0, 1],
-  "nz": 24,
-  "core": { "halfWidth": 0.0375, "n": 6 },
-  "blocks": [
-    { "rOuter": 0.06, "nr": 2 },
-    { "rOuter": 0.10, "nr": 3, "nTheta": 38 },
-    { "rOuter": 0.155, "nr": 4 }
-  ]
-}</code></pre>
+<p>回転機械向けに、八分木の根を直交格子の代わりに軸まわりの同心ブロックにできます。
+ブロックの配置（中心の正方形・リングの半径・分割数）は自動で決まるので、最小限の指定は次だけです。</p>
+<pre><code>"baseMesh": { "type": "cylindrical", "origin": [0, 0, 0], "axis": [0, 0, 1] }</code></pre>
 <div class="table-wrap"><table>
   <tr><th>キー</th><th>意味</th><th>既定値</th></tr>
   <tr><td><code>origin</code>, <code>axis</code></td><td>回転軸（原点と方向）</td><td><code>[0,0,0]</code>, <code>[0,0,1]</code></td></tr>
   <tr><td><code>zRange</code></td><td>軸方向の範囲 <code>[z0, z1]</code>（<code>origin</code> からの距離）</td><td>STL の範囲 ± <code>baseCellSize</code></td></tr>
   <tr><td><code>nz</code> / <code>dz</code></td><td>軸方向の分割数 / 幅（全ブロック共通）</td><td><code>dz = baseCellSize</code></td></tr>
-  <tr><td><code>core</code></td><td>中心の正方形ブロック: 半幅 <code>halfWidth</code>、一辺の分割数 <code>n</code></td><td>必須</td></tr>
-  <tr><td><code>blocks</code></td><td>外側へ並ぶ同心ブロック: 外半径 <code>rOuter</code>、半径方向の分割数 <code>nr</code>、周方向の分割数 <code>nTheta</code></td><td>必須</td></tr>
+  <tr><td><code>rOuter</code></td><td>最外ブロックの外半径（自動配置）</td><td>STL の半径 + <code>2/3 × cellSize</code></td></tr>
+  <tr><td><code>cellSize</code></td><td>自動配置の目標寸法（半径方向・周方向のセル幅）</td><td><code>baseCellSize</code> と <code>dz</code> の小さい方</td></tr>
+  <tr><td><code>core</code>, <code>blocks</code></td><td>ブロックを手で指定する場合（下記）。両方書くか、両方書かない</td><td>自動配置</td></tr>
   <tr><td><code>maxSizeRatio</code></td><td>ブロック境界をまたぐセル寸法の比の上限</td><td>2.5</td></tr>
 </table></div>
+<p><strong>自動配置</strong>（<code>core</code> と <code>blocks</code> を書かない場合）</p>
 <ul>
-  <li>最初のブロックは正方形から円へつなぐ O グリッドで、<code>nTheta</code> は <code>4 × core.n</code> に固定。2 番目以降の <code>nTheta</code> は任意（隣のブロックの整数倍でなくてよい）。</li>
-  <li>ブロックの境界では両側の面を重ね合わせて共有の面に分けるので、分割数の比が任意でも適合した多面体メッシュになる（AMI 不要）。</li>
-  <li>細分化のレベル L は目標寸法 <code>baseCellSize / 2^L</code> として扱う。各ブロックのセルが立方体に近くなるように分割数を選ぶ。</li>
+  <li>中心に 2×2 の小さな正方形（半幅 <code>cellSize</code> の 0.5〜0.95 倍）を置き、半径がその 2 倍の円へつなぐ O グリッドのリング（周方向 8 分割）で囲む。その外側は、半径がおよそ 1.5625 倍ずつ広がる同心リングで <code>rOuter</code> まで埋める。</li>
+  <li>各リングの <code>nTheta</code> は、リングの中ほどで周方向の幅が <code>cellSize</code> になる 4 の倍数、半径方向の幅は <code>1.15 × cellSize</code> 以下。どの辺も <code>baseCellSize</code> の 1.3 倍を超えないので、細分化で余分なレベルが入らない。</li>
+  <li>周方向を向いていないセルは中心の 4 つと最初のリングだけ（軸に軸・ハブなどの固体があれば、多くはその中に入る）。</li>
+  <li>STL（領域とゾーン）の軸まわりの円筒（軸・ハブ・槽の壁・翼の先端の円など）と、軸が同じ円筒の回転ゾーン・細分化領域の半径を調べ、その面が層の厚さの 1/3 の位置に来るように半径方向の節点を置く。細分化でセルを半分にしても面はいつもセルの 1/3（または 2/3）の位置にあるので、面に沿って薄いカットセルができない。中心の正方形の大きさも、内側の円筒（軸）が辺の中央から同じように離れるように選ぶ。</li>
+  <li>決まった配置（調べた円筒の半径も）はログに出る。<code>"core": ..., "blocks": [...]</code> の形なので、そのまま手動指定の出発点にできる（節点が等間隔でないブロックは <code>radii</code> に半径方向の節点 <code>nr + 1</code> 個を持つ）。</li>
+</ul>
+<p><strong>手動指定</strong></p>
+<pre><code>"core": { "halfWidth": 0.0375, "n": 6 },
+"blocks": [
+  { "rOuter": 0.06, "nr": 2 },
+  { "rOuter": 0.10, "nr": 3, "nTheta": 38 },
+  { "rOuter": 0.155, "nr": 4 }
+]</code></pre>
+<ul>
+  <li><code>core</code> は中心の正方形ブロック（半幅 <code>halfWidth</code>、一辺の分割数 <code>n</code>）、<code>blocks</code> は外側へ並ぶ同心ブロック（外半径 <code>rOuter</code>、半径方向の分割数 <code>nr</code>、周方向の分割数 <code>nTheta</code>）。</li>
+  <li>最初のブロックは正方形から円へつなぐ O グリッドで、<code>nTheta</code> は <code>4 × core.n</code> に固定。2 番目以降の <code>nTheta</code> は任意（隣のブロックの整数倍でなくてよい）。<code>radii</code>（任意）で半径方向の節点（<code>nr + 1</code> 個）を指定できる。</li>
   <li>最外ブロックの <code>rOuter</code> は STL の半径より大きくする（小さいと警告。STL は切り取られる）。</li>
+</ul>
+<p><strong>共通</strong></p>
+<ul>
+  <li>ブロックの境界では両側の面を重ね合わせて共有の面に分けるので、分割数の比が任意でも適合した多面体メッシュになる（AMI 不要）。</li>
+  <li>細分化のレベル L は目標寸法 <code>baseCellSize / 2^L</code> として扱う。細分化は 3 方向を同時に半分にするので、軸方向の幅 <code>dz</code> より細いベースセルは断面方向に細かくなりすぎる。手動指定では各ブロックのセルが立方体に近くなるように分割数を選ぶ（自動配置はそうなっている）。</li>
 </ul>
 
 <h2 id="layers">境界層（<code>addLayers</code>）</h2>
