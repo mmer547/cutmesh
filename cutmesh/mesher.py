@@ -1025,7 +1025,8 @@ def _cut_with_fallback_rs(ctx, items, shared_cap, hk, csize, P0, max_iter=4, lea
     else:
         K.set_items(items)
     n = len(items)
-    used = K.cut(list(range(n)), [False] * n)
+    # the first pass in parallel where no Python hook is needed (the same results)
+    used = K.cut_all() if hasattr(K, "cut_all") else K.cut(list(range(n)), [False] * n)
     forbid = set()
     nfb = 0
     for _ in range(max_iter):
