@@ -352,7 +352,7 @@ class RustCutKernel(unittest.TestCase):
             def __getattr__(self, k):
                 if k in ("merge_wall_faces", "contact_candidates", "surface_contact_samples",
                          "split_samples", "cut_batch_csr", "face_sign_counts", "vertex_min",
-                         "leaf_any", "leaf_vertices", "finer_face_neighbour", "leaf_min", "leaf_mean",
+                         "leaf_any", "leaf_vertices", "finer_face_neighbour", "leaf_min", "leaf_mean", "feature_hook",
                          "PlaneClipRs"):
                     raise AttributeError(k)
                 return getattr(real, k)
@@ -646,6 +646,86 @@ class RustPlaneClip(unittest.TestCase):
             pl = A.planes(tris)
             self.assertEqual(pl, B.planes(tris))
             np.testing.assert_array_equal(A.groups(pl), B.groups(pl))
+
+
+@unittest.skipUnless(geometry.rust_available() and hasattr(geometry._core, "feature_hook"),
+                     "Rust extension not built")
+class RustFeatureHook(unittest.TestCase):
+    """the cap hook in Rust (fhook.rs) gives the polygons and new points of the Python
+    hook, on the loops the meshing of two shapes hands it"""
+
+    def capture(self, d, cfg):
+        calls = []
+        orig = mesher.make_feature_hook
+
+        def capturing(feat, h_of_cell, *a, **k):
+            res = orig(feat, h_of_cell, *a, **k)
+            if res is None:
+                return res
+            hook, st = res
+
+            def wrapped(ctx, loop):
+                calls.append((feat, h_of_cell, st["cell"], list(loop), [list(map(float, ctx.pos[v])) for v in loop],
+                              [v in ctx.onfeat for v in loop]))
+                return hook(ctx, loop)
+            wrapped.feat, wrapped.reach = hook.feat, hook.reach
+            return wrapped, st
+        p = os.path.join(d, "m.json")
+        with open(p, "w") as f:
+            json.dump(cfg, f)
+        with mock.patch.object(mesher, "make_feature_hook", capturing):
+            mesher.generate(mesher.load_config(p), log=lambda s: None)
+        return calls
+
+    def run_hook(self, feat, h_of_cell, cell, loop, P, flags, rust):
+        real = mesher._core
+
+        class Hidden:
+            def __getattr__(self, k):
+                if k == "feature_hook":
+                    raise AttributeError(k)
+                return getattr(real, k)
+        base = 10 ** 6
+        pos = {v: x for v, x in zip(loop, P)}
+
+        class Pos:
+            def __init__(self):
+                self.added = []
+
+            def __getitem__(self, v):
+                return pos[v] if v < base else self.added[v - base]
+
+            def __len__(self):
+                return base + len(self.added)
+
+            def append(self, x):
+                self.added.append([float(c) for c in x])
+        ctx = mesher._HookCtx(Pos(), [], mesher._OnFeat(v for v, f in zip(loop, flags) if f))
+        with mock.patch.object(mesher, "_core", real if rust else Hidden()):
+            hook, st = mesher.make_feature_hook(feat, h_of_cell)
+            st["cell"] = cell
+            polys = hook(ctx, loop)
+        return [list(q) for q in polys], ctx.pos.added, list(ctx.onfeat.new), bool(st.get("did")), st["n"]
+
+    def test_same_as_python(self):
+        from test_exact_cut import turned_cube
+        calls = []
+        with tempfile.TemporaryDirectory() as d:
+            turned_cube(os.path.join(d, "cube.stl"))
+            for exact in (True, False):
+                calls += self.capture(d, {"domain": "cube.stl", "baseCellSize": 0.15, "featureLevel": 1,
+                                          "surfaceRefinement": {"default": 1}, "exactFeatureCut": exact})
+            geometry.write_stl_ascii(os.path.join(d, "s.stl"), [("walls", l_prism())])
+            calls += self.capture(d, {"domain": "s.stl", "baseCellSize": 0.008, "featureLevel": 2,
+                                      "surfaceRefinement": {"default": 1}, "exactFeatureCut": False})
+        changed = 0
+        for c in calls:
+            a = self.run_hook(*c, rust=False)
+            b = self.run_hook(*c, rust=True)
+            self.assertEqual(a, b)
+            changed += a[3]
+        self.assertGreater(len(calls), 50)
+        self.assertGreater(changed, 10)
 
 
 @unittest.skipUnless(geometry.rust_available() and hasattr(geometry._core, "argsort_stable"),
