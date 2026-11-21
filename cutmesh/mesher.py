@@ -2330,12 +2330,17 @@ def generate(cfg, log=print):
         pc = PlaneClip(dom, pts, phi_d, hmin, dom_feat, ccv, cfg["featureAngle"])
         pc.zero_edge = ctx.zero_edge
         special = set(drop) | split_cells | set(opened) | set(cb)
-        mphi = np.minimum.reduceat(np.minimum.reduceat(phi_d[fverts], fptr[:-1]), cptr[:-1])
+        if _core is not None and hasattr(_core, "leaf_min"):
+            mphi = _core.leaf_min(np.ascontiguousarray(phi_d, float), leaf_vptr_full, fverts)
+        else:
+            mphi = np.minimum.reduceat(np.minimum.reduceat(phi_d[fverts], fptr[:-1]), cptr[:-1])
         cnd = np.nonzero((cls >= 0) & (mphi < 0.9 * csize))[0]
         if len(cnd):
             occ_c = _cat_ranges(fptr[cptr[cnd]], fptr[cptr[cnd + 1]])
             own_c = np.repeat(np.arange(len(cnd)), fptr[cptr[cnd + 1]] - fptr[cptr[cnd]])
-            cen = np.zeros((len(cnd), 3)); np.add.at(cen, own_c, pts[fverts[occ_c]])
+            xc = pts[fverts[occ_c]]           # np.add.at column by column (the same order)
+            cen = np.stack([np.bincount(own_c, xc[:, k], len(cnd)) for k in range(3)], 1)
+            del xc
             cen /= np.bincount(own_c, minlength=len(cnd))[:, None]
             _, df = dom_feat.closest(cen)
             ok = df < 0.9 * csize[cnd]
