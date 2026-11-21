@@ -227,6 +227,40 @@ class RustCutKernel(unittest.TestCase):
                                              "surfaceLevel": 1, "omega": 1.0}]})
 
 
+@unittest.skipUnless(geometry.rust_available() and hasattr(geometry._core.TriMesh, "through_wall"),
+                     "Rust extension not built")
+class RustLeakCheck(unittest.TestCase):
+    def test_bypass_lines(self):
+        # a plate thinner than a cell, vanished without fillThinWalls: lines through it
+        from test_thin_gaps import voxel_stl
+        from cutmesh.diagnose import through_wall
+        h, v = 0.01, 0.0005
+        G = np.ones((120, 120, 180), bool)
+        G[:, 41:47, 0:120] = False
+        with tempfile.TemporaryDirectory() as d:
+            voxel_stl(os.path.join(d, "w.stl"), G, v)
+            with open(os.path.join(d, "m.json"), "w") as f:
+                json.dump({"domain": "w.stl", "baseCellSize": h, "surfaceRefinement": {"default": 0},
+                           "featureLevel": 0, "fillThinWalls": 0, "checkLeaks": False}, f)
+            R = mesher.generate(mesher.load_config(os.path.join(d, "m.json")), log=lambda s: None)
+            dom = geometry.Surface(geometry.read_stl(os.path.join(d, "w.stl")))
+        n1, X1 = through_wall(dom, R["points"], R["faces"], R["owner"], R["neighbour"])
+
+        class NoKernel:                        # the Rust queries, without the fused kernel
+            def __init__(self, rs):
+                self.rs = rs
+
+            def __getattr__(self, k):
+                if k == "through_wall":
+                    raise AttributeError(k)
+                return getattr(self.rs, k)
+        dom._rs = NoKernel(dom._rs)
+        n0, X0 = through_wall(dom, R["points"], R["faces"], R["owner"], R["neighbour"])
+        self.assertGreater(n0, 0)
+        self.assertEqual(n0, n1)
+        np.testing.assert_array_equal(X0, X1)
+
+
 def l_prism(c=0.037, L=0.1, H=0.03, ang=(7.0, 5.0, 11.0)):
     """L-shaped channel [0, L]^2 minus [0, c]^2 times [0, H], turned: outward triangles"""
     P = [(c, 0), (L, 0), (L, L), (c, L), (0, L), (0, c), (c, c)]

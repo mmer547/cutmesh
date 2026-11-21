@@ -607,6 +607,50 @@ impl TriMesh {
         Ok((thin.into_pyarray(py), nun))
     }
 
+    /// through_wall(a[n, 3], b[n, 3], tn[ntri, 3], samples, cos_opposite) -> (hits, mids[k, 3]):
+    /// the sampling of diagnose.through_wall for each line a -> b on its own: the samples
+    /// outside, the closest triangles at the first and the last of them, and whether
+    /// their normals are opposite
+    fn through_wall<'py>(
+        &self,
+        py: Python<'py>,
+        a: PyReadonlyArray2<'py, f64>,
+        b: PyReadonlyArray2<'py, f64>,
+        tn: PyReadonlyArray2<'py, f64>,
+        samples: usize,
+        cos_opposite: f64,
+    ) -> PyResult<(usize, Bound<'py, PyArray2<f64>>)> {
+        let pa = points(&a)?;
+        let pb = points(&b)?;
+        let nrm = points(&tn)?;
+        if pa.len() != pb.len() || nrm.len() != self.t.len() || samples == 0 {
+            return Err(pyo3::exceptions::PyValueError::new_err("inconsistent line data"));
+        }
+        let ts: Vec<f64> = (0..samples).map(|k| (k as f64 + 0.5) / samples as f64).collect();
+        let res: Vec<Option<V3>> = py.detach(|| {
+            pa.par_iter()
+                .zip(pb.par_iter())
+                .map(|(&a, &b)| {
+                    let d = sub(b, a);
+                    let q = |t: f64| [a[0] + t * d[0], a[1] + t * d[1], a[2] + t * d[2]];
+                    let first = ts.iter().position(|&t| !self.inside_one(q(t)))?;
+                    let last = (first..samples).rev().find(|&k| !self.inside_one(q(ts[k]))).unwrap_or(first);
+                    let t1 = self.closest_one(q(ts[first])).2;
+                    let t2 = self.closest_one(q(ts[last])).2;
+                    let (n1, n2) = (nrm[t1], nrm[t2]);
+                    let c = (n1[0] * n2[0] + n1[2] * n2[2]) + n1[1] * n2[1];     // np.einsum order
+                    if c < cos_opposite {
+                        Some([0.5 * (a[0] + b[0]), 0.5 * (a[1] + b[1]), 0.5 * (a[2] + b[2])])
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        });
+        let mids: Vec<V3> = res.into_iter().flatten().collect();
+        Ok((mids.len(), vec3_array(py, mids)?))
+    }
+
     fn __len__(&self) -> usize {
         self.t.len()
     }

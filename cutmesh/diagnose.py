@@ -37,6 +37,10 @@ def through_wall(dom, points, faces, owner, neighbour, samples=16, cos_opposite=
         ln = np.linalg.norm(B - A, axis=1) * ts[-1]
         keep = np.nonzero(ln >= free[cells])[0]
         A, B = A[keep], B[keep]
+    if getattr(dom, "_rs", None) is not None and hasattr(dom._rs, "through_wall"):
+        # the same samples and tests per line, in parallel
+        return dom._rs.through_wall(np.ascontiguousarray(A, float), np.ascontiguousarray(B, float),
+                                    np.ascontiguousarray(tn, float), int(samples), float(cos_opposite))
     hits, mids = 0, []
     for s0 in range(0, len(A), 200000):
         a, b = A[s0:s0 + 200000], B[s0:s0 + 200000]
