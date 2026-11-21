@@ -222,7 +222,7 @@ class RustCutKernel(unittest.TestCase):
         class Hidden:                          # the extension without the stage-A kernels
             def __getattr__(self, k):
                 if k in ("merge_wall_faces", "contact_candidates", "surface_contact_samples",
-                         "split_samples"):
+                         "split_samples", "cut_batch_csr"):
                     raise AttributeError(k)
                 return getattr(real, k)
         with mock.patch.object(mesher, "_rust_cut_ok", lambda ctx, hk: False), \
@@ -346,6 +346,49 @@ class RustWallMerge(unittest.TestCase):
                 self.assertEqual(a[4], b[4])
                 joined += a[4]
         self.assertGreater(joined, 100)
+
+
+@unittest.skipUnless(geometry.rust_available() and hasattr(geometry._core, "cut_batch_csr"),
+                     "Rust extension not built")
+class RustCutBatch(unittest.TestCase):
+    """the parallel cut (cut_batch_csr) numbers vertices and faces as the sequential one"""
+
+    def test_same_as_sequential(self):
+        n = 9
+        vid = np.arange((n + 1) ** 3).reshape(n + 1, n + 1, n + 1)
+        g = np.stack(np.meshgrid(*[np.arange(n + 1.0)] * 3, indexing="ij"), -1).reshape(-1, 3) / n
+        fkey, cells = {}, []
+
+        def face(q):
+            k = tuple(sorted(q))
+            return fkey.setdefault(k, len(fkey))
+        for i in range(n):
+            for j in range(n):
+                for k in range(n):
+                    v = vid[i:i + 2, j:j + 2, k:k + 2]
+                    quads = [[v[0, 0, 0], v[0, 0, 1], v[0, 1, 1], v[0, 1, 0]], [v[1, 0, 0], v[1, 1, 0], v[1, 1, 1], v[1, 0, 1]],
+                             [v[0, 0, 0], v[1, 0, 0], v[1, 0, 1], v[0, 0, 1]], [v[0, 1, 0], v[0, 1, 1], v[1, 1, 1], v[1, 1, 0]],
+                             [v[0, 0, 0], v[0, 1, 0], v[1, 1, 0], v[1, 0, 0]], [v[0, 0, 1], v[1, 0, 1], v[1, 1, 1], v[0, 1, 1]]]
+                    cells.append([(face(q), [int(x) for x in q]) for q in quads])
+        for r, snap in ((0.37, 0.0), (0.41, 0.03)):
+            phi = np.linalg.norm(g - 0.5, axis=1) - r
+            phi[np.abs(phi) < snap] = 0.0              # vertices on the surface
+            for shared in (True, False):
+                nid = len(fkey)
+                P = mesher._Pieces.from_lists([[c, 0, 0] for c in cells])
+                (it, side, cf, ck, cv, cvv), np1, par1, nid1 = geometry._core.cut_batch_csr(
+                    g, phi, nid, *P.csr(), shared, {})
+                res, np2, par2, nid2 = geometry._core.cut_batch(g, phi, nid, cells, shared, {})
+                self.assertEqual((nid1, par1), (nid2, par2))
+                np.testing.assert_array_equal(np1, np2)
+                flat = [(k, s, comp) for k, (negc, posc) in enumerate(res)
+                        for s, cs in ((0, negc), (1, posc)) for comp in cs]
+                A = mesher._Pieces(it, side, cf, ck, cv, cvv)
+                self.assertEqual(len(flat), len(A))
+                for i, (k, s, comp) in enumerate(flat):
+                    self.assertEqual((A.leaf[i], A.zone[i]), (k, s))
+                    self.assertEqual(A.faces(i), [(f, list(p)) for f, p in comp])
+                self.assertGreater(len(np1), 10)
 
 
 @unittest.skipUnless(geometry.rust_available() and hasattr(geometry._core, "argsort_stable"),

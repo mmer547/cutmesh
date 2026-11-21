@@ -6,6 +6,7 @@ use std::collections::HashMap;
 
 use numpy::{PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
+use rayon::prelude::*;
 
 use crate::{vec3_array, V3};
 
@@ -206,6 +207,63 @@ pub(crate) fn split_components_apart(faces: Vec<Face>, apart: &FxSet<i64>) -> Ve
     groups.vals
 }
 
+/// how a cut gets its new vertex and face ids
+trait Alloc {
+    fn phi(&self, v: i64) -> f64;
+    fn zero_edge(&self) -> &HashMap<(i64, i64, i64), i64>;
+    fn cross(&mut self, a: i64, b: i64) -> i64;
+    fn sub_id(&mut self, fid: i64, pp: &[i64]) -> i64;
+    fn new_face_id(&mut self) -> i64;
+}
+
+fn xing<A: Alloc>(al: &mut A, a: i64, b: i64, a_neg: bool) -> i64 {
+    if al.phi(a) == 0.0 && al.phi(b) == 0.0 {
+        return if a_neg { a } else { b };
+    }
+    al.cross(a, b)
+}
+
+/// CutContext._zero_runs
+fn zero_runs<A: Alloc>(al: &A, fid: i64, poly: &[i64], cls: &mut [bool]) {
+    let n = poly.len();
+    let z: Vec<bool> = poly.iter().map(|&v| al.phi(v) == 0.0).collect();
+    for i in 0..n {
+        let im = (i + n - 1) % n;
+        if !z[i] || z[im] {
+            continue;
+        }
+        let mut k = 0;
+        while k < n && z[(i + k) % n] {
+            k += 1;
+        }
+        if k < 2 || k == n {
+            continue;
+        }
+        let mut run: Vec<usize> = (0..k).map(|t| (i + t) % n).collect();
+        let pn = al.phi(poly[im]) < 0.0;
+        if pn == (al.phi(poly[(i + k) % n]) < 0.0) {
+            continue;
+        }
+        if !pn {
+            run.reverse();
+        }
+        for t in 0..k - 1 {
+            let (a, b) = (poly[run[t]], poly[run[t + 1]]);
+            let key = if a < b { (fid, a, b) } else { (fid, b, a) };
+            let e = al.zero_edge().get(&key).copied();
+            if e == Some(1) {
+                for &r in &run[t + 1..] {
+                    cls[r] = false;
+                }
+            }
+            if e != Some(-1) {
+                break;
+            }
+        }
+    }
+}
+
+/// the ids of the Python code: crossings and sub-faces numbered when first met
 struct Cutter<'a> {
     pos: &'a mut Vec<V3>,
     phi: &'a mut Vec<f64>,
@@ -217,6 +275,36 @@ struct Cutter<'a> {
 }
 
 impl Cutter<'_> {
+    fn new_vertex(&mut self, lo: i64, hi: i64) -> i64 {
+        let (pl, ph) = (self.phi[lo as usize], self.phi[hi as usize]);
+        let t = pl / (pl - ph);
+        let (pa, pb) = (self.pos[lo as usize], self.pos[hi as usize]);
+        let c = self.pos.len() as i64;
+        self.pos.push([pa[0] + t * (pb[0] - pa[0]), pa[1] + t * (pb[1] - pa[1]), pa[2] + t * (pb[2] - pa[2])]);
+        self.phi.push(0.0);
+        self.new_parents.push((lo, hi));
+        c
+    }
+
+    fn sub_key(&mut self, key: (i64, Vec<i64>)) -> i64 {
+        if let Some(&i) = self.subids.get(&key) {
+            return i;
+        }
+        let i = self.new_face_id();
+        self.subids.insert(key, i);
+        i
+    }
+}
+
+impl Alloc for Cutter<'_> {
+    fn phi(&self, v: i64) -> f64 {
+        self.phi[v as usize]
+    }
+
+    fn zero_edge(&self) -> &HashMap<(i64, i64, i64), i64> {
+        self.zero_edge
+    }
+
     fn new_face_id(&mut self) -> i64 {
         let i = self.next_id;
         self.next_id += 1;
@@ -226,13 +314,7 @@ impl Cutter<'_> {
     fn sub_id(&mut self, fid: i64, pp: &[i64]) -> i64 {
         let mut k = pp.to_vec();
         k.sort_unstable();
-        let key = (fid, k);
-        if let Some(&i) = self.subids.get(&key) {
-            return i;
-        }
-        let i = self.new_face_id();
-        self.subids.insert(key, i);
-        i
+        self.sub_key((fid, k))
     }
 
     fn cross(&mut self, a: i64, b: i64) -> i64 {
@@ -246,175 +328,193 @@ impl Cutter<'_> {
         } else if ph == 0.0 {
             hi
         } else {
-            let t = pl / (pl - ph);
-            let (pa, pb) = (self.pos[lo as usize], self.pos[hi as usize]);
-            let c = self.pos.len() as i64;
-            self.pos.push([pa[0] + t * (pb[0] - pa[0]), pa[1] + t * (pb[1] - pa[1]), pa[2] + t * (pb[2] - pa[2])]);
-            self.phi.push(0.0);
-            self.new_parents.push((lo, hi));
-            c
+            self.new_vertex(lo, hi)
         };
         self.cache.insert((lo, hi), c);
         c
     }
+}
 
-    fn xing(&mut self, a: i64, b: i64, a_neg: bool) -> i64 {
-        if self.phi[a as usize] == 0.0 && self.phi[b as usize] == 0.0 {
-            return if a_neg { a } else { b };
-        }
-        self.cross(a, b)
+/// an id request of a cut, in the order made (replayed by the Cutter)
+enum Ev {
+    /// the crossing of the edge (lo, hi), both ends off the surface
+    Vertex(i64, i64),
+    /// the part pp (symbolic vertices) of face fid
+    Sub(i64, Vec<i64>),
+    /// a cap face
+    New,
+}
+
+/// ids of one cell's cut before the global numbering: a new vertex is -(1 + k) for the
+/// k-th crossing the cell meets, a new face -(1 + j) for its j-th face request.  The
+/// cut only compares ids for equality (the canonical edge and set keys too), so the
+/// result maps onto the sequential one id for id.
+struct SymAlloc<'a> {
+    phi: &'a [f64],
+    zero_edge: &'a HashMap<(i64, i64, i64), i64>,
+    vcache: FxMap<(i64, i64), i64>,
+    nv: i64,
+    scache: FxMap<(i64, Vec<i64>), i64>,
+    nf: i64,
+    events: Vec<Ev>,
+}
+
+impl Alloc for SymAlloc<'_> {
+    fn phi(&self, v: i64) -> f64 {
+        if v < 0 { 0.0 } else { self.phi[v as usize] }
     }
 
-    /// CutContext._zero_runs
-    fn zero_runs(&self, fid: i64, poly: &[i64], cls: &mut [bool]) {
+    fn zero_edge(&self) -> &HashMap<(i64, i64, i64), i64> {
+        self.zero_edge
+    }
+
+    fn new_face_id(&mut self) -> i64 {
+        self.nf += 1;
+        self.events.push(Ev::New);
+        -self.nf
+    }
+
+    fn sub_id(&mut self, fid: i64, pp: &[i64]) -> i64 {
+        let mut k = pp.to_vec();
+        k.sort_unstable();
+        let key = (fid, k);
+        if let Some(&i) = self.scache.get(&key) {
+            return i;
+        }
+        self.nf += 1;
+        self.events.push(Ev::Sub(fid, pp.to_vec()));
+        self.scache.insert(key, -self.nf);
+        -self.nf
+    }
+
+    fn cross(&mut self, a: i64, b: i64) -> i64 {
+        let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+        let (pl, ph) = (self.phi(lo), self.phi(hi));
+        if pl == 0.0 {
+            return lo;
+        }
+        if ph == 0.0 {
+            return hi;
+        }
+        if let Some(&c) = self.vcache.get(&(lo, hi)) {
+            return c;
+        }
+        self.nv += 1;
+        self.events.push(Ev::Vertex(lo, hi));
+        self.vcache.insert((lo, hi), -self.nv);
+        -self.nv
+    }
+}
+
+/// CutContext.cut without hooks -> (neg faces, pos faces)
+fn cut_with<A: Alloc>(al: &mut A, faces: Vec<Face>, shared_cap: bool) -> (Vec<Face>, Vec<Face>) {
+    let mut neg: Vec<Face> = Vec::new();
+    let mut pos: Vec<Face> = Vec::new();
+    for (fid, poly) in faces {
+        let mut has_n = false;
+        let mut has_p = false;
+        for &v in &poly {
+            let x = al.phi(v);
+            if x < 0.0 {
+                has_n = true;
+            } else if x > 0.0 {
+                has_p = true;
+            }
+        }
+        if !has_p {
+            neg.push((fid, poly));
+            continue;
+        }
+        if !has_n {
+            pos.push((fid, poly));
+            continue;
+        }
         let n = poly.len();
-        let z: Vec<bool> = poly.iter().map(|&v| self.phi[v as usize] == 0.0).collect();
-        for i in 0..n {
-            let im = (i + n - 1) % n;
-            if !z[i] || z[im] {
-                continue;
-            }
-            let mut k = 0;
-            while k < n && z[(i + k) % n] {
-                k += 1;
-            }
-            if k < 2 || k == n {
-                continue;
-            }
-            let mut run: Vec<usize> = (0..k).map(|t| (i + t) % n).collect();
-            let pn = self.phi[poly[im] as usize] < 0.0;
-            if pn == (self.phi[poly[(i + k) % n] as usize] < 0.0) {
-                continue;
-            }
-            if !pn {
-                run.reverse();
-            }
-            for t in 0..k - 1 {
-                let (a, b) = (poly[run[t]], poly[run[t + 1]]);
-                let key = if a < b { (fid, a, b) } else { (fid, b, a) };
-                let e = self.zero_edge.get(&key).copied();
-                if e == Some(1) {
-                    for &r in &run[t + 1..] {
-                        cls[r] = false;
-                    }
-                }
-                if e != Some(-1) {
-                    break;
-                }
-            }
+        let mut cls: Vec<bool> = poly.iter().map(|&v| al.phi(v) <= 0.0).collect();
+        if !al.zero_edge().is_empty() {
+            zero_runs(al, fid, &poly, &mut cls);
         }
-    }
-
-    /// CutContext.cut without hooks -> (neg faces, pos faces)
-    fn cut(&mut self, faces: Vec<Face>, shared_cap: bool) -> (Vec<Face>, Vec<Face>) {
-        let mut neg: Vec<Face> = Vec::new();
-        let mut pos: Vec<Face> = Vec::new();
-        for (fid, poly) in faces {
-            let mut has_n = false;
-            let mut has_p = false;
-            for &v in &poly {
-                let x = self.phi[v as usize];
-                if x < 0.0 {
-                    has_n = true;
-                } else if x > 0.0 {
-                    has_p = true;
-                }
-            }
-            if !has_p {
-                neg.push((fid, poly));
-                continue;
-            }
-            if !has_n {
-                pos.push((fid, poly));
-                continue;
-            }
-            let n = poly.len();
-            let mut cls: Vec<bool> = poly.iter().map(|&v| self.phi[v as usize] <= 0.0).collect();
-            if !self.zero_edge.is_empty() {
-                self.zero_runs(fid, &poly, &mut cls);
-            }
-            let s = (0..n).find(|&i| cls[i] && !cls[(i + n - 1) % n]).unwrap_or(0);
-            let mut seq_n: Vec<i64> = Vec::new();
-            let mut ppieces: Vec<Vec<i64>> = Vec::new();
-            let mut cur: Vec<i64> = Vec::new();
-            for step in 0..n {
-                let i = (s + step) % n;
-                let j = (i + 1) % n;
-                let a = poly[i];
-                if cls[i] {
-                    seq_n.push(a);
-                } else {
-                    cur.push(a);
-                }
-                if cls[i] && !cls[j] {
-                    let c = self.xing(a, poly[j], true);
-                    seq_n.push(c);
-                    cur = vec![c];
-                } else if !cls[i] && cls[j] {
-                    let c = self.xing(a, poly[j], false);
-                    cur.push(c);
-                    ppieces.push(std::mem::take(&mut cur));
-                    seq_n.push(c);
-                }
-            }
-            let mut pieces: Vec<(u8, Vec<i64>)> = Vec::new();
-            let np = dedupe(&seq_n);
-            if n_unique(&np) >= 3 {
-                pieces.push((0, np));
-            }
-            for pp in ppieces {
-                let pp = dedupe(&pp);
-                if n_unique(&pp) >= 3 {
-                    pieces.push((1, pp));
-                }
-            }
-            if pieces.len() == 1 {
-                if pieces[0].0 == 0 {
-                    neg.push((fid, poly));
-                } else {
-                    pos.push((fid, poly));
-                }
-                continue;
-            }
-            for (k, pp) in pieces {
-                let f2 = self.sub_id(fid, &pp);
-                if k == 0 {
-                    neg.push((f2, pp));
-                } else {
-                    pos.push((f2, pp));
-                }
-            }
-        }
-        // cap = reversed open boundary of the N-side faces
-        let mut de: OMap<(i64, i64), i64> = OMap::new();
-        for (_, p) in &neg {
-            let m = p.len();
-            for k in 0..m {
-                *de.entry((p[k], p[(k + 1) % m]), || 0) += 1;
-            }
-        }
-        let mut segs = Vec::new();
-        for (i, &(a, b)) in de.keys.iter().enumerate() {
-            let r = de.get(&(b, a)).copied().unwrap_or(0);
-            for _ in 0..(de.vals[i] - r).max(0) {
-                segs.push((b, a));
-            }
-        }
-        for lp in chain_loops(&segs) {
-            let rev: Vec<i64> = lp.iter().rev().copied().collect();
-            if shared_cap {
-                let cid = self.new_face_id();
-                neg.push((cid, lp));
-                pos.push((cid, rev));
+        let s = (0..n).find(|&i| cls[i] && !cls[(i + n - 1) % n]).unwrap_or(0);
+        let mut seq_n: Vec<i64> = Vec::new();
+        let mut ppieces: Vec<Vec<i64>> = Vec::new();
+        let mut cur: Vec<i64> = Vec::new();
+        for step in 0..n {
+            let i = (s + step) % n;
+            let j = (i + 1) % n;
+            let a = poly[i];
+            if cls[i] {
+                seq_n.push(a);
             } else {
-                let c1 = self.new_face_id();
-                neg.push((c1, lp));
-                let c2 = self.new_face_id();
-                pos.push((c2, rev));
+                cur.push(a);
+            }
+            if cls[i] && !cls[j] {
+                let c = xing(al, a, poly[j], true);
+                seq_n.push(c);
+                cur = vec![c];
+            } else if !cls[i] && cls[j] {
+                let c = xing(al, a, poly[j], false);
+                cur.push(c);
+                ppieces.push(std::mem::take(&mut cur));
+                seq_n.push(c);
             }
         }
-        (neg, pos)
+        let mut pieces: Vec<(u8, Vec<i64>)> = Vec::new();
+        let np = dedupe(&seq_n);
+        if n_unique(&np) >= 3 {
+            pieces.push((0, np));
+        }
+        for pp in ppieces {
+            let pp = dedupe(&pp);
+            if n_unique(&pp) >= 3 {
+                pieces.push((1, pp));
+            }
+        }
+        if pieces.len() == 1 {
+            if pieces[0].0 == 0 {
+                neg.push((fid, poly));
+            } else {
+                pos.push((fid, poly));
+            }
+            continue;
+        }
+        for (k, pp) in pieces {
+            let f2 = al.sub_id(fid, &pp);
+            if k == 0 {
+                neg.push((f2, pp));
+            } else {
+                pos.push((f2, pp));
+            }
+        }
     }
+    // cap = reversed open boundary of the N-side faces
+    let mut de: OMap<(i64, i64), i64> = OMap::new();
+    for (_, p) in &neg {
+        let m = p.len();
+        for k in 0..m {
+            *de.entry((p[k], p[(k + 1) % m]), || 0) += 1;
+        }
+    }
+    let mut segs = Vec::new();
+    for (i, &(a, b)) in de.keys.iter().enumerate() {
+        let r = de.get(&(b, a)).copied().unwrap_or(0);
+        for _ in 0..(de.vals[i] - r).max(0) {
+            segs.push((b, a));
+        }
+    }
+    for lp in chain_loops(&segs) {
+        let rev: Vec<i64> = lp.iter().rev().copied().collect();
+        if shared_cap {
+            let cid = al.new_face_id();
+            neg.push((cid, lp));
+            pos.push((cid, rev));
+        } else {
+            let c1 = al.new_face_id();
+            neg.push((c1, lp));
+            let c2 = al.new_face_id();
+            pos.push((c2, rev));
+        }
+    }
+    (neg, pos)
 }
 
 type CellResult = (Vec<Vec<Face>>, Vec<Vec<Face>>);
@@ -458,7 +558,7 @@ pub fn cut_batch_csr<'py>(
     zero_edge: HashMap<(i64, i64, i64), i64>,
 ) -> PyResult<(crate::csr::CsrOut<'py>, Bound<'py, PyArray2<f64>>, Vec<(i64, i64)>, i64)> {
     let cells = crate::csr::read_cells(&fptr, &key, &vptr, &verts)?;
-    let (res, newp, parents, nid) = cut_cells(py, &points, &phi, next_face_id, cells, shared_cap, &zero_edge)?;
+    let (res, newp, parents, nid) = cut_cells_par(py, &points, &phi, next_face_id, cells, shared_cap, &zero_edge)?;
     Ok((crate::csr::write_results(py, &res, false), vec3_array(py, newp)?, parents, nid))
 }
 
@@ -493,9 +593,107 @@ fn cut_cells(
         };
         let mut res: Vec<CellResult> = Vec::with_capacity(cells.len());
         for c in cells {
-            let (neg, pos_) = ct.cut(c, shared_cap);
+            let (neg, pos_) = cut_with(&mut ct, c, shared_cap);
             let pc = if shared_cap { split_components(pos_) } else { Vec::new() };
             res.push((split_components(neg), pc));
+        }
+        let parents = std::mem::take(&mut ct.new_parents);
+        (res, parents, ct.next_id)
+    });
+    let newp: Vec<V3> = pos[n0..].to_vec();
+    Ok((res, newp, parents, nid))
+}
+
+/// cut_cells with the cells cut in parallel on symbolic ids (SymAlloc), then numbered
+/// in cell order by replaying their id requests on a Cutter: the same ids, points and
+/// results as the sequential loop
+#[allow(clippy::type_complexity)]
+fn cut_cells_par(
+    py: Python<'_>,
+    points: &PyReadonlyArray2<'_, f64>,
+    phi: &PyReadonlyArray1<'_, f64>,
+    next_face_id: i64,
+    cells: Vec<Vec<Face>>,
+    shared_cap: bool,
+    zero_edge: &HashMap<(i64, i64, i64), i64>,
+) -> PyResult<(Vec<CellResult>, Vec<V3>, Vec<(i64, i64)>, i64)> {
+    let mut pos = crate::points(points)?;
+    let mut ph: Vec<f64> = phi.as_array().to_vec();
+    if ph.len() != pos.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("phi and points differ in length"));
+    }
+    let n0 = pos.len();
+    if cells.par_iter().flatten().any(|(_, p)| p.iter().any(|&v| v < 0 || v as usize >= n0)) {
+        return Err(pyo3::exceptions::PyValueError::new_err("vertex id out of range"));
+    }
+    let (res, parents, nid) = py.detach(|| {
+        let ph0: &[f64] = &ph;
+        let sym: Vec<(CellResult, Vec<Ev>)> = cells
+            .into_par_iter()
+            .map(|c| {
+                let mut al = SymAlloc {
+                    phi: ph0,
+                    zero_edge,
+                    vcache: FxMap::default(),
+                    nv: 0,
+                    scache: FxMap::default(),
+                    nf: 0,
+                    events: Vec::new(),
+                };
+                let (neg, pos_) = cut_with(&mut al, c, shared_cap);
+                let pc = if shared_cap { split_components(pos_) } else { Vec::new() };
+                ((split_components(neg), pc), al.events)
+            })
+            .collect();
+        let mut ct = Cutter {
+            pos: &mut pos,
+            phi: &mut ph,
+            cache: HashMap::new(),
+            subids: HashMap::new(),
+            next_id: next_face_id,
+            new_parents: Vec::new(),
+            zero_edge,
+        };
+        let mut res: Vec<CellResult> = Vec::with_capacity(sym.len());
+        for ((negc, posc), events) in sym {
+            let mut vmap: Vec<i64> = Vec::new();
+            let mut fmap: Vec<i64> = Vec::new();
+            let real_v = |v: i64, vmap: &[i64]| if v < 0 { vmap[(-v - 1) as usize] } else { v };
+            for ev in events {
+                match ev {
+                    Ev::Vertex(lo, hi) => {
+                        let c = match ct.cache.get(&(lo, hi)) {
+                            Some(&c) => c,
+                            None => {
+                                let c = ct.new_vertex(lo, hi);
+                                ct.cache.insert((lo, hi), c);
+                                c
+                            }
+                        };
+                        vmap.push(c);
+                    }
+                    Ev::Sub(fid, pp) => {
+                        let mut k: Vec<i64> = pp.iter().map(|&v| real_v(v, &vmap)).collect();
+                        k.sort_unstable();
+                        fmap.push(ct.sub_key((fid, k)));
+                    }
+                    Ev::New => fmap.push(ct.new_face_id()),
+                }
+            }
+            let map_comps = |comps: Vec<Vec<Face>>| -> Vec<Vec<Face>> {
+                comps
+                    .into_iter()
+                    .map(|comp| {
+                        comp.into_iter()
+                            .map(|(f, p)| {
+                                let f = if f < 0 { fmap[(-f - 1) as usize] } else { f };
+                                (f, p.into_iter().map(|v| real_v(v, &vmap)).collect())
+                            })
+                            .collect()
+                    })
+                    .collect()
+            };
+            res.push((map_comps(negc), map_comps(posc)));
         }
         let parents = std::mem::take(&mut ct.new_parents);
         (res, parents, ct.next_id)
