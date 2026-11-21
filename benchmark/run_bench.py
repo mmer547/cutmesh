@@ -5,12 +5,15 @@
     python benchmark/run_bench.py SUITE --baseline benchmark/baselines/synthetic.json
     python benchmark/run_bench.py SUITE --save-baseline       # -> benchmark/baselines/<suite>.json
     python benchmark/run_bench.py SUITE --set addLayers='{"nLayers": 3}'
+    python benchmark/run_bench.py SUITE --baseline B.json --same-mesh   # a changed mesh fails
 
 Each case runs in its own process (a crash or a hang only loses that case) with a timeout.
 Results go to benchmark/results/<suite>-<time>/: results.json, results.csv, summary.md and,
 per case, cases/<name>/{meshDict.json, log.txt, overview.png, cut.png, case/constant/polyMesh}
 (pictures: render_mesh.py; --no-images skips them).  The polyMesh of a PASS case is deleted
-unless --keep is given.
+unless --keep is given.  Every written mesh is fingerprinted (mesh_hash.py), so --baseline
+reports whether the mesh changed; with --same-mesh a changed mesh is a regression (exit code 1).
+Hashes are only compared when the baseline was made on the same platform (CPU, OS, NumPy).
 
 Suite file (paths relative to the suite file):
     {"name": "synthetic",
@@ -44,6 +47,7 @@ import csv
 import fnmatch
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -109,8 +113,10 @@ def _peak_memory_mb():
                         ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t), ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
                         ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t)]
         c = PMC(); c.cb = ctypes.sizeof(PMC)
-        h = ctypes.windll.kernel32.GetCurrentProcess()
-        if ctypes.windll.psapi.GetProcessMemoryInfo(h, ctypes.byref(c), c.cb):
+        k32, psapi = ctypes.WinDLL("kernel32"), ctypes.WinDLL("psapi")
+        k32.GetCurrentProcess.restype = wintypes.HANDLE       # 64-bit handle: the default int truncates it
+        psapi.GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.POINTER(PMC), wintypes.DWORD]
+        if psapi.GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(c), c.cb):
             return c.PeakWorkingSetSize / 1024 ** 2
     except Exception:
         pass
@@ -136,6 +142,11 @@ def worker(job_path):
         q = {k: v for k, v in R.get("quality", {}).items() if not k.startswith("_")}
         res["quality"] = q
         res["steps"] = {name: round(dt, 3) for name, dt in R["timer"].steps}
+        try:
+            from mesh_hash import mesh_hash
+            res["meshHash"] = mesh_hash(os.path.join(wd, "case"))
+        except Exception as e:            # noqa: BLE001 - a missing hash only skips the check
+            res["meshHashError"] = f"{type(e).__name__}: {e}"
         if job.get("probes"):
             res["probes"] = probe_cells(R, job["probes"])
         if job.get("images", True):
@@ -363,11 +374,29 @@ def steps_by_name(r):
     return out
 
 
-def compare(results, baseline):
+def platform_id():
+    """CPU, OS and NumPy: mesh hashes are only comparable between runs with the same one."""
+    try:
+        import numpy
+        npv = numpy.__version__
+    except ImportError:
+        npv = "?"
+    return (f"{platform.system()} {platform.machine()} {platform.processor()} | "
+            f"Python {platform.python_version()} | NumPy {npv}")
+
+
+def compare(results, baseline, same_mesh=False):
     """Lines describing cases that got worse (or better) than the baseline.
-    Lines starting with WORSE are regressions (exit code 1); the others are information."""
+    Lines starting with WORSE are regressions (exit code 1); the others are information.
+    same_mesh: a mesh whose hash differs from the baseline's is a regression too."""
+    from mesh_hash import diff
     old = {r["name"]: r for r in baseline.get("results", [])}
     out = []
+    here, there = platform_id(), baseline.get("platform")
+    hashes_ok = there == here
+    if not hashes_ok:
+        out.append(f"note   mesh hashes not compared: baseline made on {there or 'an unknown platform'}, "
+                   f"this run on {here}")
     for r in results:
         o = old.get(r["name"])
         if not o or r["status"] == "SKIP" or o["status"] == "SKIP":
@@ -378,6 +407,16 @@ def compare(results, baseline):
         elif b < a:
             out.append(f"better {r['name']}: {o['status']} -> {r['status']}")
         qa, qb = o.get("quality") or {}, r.get("quality") or {}
+        ha, hb = o.get("meshHash"), r.get("meshHash")
+        if hashes_ok and ha and hb:
+            bad = diff(ha, hb)
+            if bad:
+                out.append(f"{'WORSE ' if same_mesh else 'mesh  '} {r['name']}: mesh changed ({', '.join(bad)})")
+            else:
+                out.append(f"same   {r['name']}: same mesh")
+        elif hashes_ok and same_mesh and r["status"] != "SKIP":
+            out.append(f"WORSE  {r['name']}: no mesh hash to compare "
+                       f"({'baseline' if not ha else 'this run'})")
         if qa.get("nCells") and qb.get("nCells") and qa["nCells"] != qb["nCells"]:
             out.append(f"cells  {r['name']}: {qa['nCells']} -> {qb['nCells']}")
         for k, what in COUNTS.items():
@@ -426,7 +465,8 @@ def steps_table(results):
 
 def write_reports(outdir, suite, results, args, cmp_lines):
     payload = {"suite": suite["name"], "date": time.strftime("%Y-%m-%d %H:%M:%S"),
-               "python": sys.version.split()[0], "args": vars(args), "results": results}
+               "python": sys.version.split()[0], "platform": platform_id(), "args": vars(args),
+               "results": results}
     with open(os.path.join(outdir, "results.json"), "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=1, default=float)
     rows = [row(r) for r in results]
@@ -474,6 +514,8 @@ def main(argv=None):
     ap.add_argument("--out", help="output directory (default results/<suite>-<time>)")
     ap.add_argument("--baseline", help="results.json of an earlier run to compare against")
     ap.add_argument("--save-baseline", action="store_true", help="also write baselines/<suite>.json")
+    ap.add_argument("--same-mesh", action="store_true",
+                    help="with --baseline: a mesh that differs from the baseline's is a regression")
     args = ap.parse_args(argv)
     if args.worker:
         return worker(args.worker)
@@ -518,7 +560,7 @@ def main(argv=None):
     cmp_lines = []
     if args.baseline:
         with open(args.baseline, encoding="utf-8") as f:
-            cmp_lines = compare(results, json.load(f))
+            cmp_lines = compare(results, json.load(f), args.same_mesh)
     payload, counts, unexpected = write_reports(outdir, suite, results, args, cmp_lines)
     if args.save_baseline:
         bdir = os.path.join(HERE, "baselines")

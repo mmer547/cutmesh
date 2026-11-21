@@ -15,6 +15,11 @@ mod dcut;
 mod merge;
 mod layers;
 mod octree;
+mod wallmerge;
+mod contact;
+mod sortutil;
+mod csr;
+mod faceops;
 mod quality;
 mod sampling;
 
@@ -1061,16 +1066,25 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<SegSet>()?;
     m.add_class::<dcut::CutKernel>()?;
     m.add_function(wrap_pyfunction!(merge::merge_cells, m)?)?;
+    m.add_function(wrap_pyfunction!(merge::merge_cells_csr, m)?)?;
     m.add_function(wrap_pyfunction!(merge::pyset_order, m)?)?;
     m.add_function(wrap_pyfunction!(face_geometry, m)?)?;
     m.add_function(wrap_pyfunction!(cell_geometry, m)?)?;
     m.add_function(wrap_pyfunction!(quality::quality_metrics, m)?)?;
     m.add_function(wrap_pyfunction!(poly_cell, m)?)?;
     m.add_function(wrap_pyfunction!(cut::cut_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(cut::cut_batch_csr, m)?)?;
     m.add_function(wrap_pyfunction!(layers::jacobi_band, m)?)?;
     m.add_function(wrap_pyfunction!(layers::cells_bad, m)?)?;
     m.add_function(wrap_pyfunction!(octree::build_cells, m)?)?;
     m.add_function(wrap_pyfunction!(octree::balance, m)?)?;
     m.add_function(wrap_pyfunction!(octree::leaf_bad, m)?)?;
+    m.add_function(wrap_pyfunction!(wallmerge::merge_wall_faces, m)?)?;
+    m.add_function(wrap_pyfunction!(contact::contact_candidates, m)?)?;
+    m.add_function(wrap_pyfunction!(contact::surface_contact_samples, m)?)?;
+    m.add_function(wrap_pyfunction!(contact::split_samples, m)?)?;
+    m.add_function(wrap_pyfunction!(sortutil::argsort_stable, m)?)?;
+    m.add_function(wrap_pyfunction!(faceops::face_sign_counts, m)?)?;
+    m.add_function(wrap_pyfunction!(faceops::vertex_min, m)?)?;
     Ok(())
 }
