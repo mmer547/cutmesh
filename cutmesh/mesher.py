@@ -429,6 +429,7 @@ def make_feature_hook(feat, h_of_cell, min_bend=0.03, reach=0.75):
         return [[loop[i], loop[(i + 1) % m], vid] for i in range(m)]
 
     hook.feat, hook.reach = feat, reach      # for the Rust cut kernel's quick test
+    hook.min_bend = min_bend                 # and its own copy of the hook (fhook.rs)
     return hook, state
 
 
@@ -1078,6 +1079,9 @@ def _cut_with_fallback_rs(ctx, items, shared_cap, hk, csize, P0, max_iter=4, lea
                         float(hook.reach) if hook is not None else 0.0,
                         np.ascontiguousarray(csize, float), pinch_cb, cap_cb, float(ctx.pinch_min_area))
     del Pa, pa
+    if hook is not None and hasattr(K, "set_rust_hook") and hasattr(hook, "min_bend"):
+        # the cap hook in Rust: no callback, and the parallel pass keeps these items
+        K.set_rust_hook(np.ascontiguousarray(hook.feat.corners, float).reshape(-1, 3), float(hook.min_bend))
     if leaf_csr is not None and hasattr(K, "set_items_leaves"):
         cptr_, fptr_, fverts_, f_key_ = leaf_csr
         K.set_items_leaves(np.fromiter((ci for _, ci in items), np.int64, count=len(items)),

@@ -59,6 +59,8 @@ pub struct CutKernel {
     did: bool,
     forbid: bool,
     leaf: i64,
+    // the cap hook in Rust (fhook.rs) instead of cap_cb: feature corners, min_bend
+    hook_rs: Option<(Vec<V3>, f64)>,
 }
 
 fn key3(fid: i64, a: i64, b: i64) -> Key3 {
@@ -136,6 +138,7 @@ impl CutKernel {
             did: false,
             forbid: false,
             leaf: 0,
+            hook_rs: None,
         })
     }
 
@@ -246,6 +249,16 @@ impl CutKernel {
         Ok(crate::csr::write_results(py, &r, neg_only))
     }
 
+    /// use the Rust cap hook (make_feature_hook's, with these feature corners and
+    /// min_bend) instead of the Python callback
+    fn set_rust_hook(&mut self, corners: PyReadonlyArray2<f64>, min_bend: f64) -> PyResult<()> {
+        if self.cap_segs.is_none() {
+            return Err(pyo3::exceptions::PyValueError::new_err("no cap features"));
+        }
+        self.hook_rs = Some((crate::points(&corners)?, min_bend));
+        Ok(())
+    }
+
     /// the items holding face fid (in item order, an item once per face it has)
     fn items_of_face(&mut self, fid: i64) -> Vec<usize> {
         if self.face_items.is_none() {
@@ -326,44 +339,45 @@ impl CutKernel {
                             events: Vec::new(),
                             used: Vec::new(),
                             pinch_now: HashSet::default(),
+                            did: false,
                         };
                         let (neg, pos, apart) = cut_one_env(&mut e, me.items[k].0.clone()).ok()?;
                         let negc = split_components_apart(neg, &apart);
                         let posc =
                             if me.shared_cap { split_components_apart(pos, &HashSet::default()) } else { Vec::new() };
-                        Some(((negc, posc), e.used, e.events, e.newpos))
+                        Some(((negc, posc), e.used, e.events, e.newpos, e.did))
                     })
                     .collect()
             })
         };
         // ids in item order (sequential), then the results renumbered in parallel
         let mut out: Vec<Option<(Vec<Key3>, bool)>> = vec![None; n];
-        let mut pending: Vec<(usize, CellRes, Vec<Key3>, Vec<i64>, Vec<i64>)> = Vec::new();
+        let mut pending: Vec<(usize, CellRes, Vec<Key3>, Vec<i64>, Vec<i64>, bool)> = Vec::new();
         for (k, s) in sym.into_iter().enumerate() {
             let ok = match &s {
-                Some((_, _, ev, np_)) => self.check_sym(ev, np_),
+                Some((_, _, ev, np_, _)) => self.check_sym(ev, np_),
                 None => false,
             };
             if ok {
-                let (res, used, events, newpos) = s.unwrap();
+                let (res, used, events, newpos, did) = s.unwrap();
                 let (vmap, fmap) = self.replay_ids(events, &newpos);
-                pending.push((k, res, used, vmap, fmap));
+                pending.push((k, res, used, vmap, fmap, did));
             } else {
                 out[k] = self.cut(py, vec![k], vec![false])?.pop();
             }
         }
-        let mapped: Vec<(usize, CellRes, Vec<Key3>)> = py.detach(|| {
+        let mapped: Vec<(usize, CellRes, Vec<Key3>, bool)> = py.detach(|| {
             pending
                 .into_par_iter()
-                .map(|(k, res, used, vmap, fmap)| {
+                .map(|(k, res, used, vmap, fmap, did)| {
                     let (r, u) = Self::map_result(res, used, &vmap, &fmap);
-                    (k, r, u)
+                    (k, r, u, did)
                 })
                 .collect()
         });
-        for (k, r, u) in mapped {
+        for (k, r, u, did) in mapped {
             self.res[k] = Some(r);
-            out[k] = Some((u, false));
+            out[k] = Some((u, did));
         }
         Ok(out.into_iter().map(|o| o.unwrap()).collect())
     }
@@ -683,6 +697,21 @@ impl CutKernel {
             return Ok(vec![lp]);
         }
         let flags: Vec<bool> = lp.iter().map(|v| self.onfeat.contains(v)).collect();
+        if let Some((corners, min_bend)) = &self.hook_rs {
+            let base = self.pos.len() as i64;
+            let o = crate::fhook::feature_hook(segs, corners, &lp, &pts, &flags, base, h, self.reach, *min_bend);
+            for x in o.newp {
+                self.add_point(x, (-1, -1));
+            }
+            for v in o.newf {
+                self.onfeat.insert(v);
+                self.new_onfeat.push(v);
+            }
+            if o.did {
+                self.did = true;
+            }
+            return Ok(o.polys);
+        }
         let plist: Vec<Vec<f64>> = pts.iter().map(|p| p.to_vec()).collect();
         let cb = self.cap_cb.as_ref().unwrap();
         let (polys, newp, newf, did): (Vec<Vec<i64>>, Vec<[f64; 3]>, Vec<i64>, bool) = cb
@@ -830,6 +859,8 @@ enum Ev {
     Sub(i64, Vec<i64>),
     /// a cap face
     New,
+    /// a point the cap hook adds (the next new point); on a feature or not
+    HookPoint(bool),
 }
 
 /// one item cut on the kernel's state at the start of the pass, with symbolic ids for
@@ -852,6 +883,7 @@ struct SymEnv<'a> {
     events: Vec<Ev>,
     used: Vec<Key3>,
     pinch_now: HashSet<i64>,
+    did: bool,
 }
 
 impl SymEnv<'_> {
@@ -1018,12 +1050,32 @@ impl Env for SymEnv<'_> {
         if nf < 2 && dc > self.k.reach * h {
             return Ok(vec![lp]);
         }
-        Err(CutErr::Bail) // the Python cap hook decides
+        let Some((corners, min_bend)) = &self.k.hook_rs else {
+            return Err(CutErr::Bail); // the Python cap hook decides
+        };
+        // the Rust hook with symbolic ids for the points it adds
+        const BASE: i64 = i64::MAX / 4;
+        let flags: Vec<bool> = lp.iter().map(|&v| self.onfeat(v)).collect();
+        let o = crate::fhook::feature_hook(segs, corners, &lp, &pts, &flags, BASE, h, self.k.reach, *min_bend);
+        let ids: Vec<i64> = o
+            .newp
+            .iter()
+            .enumerate()
+            .map(|(i, &x)| {
+                let feat = o.newf.contains(&(BASE + i as i64));
+                self.events.push(Ev::HookPoint(feat));
+                self.add_point(x, feat)
+            })
+            .collect();
+        if o.did {
+            self.did = true;
+        }
+        Ok(o.polys.into_iter().map(|q| q.into_iter().map(|v| if v >= BASE { ids[(v - BASE) as usize] } else { v }).collect()).collect())
     }
 }
 
-/// a symbolic cut's outcome: results, used keys, events, new points
-type SymOut = Option<(CellRes, Vec<Key3>, Vec<Ev>, Vec<V3>)>;
+/// a symbolic cut's outcome: results, used keys, events, new points, cap hook did
+type SymOut = Option<(CellRes, Vec<Key3>, Vec<Ev>, Vec<V3>, bool)>;
 
 /// CutContext._zero_runs
 fn zero_runs<E: Env>(e: &E, fid: i64, poly: &[i64], cls: &mut [bool]) {
@@ -1296,6 +1348,7 @@ impl CutKernel {
         for ev in events {
             match ev {
                 Ev::Vertex(lo, hi) => tv.push(self.cache.get(&(*lo, *hi)).copied()),
+                Ev::HookPoint(_) => tv.push(None),
                 Ev::Chord((f, a, b), some) => {
                     let key = match (res(*a, &tv), res(*b, &tv)) {
                         (Some(a), Some(b)) => Some(key3(*f, a, b)),
@@ -1400,6 +1453,14 @@ impl CutKernel {
                     fmap.push(self.sub_id(fid, &pp));
                 }
                 Ev::New => fmap.push(self.new_face_id()),
+                Ev::HookPoint(feat) => {
+                    let c = self.add_point(newpos[vmap.len()], (-1, -1));
+                    if feat {
+                        self.onfeat.insert(c);
+                        self.new_onfeat.push(c);
+                    }
+                    vmap.push(c);
+                }
             }
         }
         (vmap, fmap)
