@@ -1318,6 +1318,25 @@ def select_clip_cells(pc, cand, faces_of, cells_of_face, special, pts):
     return E, mixed, dropped
 
 
+def _finer_nearby(oc, c, hl, cand):
+    """per candidate leaf: a finer leaf centre within 0.95 of its size.  In the balanced
+    tree that is a face neighbour split into finer leaves (Rust: a lookup instead of a
+    KD-tree per level)."""
+    if _core is not None and hasattr(_core, "finer_face_neighbour") and not any(oc.periodic):
+        return _core.finer_face_neighbour(np.ascontiguousarray(oc.ijk, np.int64), np.ascontiguousarray(oc.lev, np.int64),
+                                          [int(v) for v in oc.n], int(oc.Lmax), np.ascontiguousarray(cand, np.int64))
+    fine = np.zeros(len(cand), bool)
+    for lv in np.unique(oc.lev[cand]).tolist():
+        m_ = oc.lev[cand] == lv
+        fl = np.nonzero(oc.lev > lv)[0]
+        if not len(fl):
+            continue
+        hc = float(hl[cand[m_]][0])
+        dd, _ = cKDTree(c[fl]).query(c[cand[m_]], distance_upper_bound=0.95 * hc)
+        fine[m_] = dd < 0.95 * hc
+    return fine
+
+
 def _fluid_fraction(dom, c, h, n=6):
     """Fluid fraction of cells (centres c, sizes h) from the trilinear interpolation of
     the signed distance at their corners, and whether the wall cuts them."""
@@ -1736,15 +1755,7 @@ def generate(cfg, log=print):
                 cand = np.concatenate([np.flatnonzero(cand_old), cand])
             is_cand = np.zeros(len(oc.lev), bool)
             is_cand[cand] = True
-            fine = np.zeros(len(cand), bool)
-            for lv in np.unique(oc.lev[cand]).tolist():
-                m_ = oc.lev[cand] == lv
-                fl = np.nonzero(oc.lev > lv)[0]
-                if not len(fl):
-                    continue
-                hc = float(hl[cand[m_]][0])
-                dd, _ = cKDTree(c[fl]).query(c[cand[m_]], distance_upper_bound=0.95 * hc)
-                fine[m_] = dd < 0.95 * hc
+            fine = _finer_nearby(oc, c, hl, cand)
             mark = np.zeros(len(oc.lev), bool)
             mark[cand[fine]] = True
             if not mark.any():
