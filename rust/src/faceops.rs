@@ -72,3 +72,28 @@ pub fn vertex_min<'py>(
     }
     Ok(out.into_pyarray(py))
 }
+
+/// per leaf: some vertex occurrence of its faces in the mask
+/// (np.logical_or.reduceat(mask[fverts], vptr[:-1]) with vptr[i]..vptr[i+1] the leaf's
+/// occurrences, all non-empty)
+#[pyfunction]
+pub fn leaf_any<'py>(
+    py: Python<'py>,
+    mask: PyReadonlyArray1<'py, bool>,
+    vptr: PyReadonlyArray1<'py, i64>,
+    fverts: PyReadonlyArray1<'py, i64>,
+) -> PyResult<Bound<'py, PyArray1<bool>>> {
+    let (m, vp, fv) = (mask.as_slice()?, vptr.as_slice()?, fverts.as_slice()?);
+    if vp.is_empty() || *vp.last().unwrap() as usize > fv.len() || vp.windows(2).any(|w| w[1] <= w[0])
+        || fv.iter().any(|&v| v < 0 || v as usize >= m.len())
+    {
+        return Err(pyo3::exceptions::PyValueError::new_err("inconsistent leaf arrays"));
+    }
+    let r: Vec<bool> = py.detach(|| {
+        (0..vp.len() - 1)
+            .into_par_iter()
+            .map(|c| fv[vp[c] as usize..vp[c + 1] as usize].iter().any(|&v| m[v as usize]))
+            .collect()
+    });
+    Ok(r.into_pyarray(py))
+}

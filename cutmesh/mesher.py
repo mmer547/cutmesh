@@ -1679,9 +1679,13 @@ def generate(cfg, log=print):
         oc.refine(ssrc, vsrc, log=lambda s: log(s), keep_fn=keep_fn)
         sgn = np.array(list(itertools.product((-1, 0, 1), repeat=3)), float)   # 27 points
         corner = np.all(sgn != 0, axis=1)
+        n_old = 0      # after a pass: the leaves before this index were tested there, unsplit
         for it in range(max(nfill_g, nfill_w)):
             c = oc.centers(); hl = oc.leaf_sizes()
             near = oc.lev < oc.Lmax
+            # a leaf tested in the pass before and left unsplit gives the same answer
+            # (the tests depend on the cell alone, and they only drop out pass by pass)
+            near[:n_old] = False
             near[near] = dom.approx_below(c[near], 0.9 * hl[near] + dom._rmax)
             mark = np.zeros(len(oc.lev), bool)
             nh = nw = 0
@@ -1704,13 +1708,17 @@ def generate(cfg, log=print):
                 nw = int(wall.sum())
             if not mark.any():
                 break
+            oc.track()
             oc.split(mark)
             oc.balance(lambda s: None)
+            n_old = len(oc.src)
+            oc.untrack()
             log(f"thin gaps / walls: split {nh} cells with fluid inside but no fluid corner,"
                 f" {nw} with a solid wall inside but no solid corner")
         n_tc = int(cfg["thinCutCells"])
         thr = float(cfg["thinCutFraction"])
         nsplit = 0
+        cand_old = None    # candidates of the pass before (they depend on the cell alone)
         for it in range(n_tc):
             # A cut cell keeping little fluid next to finer cells: its centre sits on the
             # wall, far from the plane of the finer cells' centres, and the faces between
@@ -1718,10 +1726,16 @@ def generate(cfg, log=print):
             # the wall, into whole cells.
             c = oc.centers(); hl = oc.leaf_sizes()
             near = oc.lev < Lmax
+            if cand_old is not None:
+                near[:len(cand_old)] = False           # unsplit leaves: as in the pass before
             near[near] = dom.approx_below(c[near], 0.9 * hl[near] + dom._rmax)
             cand = np.nonzero(near)[0]
             fr, cut = _fluid_fraction(dom, c[cand], hl[cand])
             cand = cand[cut & (fr > 0) & (fr < thr)]
+            if cand_old is not None:                   # the unsplit leaves come first
+                cand = np.concatenate([np.flatnonzero(cand_old), cand])
+            is_cand = np.zeros(len(oc.lev), bool)
+            is_cand[cand] = True
             fine = np.zeros(len(cand), bool)
             for lv in np.unique(oc.lev[cand]).tolist():
                 m_ = oc.lev[cand] == lv
@@ -1736,8 +1750,11 @@ def generate(cfg, log=print):
             if not mark.any():
                 break
             nsplit += int(mark.sum())
+            oc.track()
             oc.split(mark)
             oc.balance(lambda s: None)
+            cand_old = is_cand[oc.src]
+            oc.untrack()
         if n_tc:
             log(f"thin cut cells at level transitions: split {nsplit}")
     T(f"octree ({len(oc.lev)} leaves)")
@@ -1811,9 +1828,12 @@ def generate(cfg, log=print):
     msgs = []
     occ_leaf = np.repeat(f_cell, fn)
     leaf_vptr = fptr[cptr[:-1]]                 # vertex occurrences by leaf (each has faces)
+    leaf_vptr_full = np.ascontiguousarray(fptr[cptr], np.int64)
 
     def leaf_any(m):
         """per leaf: some vertex of its faces in the mask m"""
+        if _core is not None and hasattr(_core, "leaf_any"):
+            return _core.leaf_any(np.ascontiguousarray(m, bool), leaf_vptr_full, fverts)
         return np.logical_or.reduceat(m[fverts], leaf_vptr)
 
     def side_width(kv, side):
@@ -2093,20 +2113,17 @@ def generate(cfg, log=print):
         if not (far_snap.any() or free_snap.any()):
             break
         mv_ = (pts != pts0).any(1)           # hanging vertices move with their parents too
-        touch = np.maximum.reduceat(mv_[fverts].astype(np.int8), fptr[:-1])
-        tl = np.nonzero(np.maximum.reduceat(touch, cptr[:-1]))[0]
+        tl = np.nonzero(leaf_any(mv_))[0]
         badl = tl[_leaf_bad(pts, tl, fptr, fverts, cptr, csize)] if len(tl) else tl
         if ccv_far.any():
             # a vertex pushed onto a concave edge must not straighten a face corner either
-            tc = np.maximum.reduceat(np.maximum.reduceat(ccv_far[fverts].astype(np.int8), fptr[:-1]), cptr[:-1])
-            tc = np.nonzero(tc)[0]
+            tc = np.nonzero(leaf_any(ccv_far))[0]
             badl = np.union1d(badl, tc[_leaf_bad(pts, tc, fptr, fverts, cptr, csize, flat_at=ccv_far)])
         if slide_far.any():
             # a slid vertex often lands on the line of the wall vertices next to it (the
             # cell becomes a wedge with a straight face corner, still convex and uncut):
             # only a corner pushed clearly past straight breaks the cell
-            tc = np.maximum.reduceat(np.maximum.reduceat(slide_far[fverts].astype(np.int8), fptr[:-1]), cptr[:-1])
-            tc = np.nonzero(tc)[0]
+            tc = np.nonzero(leaf_any(slide_far))[0]
             badl = np.union1d(badl, tc[_leaf_bad(pts, tc, fptr, fverts, cptr, csize, flat_at=slide_far,
                                                  flat_angle=-1.0)])
         if not len(badl):
@@ -2510,8 +2527,7 @@ def generate(cfg, log=print):
     # ------------------------------------------------------------ distorted uncut cells
     # uncut leaves whose corners were snapped can become non-convex: hand them to the
     # merging stage like cut cells
-    touch = np.maximum.reduceat(moved_any[fverts].astype(np.int8), fptr[:-1])
-    touch = np.maximum.reduceat(touch, cptr[:-1]).astype(bool) & bulk_alive
+    touch = leaf_any(moved_any) & bulk_alive
     tl = np.nonzero(touch)[0]
     nbad_bulk = 0
     if len(tl):
