@@ -602,7 +602,7 @@ pub fn leaf_bad<'py>(
                 let mut vv = 0.0f64;
                 let mut cc = [0.0f64; 3];
                 for j in 0..cfs.len() {
-                    let pv = dot(sfs[j], sub(cfs[j], est));
+                    let pv = einsum3(sfs[j], sub(cfs[j], est));
                     vv += pv;
                     for k in 0..3 {
                         cc[k] += pv * (0.75 * cfs[j][k] + 0.25 * est[k]);
@@ -616,7 +616,7 @@ pub fn leaf_bad<'py>(
                 }
                 let hl = cs[c];
                 for (j, f) in (f0..f1).enumerate() {
-                    let sp = dot(sfs[j], sub(cfs[j], cc));
+                    let sp = einsum3(sfs[j], sub(cfs[j], cc));
                     let af = dot(sfs[j], sfs[j]).sqrt();
                     if sp < 0.05 * af * hl || af < 0.05 * hl * hl {
                         return true;
@@ -634,7 +634,7 @@ pub fn leaf_bad<'py>(
                             let q = pts[v];
                             let e_in = sub(q, pts[vs[(i + m - 1) % m] as usize]);
                             let e_out = sub(pts[vs[(i + 1) % m] as usize], q);
-                            let s = dot(cross3(e_in, e_out), nh);
+                            let s = einsum3(cross3(e_in, e_out), nh);
                             let lin = dot(e_in, e_in).sqrt() * dot(e_out, e_out).sqrt();
                             if s < flat_sin * lin {
                                 return true;
@@ -647,6 +647,11 @@ pub fn leaf_bad<'py>(
             .collect()
     });
     Ok(res.into_pyarray(py))
+}
+
+/// np.einsum("ij,ij->i", a, b) for one row: NumPy adds the products as (0 + 2) + 1
+pub(crate) fn einsum3(a: V3, b: V3) -> f64 {
+    (a[0] * b[0] + a[2] * b[2]) + a[1] * b[1]
 }
 
 fn cross3(a: V3, b: V3) -> V3 {

@@ -1,15 +1,19 @@
 """Faster code paths that must give the same answers as the plain ones: the open cell
 edge count of the quality check, duplicate-free surface sampling, sorted-query search,
-and the Rust octree stages (2:1 balance, polyhedral cells, leaf validity).
+the Rust octree stages (2:1 balance, polyhedral cells, leaf validity) and the Rust cut
+kernel of the domain cut (with the feature hooks).
 
 python -m unittest discover -s tests
 """
 import contextlib
 import copy
 import io
+import json
 import os
 import sys
+import tempfile
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -136,6 +140,82 @@ class RustOctree(unittest.TestCase):
                     b = mesher._leaf_bad(P, leaves, M["fptr"], M["fverts"], M["cell_fptr"],
                                          M["cell_size"], flat, ang)
                     np.testing.assert_array_equal(a, b)
+
+
+class NumpyOrder(unittest.TestCase):
+    """the Rust ports repeat NumPy's summation order; fails if NumPy changes it"""
+
+    def test_einsum_rows(self):
+        rng = np.random.default_rng(2)
+        a = rng.normal(size=(50000, 3)) * rng.uniform(0, 10, (50000, 1))
+        b = rng.normal(size=(50000, 3))
+        p = a * b
+        np.testing.assert_array_equal(np.einsum("ij,ij->i", a, b), (p[:, 0] + p[:, 2]) + p[:, 1])
+
+    def test_norm_rows(self):
+        rng = np.random.default_rng(3)
+        a = rng.normal(size=(50000, 3)) * rng.uniform(0, 10, (50000, 1))
+        s = a * a
+        np.testing.assert_array_equal(np.linalg.norm(a, axis=1), np.sqrt((s[:, 0] + s[:, 1]) + s[:, 2]))
+
+
+@unittest.skipUnless(geometry.rust_available() and hasattr(geometry._core, "CutKernel"),
+                     "Rust extension not built")
+class RustCutKernel(unittest.TestCase):
+    """meshes with the cuts in the Rust kernel equal those of the Python cut"""
+
+    def same(self, d, cfg):
+        p = os.path.join(d, "m.json")
+        with open(p, "w") as f:
+            json.dump(cfg, f)
+        A = mesher.generate(mesher.load_config(p), log=lambda s: None)
+        with mock.patch.object(mesher, "_rust_cut_ok", lambda ctx, hk: False):
+            B = mesher.generate(mesher.load_config(p), log=lambda s: None)
+        np.testing.assert_array_equal(A["points"], B["points"])
+        for k in ("owner", "neighbour"):
+            np.testing.assert_array_equal(np.asarray(A[k]), np.asarray(B[k]))
+        fa, fb = A["faces"], B["faces"]
+        self.assertEqual(len(fa), len(fb))
+        self.assertTrue(all(list(x) == list(y) for x, y in zip(fa, fb)))
+
+    def test_turned_cube(self):
+        # convex feature edges: chord points, split caps, the exact feature cut
+        from test_exact_cut import turned_cube
+        with tempfile.TemporaryDirectory() as d:
+            turned_cube(os.path.join(d, "cube.stl"))
+            for exact in (True, False):
+                self.same(d, {"domain": "cube.stl", "baseCellSize": 0.15, "featureLevel": 1,
+                              "surfaceRefinement": {"default": 1}, "exactFeatureCut": exact})
+
+    def test_concave_channel(self):
+        # a turned L-shaped channel: the concave edge (pinch points), and a zone
+        with tempfile.TemporaryDirectory() as d:
+            geometry.write_stl_ascii(os.path.join(d, "s.stl"), [("walls", l_prism())])
+            self.same(d, {"domain": "s.stl", "baseCellSize": 0.008, "featureLevel": 2,
+                          "surfaceRefinement": {"default": 1}, "exactFeatureCut": False,
+                          "rotatingZones": [{"name": "z", "cylinder": {"point1": [0.06, 0.06, 0.0],
+                                             "point2": [0.06, 0.06, 0.02], "radius": 0.015},
+                                             "surfaceLevel": 1, "omega": 1.0}]})
+
+
+def l_prism(c=0.037, L=0.1, H=0.03, ang=(7.0, 5.0, 11.0)):
+    """L-shaped channel [0, L]^2 minus [0, c]^2 times [0, H], turned: outward triangles"""
+    P = [(c, 0), (L, 0), (L, L), (c, L), (0, L), (0, c), (c, c)]
+    top = [[(L, 0), (L, L), (c, L)], [(L, 0), (c, L), (c, c)], [(L, 0), (c, c), (c, 0)],
+           [(0, c), (c, c), (c, L)], [(0, c), (c, L), (0, L)]]
+    T = []
+    for t in top:
+        T.append([(x, y, H) for x, y in t])
+        T.append([(x, y, 0.0) for x, y in t[::-1]])
+    for i in range(len(P)):
+        (x0, y0), (x1, y1) = P[i], P[(i + 1) % len(P)]
+        T.append([(x0, y0, 0.0), (x1, y1, 0.0), (x1, y1, H)])
+        T.append([(x0, y0, 0.0), (x1, y1, H), (x0, y0, H)])
+    a, b, g = np.radians(ang)
+    Rx = np.array([[1, 0, 0], [0, np.cos(a), -np.sin(a)], [0, np.sin(a), np.cos(a)]])
+    Ry = np.array([[np.cos(b), 0, np.sin(b)], [0, 1, 0], [-np.sin(b), 0, np.cos(b)]])
+    Rz = np.array([[np.cos(g), -np.sin(g), 0], [np.sin(g), np.cos(g), 0], [0, 0, 1]])
+    return np.array(T, float) @ (Rz @ Ry @ Rx).T
 
 
 if __name__ == "__main__":

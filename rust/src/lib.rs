@@ -11,6 +11,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 mod cut;
+mod dcut;
 mod layers;
 mod octree;
 
@@ -611,6 +612,19 @@ impl TriMesh {
 }
 
 // ------------------------------------------------------------------------- SegSet
+impl SegSet {
+    /// distance to the closest point (exactly as closest() gives it)
+    pub(crate) fn closest_d(&self, q: V3) -> f64 {
+        self.bvh
+            .closest(q, |i| {
+                let c = closest_seg(q, self.s[i][0], self.s[i][1]);
+                (dist2(q, c), c)
+            })
+            .0
+            .sqrt()
+    }
+}
+
 /// Set of segments (feature edges): SegSet(seg[n, 2, 3])
 #[pyclass(frozen)]
 struct SegSet {
@@ -947,6 +961,7 @@ fn poly_cell<'py>(
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<TriMesh>()?;
     m.add_class::<SegSet>()?;
+    m.add_class::<dcut::CutKernel>()?;
     m.add_function(wrap_pyfunction!(face_geometry, m)?)?;
     m.add_function(wrap_pyfunction!(cell_geometry, m)?)?;
     m.add_function(wrap_pyfunction!(poly_cell, m)?)?;

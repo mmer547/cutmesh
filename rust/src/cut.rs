@@ -11,18 +11,54 @@ use crate::{vec3_array, V3};
 
 pub type Face = (i64, Vec<i64>);
 
+/// FxHash (rustc's hasher): much faster than SipHash for the integer keys used here;
+/// nothing depends on the iteration order of these maps
+#[derive(Default, Clone, Copy)]
+pub(crate) struct Fx(u64);
+
+impl std::hash::Hasher for Fx {
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        for c in bytes.chunks(8) {
+            let mut b = [0u8; 8];
+            b[..c.len()].copy_from_slice(c);
+            self.write_u64(u64::from_le_bytes(b));
+        }
+    }
+    #[inline]
+    fn write_u64(&mut self, i: u64) {
+        self.0 = (self.0.rotate_left(5) ^ i).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
+    }
+    #[inline]
+    fn write_i64(&mut self, i: i64) {
+        self.write_u64(i as u64);
+    }
+    #[inline]
+    fn write_usize(&mut self, i: usize) {
+        self.write_u64(i as u64);
+    }
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
+pub(crate) type FxBuild = std::hash::BuildHasherDefault<Fx>;
+pub(crate) type FxMap<K, V> = HashMap<K, V, FxBuild>;
+pub(crate) type FxSet<K> = std::collections::HashSet<K, FxBuild>;
+
 /// insertion-ordered map (Python dict iteration order)
-struct OMap<K: std::hash::Hash + Eq + Clone, V> {
-    idx: HashMap<K, usize>,
-    keys: Vec<K>,
-    vals: Vec<V>,
+pub(crate) struct OMap<K: std::hash::Hash + Eq + Clone, V> {
+    idx: FxMap<K, usize>,
+    pub(crate) keys: Vec<K>,
+    pub(crate) vals: Vec<V>,
 }
 
 impl<K: std::hash::Hash + Eq + Clone, V> OMap<K, V> {
-    fn new() -> Self {
-        OMap { idx: HashMap::new(), keys: Vec::new(), vals: Vec::new() }
+    pub(crate) fn new() -> Self {
+        OMap { idx: FxMap::default(), keys: Vec::new(), vals: Vec::new() }
     }
-    fn entry(&mut self, k: K, v: impl FnOnce() -> V) -> &mut V {
+    pub(crate) fn entry(&mut self, k: K, v: impl FnOnce() -> V) -> &mut V {
         let i = match self.idx.get(&k) {
             Some(&i) => i,
             None => {
@@ -34,10 +70,10 @@ impl<K: std::hash::Hash + Eq + Clone, V> OMap<K, V> {
         };
         &mut self.vals[i]
     }
-    fn get(&self, k: &K) -> Option<&V> {
+    pub(crate) fn get(&self, k: &K) -> Option<&V> {
         self.idx.get(k).map(|&i| &self.vals[i])
     }
-    fn get_mut(&mut self, k: &K) -> Option<&mut V> {
+    pub(crate) fn get_mut(&mut self, k: &K) -> Option<&mut V> {
         match self.idx.get(k) {
             Some(&i) => Some(&mut self.vals[i]),
             None => None,
@@ -45,7 +81,7 @@ impl<K: std::hash::Hash + Eq + Clone, V> OMap<K, V> {
     }
 }
 
-fn dedupe(p: &[i64]) -> Vec<i64> {
+pub(crate) fn dedupe(p: &[i64]) -> Vec<i64> {
     let mut out: Vec<i64> = Vec::with_capacity(p.len());
     for &v in p {
         if out.last() != Some(&v) {
@@ -58,7 +94,7 @@ fn dedupe(p: &[i64]) -> Vec<i64> {
     out
 }
 
-fn n_unique(p: &[i64]) -> usize {
+pub(crate) fn n_unique(p: &[i64]) -> usize {
     let mut q = p.to_vec();
     q.sort_unstable();
     q.dedup();
@@ -69,7 +105,7 @@ fn n_unique(p: &[i64]) -> usize {
 fn simple_loops(lp: &[i64]) -> Vec<Vec<i64>> {
     let mut out = Vec::new();
     let mut stack: Vec<i64> = Vec::new();
-    let mut pos: HashMap<i64, usize> = HashMap::new();
+    let mut pos: FxMap<i64, usize> = FxMap::default();
     for &v in lp {
         match pos.get(&v).copied() {
             None => {
@@ -91,7 +127,7 @@ fn simple_loops(lp: &[i64]) -> Vec<Vec<i64>> {
 }
 
 /// cutcell._chain_loops
-fn chain_loops(segs: &[(i64, i64)]) -> Vec<Vec<i64>> {
+pub(crate) fn chain_loops(segs: &[(i64, i64)]) -> Vec<Vec<i64>> {
     let mut out: OMap<i64, Vec<i64>> = OMap::new();
     for &(a, b) in segs {
         out.entry(a, Vec::new).push(b);
@@ -129,16 +165,24 @@ fn find(parent: &mut [usize], mut i: usize) -> usize {
 
 /// cutcell.split_components
 fn split_components(faces: Vec<Face>) -> Vec<Vec<Face>> {
+    split_components_apart(faces, &FxSet::default())
+}
+
+/// cutcell.split_components(faces, apart): edges with both ends in apart do not join
+pub(crate) fn split_components_apart(faces: Vec<Face>, apart: &FxSet<i64>) -> Vec<Vec<Face>> {
     let n = faces.len();
     if n <= 4 {
         return vec![faces];
     }
     let mut parent: Vec<usize> = (0..n).collect();
-    let mut owner: HashMap<(i64, i64), usize> = HashMap::new();
+    let mut owner: FxMap<(i64, i64), usize> = FxMap::default();
     for (i, (_, p)) in faces.iter().enumerate() {
         let m = p.len();
         for k in 0..m {
             let (a, b) = (p[k], p[(k + 1) % m]);
+            if !apart.is_empty() && apart.contains(&a) && apart.contains(&b) {
+                continue;
+            }
             let key = if a < b { (a, b) } else { (b, a) };
             match owner.get(&key).copied() {
                 None => {
