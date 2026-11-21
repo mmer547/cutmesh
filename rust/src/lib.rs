@@ -19,6 +19,7 @@ mod wallmerge;
 mod contact;
 mod sortutil;
 mod csr;
+mod faceops;
 
 pub(crate) type V3 = [f64; 3];
 
@@ -1029,5 +1030,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(contact::surface_contact_samples, m)?)?;
     m.add_function(wrap_pyfunction!(contact::split_samples, m)?)?;
     m.add_function(wrap_pyfunction!(sortutil::argsort_stable, m)?)?;
+    m.add_function(wrap_pyfunction!(faceops::face_sign_counts, m)?)?;
+    m.add_function(wrap_pyfunction!(faceops::vertex_min, m)?)?;
     Ok(())
 }
