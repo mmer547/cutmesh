@@ -653,7 +653,7 @@ def _piece_bad(pos, comp, h):
     return bool(np.any(np.einsum("ij,ij->i", Sf, Cf - cc) < 0.05 * np.linalg.norm(Sf, axis=1) * h))
 
 
-def surface_contact(dom, pts, phi, cells, faces_of, csize, push=0.2, face_ok=None):
+def surface_contact(dom, pts, phi, cells, faces_of, csize, push=0.2, face_ok=None, csr=None):
     """Faces touching the surface along more than a vertex (vertices with phi == 0,
     typically snapped onto a wall next to a concave edge).  Interpolating phi there
     chamfers the concave edge by up to a cell size, differently at every cell, which
@@ -667,10 +667,19 @@ def surface_contact(dom, pts, phi, cells, faces_of, csize, push=0.2, face_ok=Non
       side keeps them as walls) -> {cell: {face id}}.  Sampled a little off the face
       into the cell, at the centre and towards every vertex; all must be solid.
 
-    face_ok(ci): flags of the cell's faces that can matter (the others are skipped)."""
+    face_ok(ci): flags of the cell's faces that can matter (the others are skipped).
+    csr: (cptr, fptr, fverts, f_key, flags per face) of the cells: sampled in Rust."""
     ekeys, esamp, etol, eends = [], [], [], []
     dcell, dfid, dctr, dsamp, dgrp, dtol = [], [], [], [], [], []
     seen = set()
+    if csr is not None and _core is not None and hasattr(_core, "surface_contact_samples"):
+        i64 = lambda a: np.ascontiguousarray(a, np.int64)            # noqa: E731
+        cptr, fptr, fverts, f_key, fok = csr
+        dcell, dfid, dctr, dtol, dsamp, dgrp, ekeys, esamp, etol, eends = _core.surface_contact_samples(
+            np.ascontiguousarray(pts, float), np.ascontiguousarray(phi, float), [int(c) for c in cells],
+            i64(cptr), i64(fptr), i64(fverts), i64(f_key), np.ascontiguousarray(csize, float),
+            np.ascontiguousarray(fok, bool), float(push))
+        cells = ()
     for ci in cells:
         fl = faces_of(ci)
         cc = None
@@ -719,7 +728,7 @@ def surface_contact(dom, pts, phi, cells, faces_of, csize, push=0.2, face_ok=Non
     zero_edge, drop = {}, {}
     nd, ns = len(dctr), len(dsamp)
     if nd + len(esamp):
-        sd = dom.sdf(np.array(dctr + dsamp + esamp).reshape(-1, 3))
+        sd = dom.sdf(np.concatenate([np.reshape(x, (-1, 3)) for x in (dctr, dsamp, esamp)]))
         if nd:
             ht = np.array(dtol)
             on = np.abs(sd[:nd]) < 0.02 * ht
@@ -1980,7 +1989,8 @@ def generate(cfg, log=print):
     c_cs = np.logical_or.reduceat(~fpos & fneg & (fz >= 3), cptr[:-1])
     del fz, fneg, fpos
     ctx.zero_edge, drop = surface_contact(dom, pts, phi_d, [c for c in cl + cb if c_sc[c]], leaf_faces, csize,
-                                          face_ok=lambda ci: f_sc[cptr[ci]:cptr[ci + 1]].tolist())
+                                          face_ok=lambda ci: f_sc[cptr[ci]:cptr[ci + 1]].tolist(),
+                                          csr=(cptr, fptr, fverts, f_key, f_sc))
     del f_sc
     log(f"surface contact: {sum(v == 1 for v in ctx.zero_edge.values())} face edges in the solid,"
         f" {sum(len(s) for s in drop.values())} wall faces dropped from solid-side cells")

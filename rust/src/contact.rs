@@ -8,7 +8,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 use crate::cut::FxSet;
-use crate::wallmerge::{cross, mean, norm1, rows_sum, sub};
+use crate::wallmerge::{cross, dot1, mean, norm1, rows_sum, sub};
 use crate::V3;
 
 /// 2 x area / longest edge of the polygon q (contact_splits.width)
@@ -119,4 +119,140 @@ pub fn contact_candidates<'py>(
         out
     });
     Ok((fids, polys, rest, run, hs, crate::vec3_array(py, ca)?, crate::vec3_array(py, cb)?, wa, wb))
+}
+
+/// The sampling loop of mesher.surface_contact over the cells (same order and
+/// arithmetic): faces lying on the surface (all phi == 0) with their centre, the cell
+/// size and the sample points just inside the cell; and the face edges between two
+/// surface vertices of faces that are cut, with a sample point pushed into the face.
+/// face_ok: per face occurrence, whether it can matter.
+#[pyfunction]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn surface_contact_samples<'py>(
+    py: Python<'py>,
+    points: PyReadonlyArray2<'py, f64>,
+    phi: PyReadonlyArray1<'py, f64>,
+    cells: Vec<usize>,
+    cptr: PyReadonlyArray1<'py, i64>,
+    fptr: PyReadonlyArray1<'py, i64>,
+    fverts: PyReadonlyArray1<'py, i64>,
+    f_key: PyReadonlyArray1<'py, i64>,
+    csize: PyReadonlyArray1<'py, f64>,
+    face_ok: PyReadonlyArray1<'py, bool>,
+    push: f64,
+) -> PyResult<(
+    Vec<i64>,
+    Vec<i64>,
+    Bound<'py, PyArray2<f64>>,
+    Vec<f64>,
+    Bound<'py, PyArray2<f64>>,
+    Vec<i64>,
+    Vec<(i64, i64, i64)>,
+    Bound<'py, PyArray2<f64>>,
+    Vec<f64>,
+    Vec<(i64, i64)>,
+)> {
+    let p = crate::points(&points)?;
+    let phi = phi.as_slice()?;
+    let cptr = cptr.as_slice()?;
+    let fptr = fptr.as_slice()?;
+    let fverts = fverts.as_slice()?;
+    let f_key = f_key.as_slice()?;
+    let csize = csize.as_slice()?;
+    let fok = face_ok.as_slice()?;
+    let (mut dcell, mut dfid, mut dctr, mut dtol, mut dsamp, mut dgrp) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let (mut ekeys, mut esamp, mut etol, mut eends) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let mut seen: FxSet<(i64, i64, i64)> = FxSet::default();
+    for &ci in &cells {
+        let (fa, fb) = (cptr[ci] as usize, cptr[ci + 1] as usize);
+        let h = csize[ci];
+        let mut cc: Option<V3> = None;
+        for f in fa..fb {
+            if !fok[f] {
+                continue;
+            }
+            let fid = f_key[f];
+            let poly = &fverts[fptr[f] as usize..fptr[f + 1] as usize];
+            let m = poly.len();
+            let z: Vec<bool> = poly.iter().map(|&v| phi[v as usize] == 0.0).collect();
+            if z.iter().all(|&x| x) {
+                let q: Vec<V3> = poly.iter().map(|&v| p[v as usize]).collect();
+                let cf = mean(&q);
+                let x: Vec<V3> = q.iter().map(|&a| sub(a, cf)).collect();
+                let t: Vec<V3> = (0..m).map(|k| cross(x[k], x[(k + 1) % m])).collect();
+                let mut nrm = rows_sum(&t);
+                let nn = norm1(nrm);
+                if nn == 0.0 {
+                    continue;
+                }
+                nrm = [nrm[0] / nn, nrm[1] / nn, nrm[2] / nn];
+                let c = *cc.get_or_insert_with(|| {
+                    let all: Vec<V3> = (fptr[fa] as usize..fptr[fb] as usize).map(|j| p[fverts[j] as usize]).collect();
+                    mean(&all)
+                });
+                if dot1(sub(c, cf), nrm) < 0.0 {
+                    nrm = [-nrm[0], -nrm[1], -nrm[2]];
+                }
+                let g = dcell.len() as i64;
+                dcell.push(ci as i64);
+                dfid.push(fid);
+                dctr.push(cf);
+                dtol.push(h);
+                let s = 0.1 * h;
+                let off = [s * nrm[0], s * nrm[1], s * nrm[2]];
+                dsamp.push([cf[0] + off[0], cf[1] + off[1], cf[2] + off[2]]);
+                dgrp.push(g);
+                for a in &q {
+                    let y = [0.5 * (a[0] + cf[0]), 0.5 * (a[1] + cf[1]), 0.5 * (a[2] + cf[2])];
+                    dsamp.push([y[0] + off[0], y[1] + off[1], y[2] + off[2]]);
+                    dgrp.push(g);
+                }
+                continue;
+            }
+            let nz = z.iter().filter(|&&x| x).count();
+            let neg = poly.iter().any(|&v| phi[v as usize] < 0.0);
+            let pos = poly.iter().any(|&v| phi[v as usize] > 0.0);
+            if nz < 2 || !neg || !pos {
+                continue;
+            }
+            let mut cf: Option<V3> = None;
+            for k in 0..m {
+                let (a, b) = (poly[k], poly[(k + 1) % m]);
+                if !(z[k] && z[(k + 1) % m]) {
+                    continue;
+                }
+                let key = if a < b { (fid, a, b) } else { (fid, b, a) };
+                if !seen.insert(key) {
+                    continue;
+                }
+                let c = *cf.get_or_insert_with(|| {
+                    let q: Vec<V3> = poly.iter().map(|&v| p[v as usize]).collect();
+                    mean(&q)
+                });
+                let (pa, pb) = (p[a as usize], p[b as usize]);
+                let mid = [0.5 * (pa[0] + pb[0]), 0.5 * (pa[1] + pb[1]), 0.5 * (pa[2] + pb[2])];
+                ekeys.push(key);
+                esamp.push([
+                    mid[0] + push * (c[0] - mid[0]),
+                    mid[1] + push * (c[1] - mid[1]),
+                    mid[2] + push * (c[2] - mid[2]),
+                ]);
+                etol.push(h);
+                eends.push((a, b));
+            }
+        }
+    }
+    Ok((
+        dcell,
+        dfid,
+        crate::vec3_array(py, dctr)?,
+        dtol,
+        crate::vec3_array(py, dsamp)?,
+        dgrp,
+        ekeys,
+        crate::vec3_array(py, esamp)?,
+        etol,
+        eends,
+    ))
 }
