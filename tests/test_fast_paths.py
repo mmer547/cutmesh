@@ -221,7 +221,7 @@ class RustCutKernel(unittest.TestCase):
 
         class Hidden:                          # the extension without the stage-A kernels
             def __getattr__(self, k):
-                if k in ("merge_wall_faces", "contact_candidates"):
+                if k in ("merge_wall_faces", "contact_candidates", "surface_contact_samples"):
                     raise AttributeError(k)
                 return getattr(real, k)
         with mock.patch.object(mesher, "_rust_cut_ok", lambda ctx, hk: False), \
