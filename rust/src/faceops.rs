@@ -171,3 +171,39 @@ pub fn leaf_min<'py>(
     });
     Ok(r.into_pyarray(py))
 }
+
+/// per leaf of `leaves`: the mean of the points at the vertex occurrences of its faces,
+/// added in order from 0 and divided by their number (np.bincount per coordinate, then
+/// divided by the counts)
+#[pyfunction]
+pub fn leaf_mean<'py>(
+    py: Python<'py>,
+    points: numpy::PyReadonlyArray2<'py, f64>,
+    leaves: PyReadonlyArray1<'py, i64>,
+    vptr: PyReadonlyArray1<'py, i64>,
+    fverts: PyReadonlyArray1<'py, i64>,
+) -> PyResult<Bound<'py, numpy::PyArray2<f64>>> {
+    let p = crate::points(&points)?;
+    let (lv, vp, fv) = (leaves.as_slice()?, vptr.as_slice()?, fverts.as_slice()?);
+    if lv.iter().any(|&c| c < 0 || c as usize + 1 >= vp.len()) || *vp.last().unwrap_or(&0) as usize > fv.len()
+        || fv.iter().any(|&v| v < 0 || v as usize >= p.len())
+    {
+        return Err(pyo3::exceptions::PyValueError::new_err("inconsistent leaf arrays"));
+    }
+    let r: Vec<crate::V3> = py.detach(|| {
+        lv.par_iter()
+            .map(|&c| {
+                let occ = &fv[vp[c as usize] as usize..vp[c as usize + 1] as usize];
+                let mut s = [0.0f64; 3];
+                for &v in occ {
+                    for k in 0..3 {
+                        s[k] += p[v as usize][k];
+                    }
+                }
+                let n = occ.len() as f64;
+                [s[0] / n, s[1] / n, s[2] / n]
+            })
+            .collect()
+    });
+    crate::vec3_array(py, r)
+}

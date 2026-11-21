@@ -1072,6 +1072,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<TriMesh>()?;
     m.add_class::<SegSet>()?;
     m.add_class::<dcut::CutKernel>()?;
+    m.add_class::<dcut::CutCaches>()?;
     m.add_class::<featclip::PlaneClipRs>()?;
     m.add_function(wrap_pyfunction!(merge::merge_cells, m)?)?;
     m.add_function(wrap_pyfunction!(merge::merge_cells_csr, m)?)?;
@@ -1098,5 +1099,6 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(faceops::leaf_any, m)?)?;
     m.add_function(wrap_pyfunction!(faceops::leaf_vertices, m)?)?;
     m.add_function(wrap_pyfunction!(faceops::leaf_min, m)?)?;
+    m.add_function(wrap_pyfunction!(faceops::leaf_mean, m)?)?;
     Ok(())
 }
