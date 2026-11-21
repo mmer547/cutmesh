@@ -15,6 +15,7 @@ mod dcut;
 mod merge;
 mod layers;
 mod octree;
+mod quality;
 
 pub(crate) type V3 = [f64; 3];
 
@@ -1011,6 +1012,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(merge::pyset_order, m)?)?;
     m.add_function(wrap_pyfunction!(face_geometry, m)?)?;
     m.add_function(wrap_pyfunction!(cell_geometry, m)?)?;
+    m.add_function(wrap_pyfunction!(quality::quality_metrics, m)?)?;
     m.add_function(wrap_pyfunction!(poly_cell, m)?)?;
     m.add_function(wrap_pyfunction!(cut::cut_batch, m)?)?;
     m.add_function(wrap_pyfunction!(layers::jacobi_band, m)?)?;
