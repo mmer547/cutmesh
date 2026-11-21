@@ -1,0 +1,103 @@
+{
+ "name": "scale",
+ "description": "Speed at scale on public data: the tilted stirred tank (exact feature cut, cylindrical rotating zone), the closest public stand-in for the real target. tilted_1m for every change; tilted_8m (about 46 GB of memory) for the end-to-end check. Run with -j 1, compare with --baseline benchmark/baselines/scale.json --same-mesh.",
+ "defaults": {
+  "meshDict": {
+   "surfaceRefinement": {
+    "default": 1,
+    "impeller": 3,
+    "shaft": 2
+   },
+   "featureLevel": 2,
+   "bufferLayers": 2,
+   "snapTolerance": 0.3,
+   "mergeRatio": 0.25,
+   "patchTypes": {
+    "top": "wall"
+   },
+   "rotatingZones": [
+    {
+     "name": "rotor",
+     "cylinder": {
+      "point1": [
+       0,
+       0,
+       0.06
+      ],
+      "point2": [
+       0,
+       0,
+       0.14
+      ],
+      "radius": 0.07
+     },
+     "surfaceLevel": 2,
+     "volumeLevel": 2,
+     "omega": 31.416
+    }
+   ]
+  },
+  "expect": "valid",
+  "timeout": 3600
+ },
+ "cases": [
+  {
+   "name": "tilted_1m",
+   "stl": "../../examples/stirred_tank/tank_tilted.stl",
+   "note": "tilted stirred tank, about 1M cells",
+   "meshDict": {
+    "baseCellSize": 0.0052,
+    "rotatingZones": [
+     {
+      "name": "rotor",
+      "cylinder": {
+       "point1": [
+        0.017676683,
+        -0.018660344,
+        0.054215555
+       ],
+       "point2": [
+        0.041245594,
+        -0.043540803,
+        0.126502962
+       ],
+       "radius": 0.07
+      },
+      "surfaceLevel": 2,
+      "volumeLevel": 2,
+      "omega": 31.416
+     }
+    ]
+   }
+  },
+  {
+   "name": "tilted_8m",
+   "stl": "../../examples/stirred_tank/tank_tilted.stl",
+   "note": "tilted stirred tank, about 8M cells (needs about 46 GB)",
+   "meshDict": {
+    "baseCellSize": 0.0024,
+    "rotatingZones": [
+     {
+      "name": "rotor",
+      "cylinder": {
+       "point1": [
+        0.017676683,
+        -0.018660344,
+        0.054215555
+       ],
+       "point2": [
+        0.041245594,
+        -0.043540803,
+        0.126502962
+       ],
+       "radius": 0.07
+      },
+      "surfaceLevel": 2,
+      "volumeLevel": 2,
+      "omega": 31.416
+     }
+    ]
+   }
+  }
+ ]
+}
