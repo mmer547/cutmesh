@@ -57,6 +57,63 @@ class OpenCellEdges(unittest.TestCase):
         self.assertEqual(got, open_edges_brute(faces, own, nei))
 
 
+@unittest.skipUnless(hasattr(geometry._core, "quality_metrics"), "Rust quality checks not built")
+class RustQuality(unittest.TestCase):
+    def compare_metrics(self, P, faces, own, nei):
+        ff = quality.FlatFaces(faces)
+        cf, sf = quality.face_geometry(P, ff)
+        n_cells = int(max(own.max(), nei.max() if len(nei) else 0)) + 1
+        c, _ = quality.cell_geometry(n_cells, own, nei, cf, sf)
+        area = np.linalg.norm(sf, axis=1)
+        # Both paths start from the same centres/areas, just as in the old Rust build.
+        ref = quality._quality_metrics_py(P, ff, own, nei, cf, sf, c, area)
+        got = geometry._core.quality_metrics(P, ff.ptr, ff.v, own, nei, cf, sf, c, area)
+        for name, a, b in zip(("closed", "open", "duplicates", "cosine", "skew", "pyramids", "tets"),
+                              got, ref):
+            np.testing.assert_array_equal(a, b, err_msg=name)
+        return got
+
+    def test_warped_grid_and_boundary_only(self):
+        rng = np.random.default_rng(17)
+        for n in (1, 5):
+            P, faces, own, nei, *_ = hex_grid(n)
+            P += rng.normal(0, 0.35, P.shape)
+            with self.subTest(n=n):
+                self.compare_metrics(P, faces, own, nei)
+
+    def test_broken_and_duplicate_edges(self):
+        P, (_, verts), own, nei, *_ = hex_grid(2)
+        faces = verts.reshape(-1, 4).tolist()
+        faces[0].reverse()                       # internal face, both cell sides
+        faces[1].pop()
+        faces[-1].append(faces[-1][-1])           # a zero-length edge
+        faces.append(faces[-1][:])
+        got = self.compare_metrics(P, faces, np.append(own, own[-1]), nei)
+        for i in (1, 2, 5, 6):
+            self.assertGreater(got[i], 0)
+
+    def test_empty_face_accepted(self):
+        # face_geometry accepts a face without vertices, so the report must not fail on it.
+        P, faces, own, nei, *_ = hex_grid(2)
+        faces = [list(f) for f in quality.FlatFaces(faces).v.reshape(-1, 4)]
+        faces.append([])
+        res = quality.check(P, faces, np.append(own, own[-1]), nei, log=None)
+        self.assertEqual(res["nFaces"], len(faces))
+        self.assertEqual(res["openCellEdges"], 0)
+
+    def test_report_without_extension(self):
+        P, faces, own, nei, *_ = hex_grid(2)
+        ff = quality.FlatFaces(faces)
+        fast = quality.check(P, ff, own, nei, log=None)
+        with mock.patch.object(quality, "_core", None):
+            slow = quality.check(P, ff, own, nei, log=None)
+        self.assertEqual(fast.keys(), slow.keys())
+        for key in fast:
+            if key != "_ff":
+                np.testing.assert_array_equal(fast[key], slow[key], err_msg=key)
+        self.assertIs(fast["_ff"], ff)
+
+
 class SurfaceSamples(unittest.TestCase):
     def test_same_points_without_repeats(self):
         rng = np.random.default_rng(0)
