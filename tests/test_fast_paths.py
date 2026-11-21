@@ -290,6 +290,30 @@ class NumpyOrder(unittest.TestCase):
         s = a * a
         np.testing.assert_array_equal(np.linalg.norm(a, axis=1), np.sqrt((s[:, 0] + s[:, 1]) + s[:, 2]))
 
+    def test_matmul_shapes(self):
+        # (m, 3) @ (3, k) (as X @ n[pl].T in featclip): per element fma(a2,b2, fma(a1,b1,
+        # a0 b0)) when m, k >= 2 or m = k = 1, else fma(a2,b2, fma(a0,b0, a1 b1))
+        # (featclip.rs mm)
+        from fractions import Fraction as F
+
+        def fma(x, y, z):
+            return float(F(x) * F(y) + F(z))
+        rng = np.random.default_rng(13)
+        N = rng.normal(size=(40, 3))
+        N /= np.linalg.norm(N, axis=1)[:, None]
+        for m in (1, 2, 3, 8, 72, 130):
+            for k in (1, 2, 3, 7):
+                X = rng.normal(size=(m, 3)) * rng.uniform(0, 10, (m, 1))
+                pl = rng.choice(40, k, replace=False)
+                Y = X @ N[pl].T
+                chain = (m >= 2 and k >= 2) or (m == 1 and k == 1)
+                for i in range(m):
+                    for j in range(k):
+                        a, b = X[i], N[pl][j]
+                        ref = (fma(a[2], b[2], fma(a[1], b[1], a[0] * b[0])) if chain
+                               else fma(a[2], b[2], fma(a[0], b[0], a[1] * b[1])))
+                        self.assertEqual(Y[i, j], ref, (m, k))
+
     def test_vector_products(self):
         # 1-D np.dot (and np.linalg.norm = its square root) is fma(a2,b2, fma(a1,b1, a0 b0));
         # a row of an (m, 3) @ (3,) product with m >= 2 is fma(a2,b2, fma(a0,b0, a1 b1))
