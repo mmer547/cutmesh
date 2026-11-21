@@ -44,6 +44,20 @@ class PlaneClip:
         self.face_cache = {}
         self.face_planes = {}
         self.zero_edge = {}          # the level-set cut's classification of zero-zero edges
+        self._rs = None
+
+    def attach_rust(self, core):
+        """Do planes, groups, the convexity tests, clip_face and ls_compatible in Rust
+        (featclip.rs, the same results).  The points and the level set are read now:
+        call once they are final, before any face is clipped."""
+        if (core is None or not hasattr(core, "PlaneClipRs") or getattr(self.dom, "_rs", None) is None
+                or self.face_cache):
+            return
+        self._rs = core.PlaneClipRs(self.dom._rs, np.ascontiguousarray(self.n, float),
+                                    np.ascontiguousarray(self.d, float), float(self.eps), float(self.hmin),
+                                    float(self.cos_feat), np.ascontiguousarray(self.pts, float),
+                                    np.ascontiguousarray(self.phi, float), dict(self.zero_edge))
+        self.face_planes = _RsFacePlanes(self._rs)
 
     # ------------------------------------------------------------ planes near a point
     def tris_near(self, c, r):
@@ -63,6 +77,8 @@ class PlaneClip:
 
     def planes(self, tris):
         """one triangle per plane (the lowest id), in id order"""
+        if self._rs is not None:
+            return self._rs.planes([int(t) for t in tris])
         keep = []
         for t in tris.tolist():
             if not any(abs(self.d[t] - self.d[k]) < self.eps and self.n[t] @ self.n[k] > 1 - 1e-12
@@ -73,6 +89,8 @@ class PlaneClip:
     def groups(self, pl):
         """group index per plane: planes meeting at less than the feature angle (a
         faceted curved wall) are one group, transitively"""
+        if self._rs is not None:
+            return np.array(self._rs.groups([int(t) for t in pl]), np.int64)
         g = list(range(len(pl)))
 
         def find(i):
@@ -99,6 +117,8 @@ class PlaneClip:
         along the crease, where the level-set cut with its feature hooks gives the
         layers a cleaner wall.  Flat walls meeting, or one curved wall (the apex of a
         cone), are clipped."""
+        if self._rs is not None:
+            return self._rs.convex_at(np.ascontiguousarray(P, float), float(r))
         c = P.mean(0)
         tris = self.tris_near(c, r)
         if not len(tris):
@@ -124,6 +144,8 @@ class PlaneClip:
         out = [False] * n
         if not n:
             return out
+        if self._rs is not None:
+            return list(self._rs.convex_many([np.ascontiguousarray(P, float) for P in Ps], [float(r) for r in rs]))
         C = np.array([P.mean(0) for P in Ps])
         rs = np.asarray(rs, float)
         dom = self.dom
@@ -172,6 +194,8 @@ class PlaneClip:
         ('v', id) an original vertex, ('e', lo, hi, k) where plane k crosses the original
         edge lo-hi, or ('f', fid, k1, k2, ...) a point inside the face on several planes.
         Cached per face (the reversed list for the other cell)."""
+        if self._rs is not None:
+            return self._rs.clip_face(int(fid), [int(v) for v in poly])
         key = fid
         hit = self.face_cache.get(key)
         if hit is not None:
@@ -303,6 +327,8 @@ class PlaneClip:
         vertex in the solid the whole face, with none in the fluid nothing, otherwise the
         vertices with phi <= 0 and the crossings of the edges from phi < 0 to phi > 0,
         joined by straight chords (no crease inside the face)."""
+        if self._rs is not None:
+            return self._rs.ls_compatible(int(fid), [int(v) for v in poly])
         recs, _ = self.clip_face(fid, poly)
         ph = self.phi[poly]
         if not (ph > 0).any():
@@ -324,6 +350,17 @@ class PlaneClip:
         got_v = {r[1] for r in recs if r[0] == "v"}
         got_e = [(r[1], r[2]) for r in recs if r[0] == "e"]
         return got_v == want_v and len(got_e) == len(want_e) and set(got_e) == want_e
+
+
+class _RsFacePlanes:
+    """PlaneClip.face_planes of the Rust clip: the planes of each clipped face"""
+
+    def __init__(self, rs):
+        self.rs = rs
+
+    def get(self, fid, default=None):
+        v = self.rs.face_planes(int(fid))
+        return default if v is None else v
 
 
 def clipped_face(pc, ctx, fid, poly, alloc):

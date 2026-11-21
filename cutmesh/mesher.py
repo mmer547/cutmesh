@@ -2366,6 +2366,7 @@ def generate(cfg, log=print):
                         m_ = mv[phi_z[i][mv] != 0]
                         if len(m_):
                             phi_z[i][m_] = z["geom"].sdf(pts[m_])
+            pc.attach_rust(_core)              # points and level set are final now
             ko = _argsort_stable(f_key)
             ks = f_key[ko]
 
