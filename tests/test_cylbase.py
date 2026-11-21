@@ -105,6 +105,15 @@ class AutoLayout(unittest.TestCase):
         core, blocks = auto_layout(0.01, 0.015)
         self.assertEqual(core["halfWidth"], 0.0075)
         self.assertEqual(blocks, [{"rOuter": 0.015, "nr": 1}])
+        # just outside the O-grid circle: no thin ring, the O-grid ends at r_outer
+        for r_out, avoid in [(1.60001, [0.9333433333333334]), (1.65, []), (2.05, [])]:
+            core, blocks = auto_layout(1.0, r_out, avoid)
+            self.assertEqual(len(blocks), 1)
+            self.assertEqual(blocks[0]["rOuter"], r_out)
+            self.assertGreater(r_out, core["halfWidth"] * math.sqrt(2) * 1.01)
+            self.assertLessEqual((r_out - core["halfWidth"]) / blocks[0]["nr"], AUTO_DR)
+        _, blocks = auto_layout(1.0, 2.2)                  # room for one more ring
+        self.assertEqual(len(blocks), 2)
 
 
 class CylindricalBase(unittest.TestCase):
@@ -138,6 +147,16 @@ class CylindricalBase(unittest.TestCase):
 
     def test_blocks_with_refinement(self):
         self.check(*self.mesh(True), vol_tol=1e-3)
+
+    def test_radii_checked(self):
+        for radii, msg in [([0.01, 0.03, 0.05, 0.07], "from 0.06"),          # not the block's ends
+                           ([0.06, 0.09, 0.08, 0.11], "must increase"),
+                           ([0.06, 0.08, 0.11], "nr + 1 = 4")]:
+            layout = {"core": MANUAL["core"],
+                      "blocks": [MANUAL["blocks"][0], {"rOuter": 0.11, "nr": 3, "nTheta": 40, "radii": radii}]}
+            with self.assertRaises(ValueError) as cm:
+                self.mesh(False, layout=layout)
+            self.assertIn(msg, str(cm.exception))
 
     def test_automatic_layout(self):
         # no core / blocks: 2 x 2 core and polar blocks out to the STL radius + 2/3 cell.

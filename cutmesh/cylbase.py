@@ -96,8 +96,9 @@ def auto_layout(h, r_outer, avoid=()):
     ok = [t for t, v in zip(cands, sc) if v >= 0.25]
     a = ok[0] if ok else cands[int(np.argmax(sc))]
     r1 = 2 * a
-    if r_outer <= r1 * (1 + 1e-9):
-        return {"halfWidth": a, "n": 2}, [{"rOuter": r_outer, "nr": 1}]
+    if r_outer - r1 < 0.5 * h:      # no room for another ring: the O-grid ends at r_outer
+        nr0 = max(1, int(math.ceil((r_outer - a) / (AUTO_DR * h) - 1e-6)))
+        return {"halfWidth": a, "n": 2}, [{"rOuter": r_outer, "nr": nr0}]
     # fixed circles: the O-grid circle, the outer one, a layer h deep around each cylinder
     tol = 1e-6 * h
     anchors = [r1, r_outer]
@@ -347,10 +348,13 @@ class CylindricalBase:
             if avoid:
                 log("cylindrical base: coaxial radii kept off the circles of nodes: "
                     + ", ".join(f"{x:g}" for x in sorted(set(round(x, 9) for x in avoid))))
+            def sig(v):             # 7 significant digits, whatever the units
+                return float(f"{v:.7g}")
             log("cylindrical base: automatic layout for cells of " + f"{h:g}: \"core\": "
-                + json.dumps(core) + ", \"blocks\": " + json.dumps(
-                    [{k: (round(v, 6) if isinstance(v, float) else
-                          [round(x, 6) for x in v] if isinstance(v, list) else v) for k, v in b.items()}
+                + json.dumps({k: (sig(v) if isinstance(v, float) else v) for k, v in core.items()})
+                + ", \"blocks\": " + json.dumps(
+                    [{k: (sig(v) if isinstance(v, float) else
+                          [sig(x) for x in v] if isinstance(v, list) else v) for k, v in b.items()}
                      for b in blocks]))
         a = float(core["halfWidth"])
         nc = int(core["n"])
@@ -418,9 +422,13 @@ class CylindricalBase:
             radii = None
             if "radii" in b:            # radial nodes (the automatic layout's, or by hand)
                 radii = np.array(b["radii"], float)
-                if len(radii) != nr + 1 or np.any(np.diff(radii) <= 0):
-                    raise ValueError(f"baseMesh: block {k + 1}: radii must be nr + 1 = {nr + 1} increasing radii")
+                tol = 1e-3 * (R[k] - R[k - 1])      # the logged layout is rounded
+                if len(radii) != nr + 1 or abs(radii[0] - R[k - 1]) > tol or abs(radii[-1] - R[k]) > tol:
+                    raise ValueError(f"baseMesh: block {k + 1}: radii must be nr + 1 = {nr + 1} radii "
+                                     f"from {R[k - 1]:g} (the block inside's rOuter) to {R[k]:g}")
                 radii[0], radii[-1] = R[k - 1], R[k]
+                if np.any(np.diff(radii) <= 0):
+                    raise ValueError(f"baseMesh: block {k + 1}: radii must increase")
             # default: cells about as wide around as across (refinement goes by the
             # longest edge, so elongated base cells end up over-refined)
             dr = (R[k] - R[k - 1]) / nr
