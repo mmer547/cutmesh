@@ -1,10 +1,12 @@
 """Faster code paths that must give the same answers as the plain ones: the open cell
-edge count of the quality check, duplicate-free surface sampling, sorted-query search.
+edge count of the quality check, duplicate-free surface sampling, sorted-query search,
+and the Rust octree stages (2:1 balance, polyhedral cells, leaf validity).
 
 python -m unittest discover -s tests
 """
-import io
 import contextlib
+import copy
+import io
 import os
 import sys
 import unittest
@@ -14,7 +16,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from cutmesh import geometry, quality                          # noqa: E402
+from cutmesh import geometry, mesher, octree, quality          # noqa: E402
 from test_polymesh_io import hex_grid                           # noqa: E402
 
 
@@ -79,6 +81,61 @@ class SortedSearch(unittest.TestCase):
         for n in (10, 100000):
             v = rng.integers(-5, 10 ** 9 + 5, (n, 2))
             np.testing.assert_array_equal(geometry.searchsorted(a, v), np.searchsorted(a, v))
+
+
+def random_octree(n, L, periodic, seed, frac=0.15):
+    rng = np.random.default_rng(seed)
+    oc = octree.Octree(np.zeros(3), 1.0, n, L, periodic)
+    for lv in range(L):
+        oc.split((oc.lev == lv) & (rng.random(len(oc.lev)) < frac))
+    return oc
+
+
+CASES = [((3, 4, 5), 3, (False, False, False), 0), ((4, 3, 6), 3, (False, True, False), 1),
+         ((5, 5, 5), 4, (True, False, True), 2), ((8, 7, 6), 4, (False, False, False), 3)]
+
+
+@unittest.skipUnless(geometry.rust_available() and hasattr(geometry._core, "build_cells"),
+                     "Rust extension not built")
+class RustOctree(unittest.TestCase):
+    """the Rust balance / build_cells / leaf test give exactly the arrays of the NumPy code"""
+
+    def test_balance(self):
+        for args in CASES:
+            a = random_octree(*args)
+            b = copy.deepcopy(a)
+            la, lb = [], []
+            a._balance_py(la.append)
+            b.balance(lb.append)
+            np.testing.assert_array_equal(a.ijk, b.ijk)
+            np.testing.assert_array_equal(a.lev, b.lev)
+            self.assertEqual(la, lb)
+
+    def test_build_cells(self):
+        for args in CASES:
+            oc = random_octree(*args)
+            oc.balance(lambda s: None)
+            A, B = oc._build_cells_py(), oc.build_cells()
+            self.assertEqual(sorted(A), sorted(B))
+            for k in A:
+                np.testing.assert_array_equal(np.asarray(A[k]), np.asarray(B[k]), err_msg=k)
+
+    def test_leaf_bad(self):
+        rng = np.random.default_rng(5)
+        for args in CASES:
+            oc = random_octree(*args)
+            oc.balance(lambda s: None)
+            M = oc.build_cells()
+            leaves = np.arange(len(oc.lev))
+            for amp in (0.05, 0.3, 0.6):
+                P = M["points"] + rng.normal(0, amp / 2 ** oc.Lmax, M["points"].shape)
+                fa = rng.random(len(P)) < 0.3
+                for flat, ang in ((None, 2.0), (fa, 2.0), (fa, -1.0)):
+                    a = mesher._leaf_bad_py(P, leaves, M["fptr"], M["fverts"], M["cell_fptr"],
+                                            M["cell_size"], flat, ang)
+                    b = mesher._leaf_bad(P, leaves, M["fptr"], M["fverts"], M["cell_fptr"],
+                                         M["cell_size"], flat, ang)
+                    np.testing.assert_array_equal(a, b)
 
 
 if __name__ == "__main__":

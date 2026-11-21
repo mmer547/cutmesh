@@ -418,6 +418,16 @@ def _leaf_bad(P, leaves, fptr, fverts, cptr, csize, flat_at=None, flat_angle=2.0
     """octree leaves (with moved vertices) where some face does not clearly see the
     cell centre - non-convex or inverted.  flat_at: vertices (mask) that must also keep
     a face corner (not pushed straight, at flat_angle degrees or less)"""
+    if _core is not None and hasattr(_core, "leaf_bad"):
+        return _core.leaf_bad(np.ascontiguousarray(P, float), np.asarray(leaves, np.int64),
+                              np.asarray(fptr, np.int64), np.asarray(fverts, np.int64),
+                              np.asarray(cptr, np.int64), np.ascontiguousarray(csize, float),
+                              None if flat_at is None else np.ascontiguousarray(flat_at, bool),
+                              float(np.sin(np.radians(flat_angle))))
+    return _leaf_bad_py(P, leaves, fptr, fverts, cptr, csize, flat_at, flat_angle)
+
+
+def _leaf_bad_py(P, leaves, fptr, fverts, cptr, csize, flat_at=None, flat_angle=2.0):
     occs = np.concatenate([np.arange(cptr[c], cptr[c + 1]) for c in leaves.tolist()])
     lens = cptr[leaves + 1] - cptr[leaves]
     owner_ = np.repeat(np.arange(len(leaves)), lens)
@@ -771,6 +781,17 @@ def _unique_points(p):
     return p[o[keep]]
 
 
+def _nearest_in(pts, keep, q):
+    """cKDTree(pts).query(q) over the points of the mask keep only: (distance, index into
+    pts).  A tree over all the vertices costs more than the few queries it answers; the
+    callers keep every vertex that can be near enough to matter (inf, 0 when none)."""
+    idx = np.flatnonzero(keep)
+    if not len(idx):
+        return np.full(len(q), np.inf), np.zeros(len(q), np.int64)
+    d, j = cKDTree(pts[idx]).query(q)
+    return d, idx[j]
+
+
 def _points_kd(p):
     """KD-tree for nearest-distance queries of the sample points p (distances only).
     Sliding-midpoint splits without shrinking the node boxes build ~2.5x faster than
@@ -1084,6 +1105,13 @@ def _thin_gap(dom, p, into, tg, eps, max_steps=512):
     Marches by the distance to the STL - no wall can be closer, so none is skipped; a step
     falls back to eps only where the walk grazes another wall, and there the inside test
     still catches any wall thicker than eps.  Returns (mask, n_unresolved)."""
+    if dom._rs is not None and hasattr(dom._rs, "thin_gap"):     # per sample, in parallel
+        return dom._rs.thin_gap(np.ascontiguousarray(p, float), np.ascontiguousarray(into, float),
+                                float(tg), float(eps), int(max_steps))
+    return _thin_gap_py(dom, p, into, tg, eps, max_steps)
+
+
+def _thin_gap_py(dom, p, into, tg, eps, max_steps=512):
     thin = np.zeros(len(p), bool)
     t = np.full(len(p), eps)
     act = np.nonzero(dom.inside(p + eps * into))[0]
@@ -1282,8 +1310,8 @@ def generate(cfg, log=print):
             # them are strongly non-orthogonal.  Split it: the level transition moves off
             # the wall, into whole cells.
             c = oc.centers(); hl = oc.leaf_sizes()
-            near = (oc.lev < Lmax) & (dom.approx_distance(c, upper=float(hl.max()) + dom._rmax)
-                                      < 0.9 * hl + dom._rmax)
+            near = oc.lev < Lmax
+            near[near] = dom.approx_below(c[near], 0.9 * hl[near] + dom._rmax)
             cand = np.nonzero(near)[0]
             fr, cut = _fluid_fraction(dom, c[cand], hl[cand])
             cand = cand[cut & (fr > 0) & (fr < thr)]
@@ -1369,6 +1397,11 @@ def generate(cfg, log=print):
     no_free = np.zeros(len(pts), bool)     # free projections that broke a cell: not allowed
     msgs = []
     occ_leaf = np.repeat(f_cell, fn)
+    leaf_vptr = fptr[cptr[:-1]]                 # vertex occurrences by leaf (each has faces)
+
+    def leaf_any(m):
+        """per leaf: some vertex of its faces in the mask m"""
+        return np.logical_or.reduceat(m[fverts], leaf_vptr)
 
     def side_width(kv, side):
         """Thickness of the fluid (side -1) / solid (side 1) at the vertices kv, from the
@@ -1398,9 +1431,8 @@ def generate(cfg, log=print):
         on = []
         lim = np.where(no_far, tol_f, tol_f2)
         if len(feat.corners):
-            kd = cKDTree(pts)
-            d, j = kd.query(feat.corners)
-            del kd
+            # a vertex within lim of a corner (on the surface) is within lim of the surface
+            d, j = _nearest_in(pts, np.abs(phi) < 2 * float(lim.max()) + hmin, feat.corners)
             for ci_, (dd, jj) in enumerate(zip(d.tolist(), j.tolist())):
                 if movable[jj] and not snapped[jj] and dd < lim[jj]:
                     far_snap[jj] = dd >= tol_f[jj]
@@ -1423,8 +1455,7 @@ def generate(cfg, log=print):
             cand = movable & ~snapped & (phi > 0) & (phi < 2 * tol_cc + hmin)
             c_sel, c_X, c_d = [], [], []
             if len(concave.corners):
-                kd = cKDTree(pts)
-                d, j = kd.query(concave.corners)
+                d, j = _nearest_in(pts, np.abs(phi) < 2 * float(lim.max()) + hmin, concave.corners)
                 for X, dd, jj in zip(concave.corners, d.tolist(), j.tolist()):
                     if cand[jj] and dd < lim[jj]:
                         c_sel.append(jj); c_X.append(X); c_d.append(dd); cand[jj] = False
@@ -1434,7 +1465,8 @@ def generate(cfg, log=print):
             ok = d < lim[sel]
             if ok.any():
                 dn, _ = cKDTree(pts[sel[ok]]).query(cp[ok])       # nearest solid candidate
-                d0, _ = cKDTree(np.concatenate([pts, c_X])).query(cp[ok])   # a vertex there already
+                d0, _ = _nearest_in(np.concatenate([pts, c_X]),               # a vertex there already
+                                    np.concatenate([np.abs(phi) < hmin, np.ones(len(c_X), bool)]), cp[ok])
                 ok[ok] = (d[ok] <= dn * (1 + 1e-9)) & (d0 > 1e-6 * hmin)
             sel, cp, d = sel[ok], cp[ok], d[ok]
             _, first = np.unique(np.round(cp / (1e-6 * hmin)).astype(np.int64), axis=0, return_index=True)
@@ -1447,10 +1479,7 @@ def generate(cfg, log=print):
             # or fin narrower than ~1.5 cells) would vanish there.  Those are not snapped.
             gone = (phi0 > 0) & (phi <= 0)
             gone[sel] = True
-            nkeep = np.bincount(occ_leaf, ((phi0 > 0) & ~gone)[fverts], nleaf)
-            nfluid = np.bincount(occ_leaf, (phi0 < 0)[fverts], nleaf)
-            nlost = np.bincount(occ_leaf, gone[fverts], nleaf)
-            lost = (nlost > 0) & (nkeep == 0) & (nfluid > 0)
+            lost = leaf_any(gone) & ~leaf_any((phi0 > 0) & ~gone) & leaf_any(phi0 < 0)
             nthin = 0
             if lost.any():
                 occ = lost[occ_leaf]
@@ -1489,10 +1518,7 @@ def generate(cfg, log=print):
         for side, label in ((-1.0, "fluid vertices to the middle of thin gaps"),
                             (1.0, "solid vertices to the middle of thin walls")):
             on = side * phi_d > 0
-            nside = np.bincount(occ_leaf, on[fverts], nleaf)
-            nkeep = np.bincount(occ_leaf, (on & ~snap)[fverts], nleaf)
-            nother = np.bincount(occ_leaf, (-side * phi_d > 0)[fverts], nleaf)
-            lost = (nside > 0) & (nkeep == 0) & (nother > 0)
+            lost = leaf_any(on) & ~leaf_any(on & ~snap) & leaf_any(-side * phi_d > 0)
             if not lost.any():
                 continue
             occ = lost[occ_leaf]
@@ -1542,7 +1568,7 @@ def generate(cfg, log=print):
                 sel, cp, d = sel[ok], cp[ok], d[ok]
             if len(sel):
                 dn, _ = cKDTree(pts[sel]).query(cp)               # nearest candidate
-                d0, _ = cKDTree(pts).query(cp)                    # a vertex there already
+                d0, _ = _nearest_in(pts, np.abs(phi_d) < hmin, cp)   # a vertex there already
                 ok = (d <= dn * (1 + 1e-9)) & (d0 > 1e-6 * hmin)
                 sel, cp, d = sel[ok], cp[ok], d[ok]
                 _, first = np.unique(np.round(cp / (1e-6 * hmin)).astype(np.int64), axis=0, return_index=True)

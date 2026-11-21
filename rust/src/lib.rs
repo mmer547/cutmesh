@@ -12,6 +12,7 @@ use rayon::prelude::*;
 
 mod cut;
 mod layers;
+mod octree;
 
 pub(crate) type V3 = [f64; 3];
 
@@ -550,6 +551,60 @@ impl TriMesh {
         Ok(r.into_pyarray(py))
     }
 
+    /// thin_gap(p[n, 3], into[n, 3], tg, eps, max_steps) -> (thin[n], n_unresolved):
+    /// mesher._thin_gap for each sample on its own (the same probes and steps)
+    fn thin_gap<'py>(
+        &self,
+        py: Python<'py>,
+        p: PyReadonlyArray2<'py, f64>,
+        into: PyReadonlyArray2<'py, f64>,
+        tg: f64,
+        eps: f64,
+        max_steps: usize,
+    ) -> PyResult<(Bound<'py, PyArray1<bool>>, usize)> {
+        let pts = points(&p)?;
+        let dir = points(&into)?;
+        if dir.len() != pts.len() {
+            return Err(pyo3::exceptions::PyValueError::new_err("p and into differ in length"));
+        }
+        let res: Vec<(bool, bool)> = py.detach(|| {
+            pts.par_iter()
+                .zip(dir.par_iter())
+                .map(|(&p, &n)| {
+                    // (thin, still unresolved)
+                    if !self.inside_one(axpy(p, eps, n)) {
+                        return (false, false);
+                    }
+                    for k in 1..9 {
+                        if !self.inside_one(axpy(p, k as f64 * tg / 8.0, n)) {
+                            return (true, false);
+                        }
+                    }
+                    let r = 0.5 * (tg - eps);
+                    if !(self.closest_one(axpy(p, eps + r, n)).0.sqrt() < r) {
+                        return (false, false);
+                    }
+                    let mut t = eps;
+                    for _ in 0..max_steps {
+                        let q = axpy(p, t, n);
+                        if !self.inside_one(q) {
+                            return (true, false);
+                        }
+                        let d = self.closest_one(q).0.sqrt();
+                        t += if d > eps { d } else { eps };
+                        if !(t < tg) {
+                            return (false, false);
+                        }
+                    }
+                    (false, true)
+                })
+                .collect()
+        });
+        let nun = res.iter().filter(|r| r.1).count();
+        let thin: Vec<bool> = res.into_iter().map(|r| r.0).collect();
+        Ok((thin.into_pyarray(py), nun))
+    }
+
     fn __len__(&self) -> usize {
         self.t.len()
     }
@@ -898,5 +953,8 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cut::cut_batch, m)?)?;
     m.add_function(wrap_pyfunction!(layers::jacobi_band, m)?)?;
     m.add_function(wrap_pyfunction!(layers::cells_bad, m)?)?;
+    m.add_function(wrap_pyfunction!(octree::build_cells, m)?)?;
+    m.add_function(wrap_pyfunction!(octree::balance, m)?)?;
+    m.add_function(wrap_pyfunction!(octree::leaf_bad, m)?)?;
     Ok(())
 }
