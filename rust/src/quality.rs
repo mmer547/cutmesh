@@ -35,7 +35,8 @@ struct Faces<'a> {
 impl Faces<'_> {
     fn edges(&self, f: usize) -> impl Iterator<Item = (i64, i64)> + '_ {
         let v = &self.verts[self.ptr[f] as usize..self.ptr[f + 1] as usize];
-        v.iter().copied().zip(v[1..].iter().chain(&v[..1]).copied())
+        // Empty faces (accepted by face_geometry) have no edges.
+        v.iter().copied().zip(v.iter().skip(1).chain(v.first()).copied())
     }
 }
 
@@ -183,7 +184,7 @@ pub fn quality_metrics<'py>(
     if faces.ptr.len() != nf + 1
         || faces.ptr[0] != 0
         || faces.ptr[nf] != faces.verts.len() as i64
-        || faces.ptr.windows(2).any(|p| p[0] >= p[1])
+        || faces.ptr.windows(2).any(|p| p[0] > p[1])
         || faces.verts.iter().any(|&v| v as usize >= points.len())
     {
         return Err(PyValueError::new_err("inconsistent face vertices"));
@@ -197,43 +198,46 @@ pub fn quality_metrics<'py>(
         return Err(PyValueError::new_err("inconsistent face or cell data"));
     }
 
-    let (ptr, incident) = cell_faces(centres.len(), own, nei);
-    let (closed, open, duplicates) = ptr
-        .par_windows(2)
-        .map_init(Vec::new, |edges, p| {
-            cell_checks(&faces, &incident[p[0]..p[1]], sf, area, edges)
-        })
-        .reduce(
-            || (0.0, 0, 0),
-            |a, b| (maximum(a.0, b.0), a.1 + b.1, a.2 + b.2),
-        );
-    let cosang: Vec<_> = nei
-        .par_iter()
-        .enumerate()
-        .map(|(f, &n)| {
-            let d = sub(centres[n as usize], centres[own[f] as usize]);
-            einsum3(d, sf[f]) / maximum(norm(d) * area[f], 1e-300)
-        })
-        .collect();
-    let mut skew = vec![0.0; nf];
-    let (pyramids, tets) = skew
-        .par_iter_mut()
-        .enumerate()
-        .map(|(f, out)| {
-            let (sk, p, t) = face_checks(
-                points,
-                &faces,
-                f,
-                cf[f],
-                sf[f],
-                area[f],
-                centres[own[f] as usize],
-                nei.get(f).map(|&c| centres[c as usize]),
+    let ((closed, open, duplicates), cosang, skew, (pyramids, tets)) = py.detach(|| {
+        let (ptr, incident) = cell_faces(centres.len(), own, nei);
+        let cells = ptr
+            .par_windows(2)
+            .map_init(Vec::new, |edges, p| {
+                cell_checks(&faces, &incident[p[0]..p[1]], sf, area, edges)
+            })
+            .reduce(
+                || (0.0, 0, 0),
+                |a, b| (maximum(a.0, b.0), a.1 + b.1, a.2 + b.2),
             );
-            *out = sk;
-            (p, t)
-        })
-        .reduce(|| (0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
+        let cosang: Vec<_> = nei
+            .par_iter()
+            .enumerate()
+            .map(|(f, &n)| {
+                let d = sub(centres[n as usize], centres[own[f] as usize]);
+                einsum3(d, sf[f]) / maximum(norm(d) * area[f], 1e-300)
+            })
+            .collect();
+        let mut skew = vec![0.0; nf];
+        let counts = skew
+            .par_iter_mut()
+            .enumerate()
+            .map(|(f, out)| {
+                let (sk, p, t) = face_checks(
+                    points,
+                    &faces,
+                    f,
+                    cf[f],
+                    sf[f],
+                    area[f],
+                    centres[own[f] as usize],
+                    nei.get(f).map(|&c| centres[c as usize]),
+                );
+                *out = sk;
+                (p, t)
+            })
+            .reduce(|| (0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
+        (cells, cosang, skew, counts)
+    });
     Ok((
         closed,
         open,

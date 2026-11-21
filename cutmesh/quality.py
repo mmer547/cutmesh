@@ -155,7 +155,7 @@ def _quality_metrics_py(points, ff, owner, neighbour, Cf, Sf, C, magSf):
     neg_own = np.minimum.reduceat(vo, ff.ptr[:-1]) <= 0
     iv = ff.fid < nI
     vn = np.einsum("ij,ij->i", tri_n[iv], e[iv] - C[neighbour[ff.fid[iv]]]) / 3.0
-    neg_nei = np.zeros(len(owner), bool)
+    neg_nei = np.zeros(len(ff.n), bool)
     if nI:
         neg_nei[:nI] = np.maximum.reduceat(vn, ff.ptr[:nI]) >= 0
     # checkMesh's face-pyramid test uses the whole face (area vector + centre)
@@ -190,9 +190,10 @@ def check(points, faces, owner, neighbour, log=print):
     # Keep NumPy's vector acos and reductions for bit-identical reports.
     nonorth = np.degrees(np.arccos(np.clip(cosang, -1, 1)))
     skew, skew_b = sk[:nI], sk[nI:]
-    nB = len(owner) - nI
+    nF = len(ff.n)
+    nB = nF - nI
     res.update(
-        nPoints=len(points), nCells=nC, nFaces=len(owner), nInternalFaces=nI,
+        nPoints=len(points), nCells=nC, nFaces=nF, nInternalFaces=nI,
         upperTriangular=ok_ut and ok_order,
         maxClosedness=max_closed,
         openCellEdges=open_edges, duplicateCellEdges=dup,
@@ -211,7 +212,7 @@ def check(points, faces, owner, neighbour, log=print):
     res["_ff"] = ff; res["_Cf"] = Cf; res["_Sf"] = Sf
     if log:
         log("  checkMesh-style report")
-        log(f"    points {res['nPoints']}, cells {nC}, faces {len(owner)} (internal {nI})")
+        log(f"    points {res['nPoints']}, cells {nC}, faces {nF} (internal {nI})")
         log(f"    upper-triangular order: {'OK' if res['upperTriangular'] else 'FAILED'}")
         log(f"    cell closedness max {res['maxClosedness']:.2e}, open cell edges {open_edges}")
         log(f"    volume min {res['minVol']:.3e} max {res['maxVol']:.3e} total {res['totalVol']:.6e}"

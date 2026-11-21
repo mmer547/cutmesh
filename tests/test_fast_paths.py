@@ -92,6 +92,15 @@ class RustQuality(unittest.TestCase):
         for i in (1, 2, 5, 6):
             self.assertGreater(got[i], 0)
 
+    def test_empty_face_accepted(self):
+        # face_geometry accepts a face without vertices, so the report must not fail on it.
+        P, faces, own, nei, *_ = hex_grid(2)
+        faces = [list(f) for f in quality.FlatFaces(faces).v.reshape(-1, 4)]
+        faces.append([])
+        res = quality.check(P, faces, np.append(own, own[-1]), nei, log=None)
+        self.assertEqual(res["nFaces"], len(faces))
+        self.assertEqual(res["openCellEdges"], 0)
+
     def test_report_without_extension(self):
         P, faces, own, nei, *_ = hex_grid(2)
         ff = quality.FlatFaces(faces)
