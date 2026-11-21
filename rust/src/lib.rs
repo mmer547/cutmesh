@@ -1025,6 +1025,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(wallmerge::merge_wall_faces, m)?)?;
     m.add_function(wrap_pyfunction!(contact::contact_candidates, m)?)?;
     m.add_function(wrap_pyfunction!(contact::surface_contact_samples, m)?)?;
+    m.add_function(wrap_pyfunction!(contact::split_samples, m)?)?;
     m.add_function(wrap_pyfunction!(sortutil::argsort_stable, m)?)?;
     Ok(())
 }
