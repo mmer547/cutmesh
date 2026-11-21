@@ -381,6 +381,22 @@ def make_feature_hook(feat, h_of_cell, min_bend=0.03, reach=0.75):
         h = h_of_cell[state["cell"]]
         if state.get("forbid"):
             return [loop]
+        if _core is not None and hasattr(_core, "feature_hook") and getattr(feat, "_rs", None) is not None:
+            # the same hook in Rust (fhook.rs): the same polygons and new points
+            polys, newp, newf, did, fan = _core.feature_hook(
+                feat._rs, np.ascontiguousarray(feat.corners, float).reshape(-1, 3), [int(v) for v in loop],
+                np.array([ctx.pos[v] for v in loop], float).reshape(-1, 3), [v in ctx.onfeat for v in loop],
+                len(ctx.pos), float(h), float(reach), float(min_bend))
+            for x in newp:
+                vid = len(ctx.pos)
+                ctx.pos.append(list(x)); ctx.phi.append(0.0)
+                ctx.new_vertices.append(vid); ctx.new_parents.append((-1, -1))
+            for v in newf:
+                ctx.onfeat.add(v)
+            state["n"] += int(fan)
+            if did:
+                state["did"] = True
+            return polys
         sp = _split_on_features(ctx, loop, feat, h)
         if sp is not None:
             state["did"] = True

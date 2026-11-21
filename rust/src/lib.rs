@@ -21,6 +21,7 @@ mod sortutil;
 mod csr;
 mod faceops;
 mod featclip;
+mod fhook;
 mod quality;
 mod sampling;
 
@@ -723,6 +724,15 @@ impl TriMesh {
 
 // ------------------------------------------------------------------------- SegSet
 impl SegSet {
+    /// closest point and distance (exactly as closest() gives them)
+    pub(crate) fn closest_pd(&self, q: V3) -> (V3, f64) {
+        let r = self.bvh.closest(q, |i| {
+            let c = closest_seg(q, self.s[i][0], self.s[i][1]);
+            (dist2(q, c), c)
+        });
+        (r.1, r.0.sqrt())
+    }
+
     /// distance to the closest point (exactly as closest() gives it)
     pub(crate) fn closest_d(&self, q: V3) -> f64 {
         self.bvh
@@ -1100,5 +1110,6 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(faceops::leaf_vertices, m)?)?;
     m.add_function(wrap_pyfunction!(faceops::leaf_min, m)?)?;
     m.add_function(wrap_pyfunction!(faceops::leaf_mean, m)?)?;
+    m.add_function(wrap_pyfunction!(fhook::feature_hook_py, m)?)?;
     Ok(())
 }
