@@ -336,7 +336,9 @@ impl CutKernel {
                     .collect()
             })
         };
-        let mut out = Vec::with_capacity(n);
+        // ids in item order (sequential), then the results renumbered in parallel
+        let mut out: Vec<Option<(Vec<Key3>, bool)>> = vec![None; n];
+        let mut pending: Vec<(usize, CellRes, Vec<Key3>, Vec<i64>, Vec<i64>)> = Vec::new();
         for (k, s) in sym.into_iter().enumerate() {
             let ok = match &s {
                 Some((_, _, ev, np_)) => self.check_sym(ev, np_),
@@ -344,14 +346,26 @@ impl CutKernel {
             };
             if ok {
                 let (res, used, events, newpos) = s.unwrap();
-                let (r, u) = self.replay(res, used, events, newpos);
-                self.res[k] = Some(r);
-                out.push((u, false));
+                let (vmap, fmap) = self.replay_ids(events, &newpos);
+                pending.push((k, res, used, vmap, fmap));
             } else {
-                out.extend(self.cut(py, vec![k], vec![false])?);
+                out[k] = self.cut(py, vec![k], vec![false])?.pop();
             }
         }
-        Ok(out)
+        let mapped: Vec<(usize, CellRes, Vec<Key3>)> = py.detach(|| {
+            pending
+                .into_par_iter()
+                .map(|(k, res, used, vmap, fmap)| {
+                    let (r, u) = Self::map_result(res, used, &vmap, &fmap);
+                    (k, r, u)
+                })
+                .collect()
+        });
+        for (k, r, u) in mapped {
+            self.res[k] = Some(r);
+            out[k] = Some((u, false));
+        }
+        Ok(out.into_iter().map(|o| o.unwrap()).collect())
     }
 
     fn result(&self, k: usize) -> PyResult<CellRes> {
@@ -1325,8 +1339,9 @@ impl CutKernel {
         true
     }
 
-    /// apply a checked symbolic cut to the state: (results, used keys) with real ids
-    fn replay(&mut self, res: CellRes, used: Vec<Key3>, events: Vec<Ev>, newpos: Vec<V3>) -> (CellRes, Vec<Key3>) {
+    /// apply a checked symbolic cut's id requests to the state: the real ids of its new
+    /// points (vmap) and new faces (fmap), in the order of the sequential cut
+    fn replay_ids(&mut self, events: Vec<Ev>, newpos: &[V3]) -> (Vec<i64>, Vec<i64>) {
         let mut vmap: Vec<i64> = Vec::with_capacity(newpos.len());
         let mut fmap: Vec<i64> = Vec::new();
         let rk = |(f, a, b): Key3, vmap: &[i64]| key3(f, Self::real_v(a, vmap), Self::real_v(b, vmap));
@@ -1387,6 +1402,12 @@ impl CutKernel {
                 Ev::New => fmap.push(self.new_face_id()),
             }
         }
+        (vmap, fmap)
+    }
+
+    /// a symbolic cut's results and used keys with the real ids (no state involved)
+    fn map_result(res: CellRes, used: Vec<Key3>, vmap: &[i64], fmap: &[i64]) -> (CellRes, Vec<Key3>) {
+        let rk = |(f, a, b): Key3| key3(f, Self::real_v(a, vmap), Self::real_v(b, vmap));
         let map_comps = |comps: Vec<Vec<Face>>| -> Vec<Vec<Face>> {
             comps
                 .into_iter()
@@ -1394,13 +1415,13 @@ impl CutKernel {
                     comp.into_iter()
                         .map(|(f, p)| {
                             let f = if f < 0 { fmap[(-f - 1) as usize] } else { f };
-                            (f, p.into_iter().map(|v| Self::real_v(v, &vmap)).collect())
+                            (f, p.into_iter().map(|v| Self::real_v(v, vmap)).collect())
                         })
                         .collect()
                 })
                 .collect()
         };
-        let used = used.into_iter().map(|k| rk(k, &vmap)).collect();
+        let used = used.into_iter().map(rk).collect();
         ((map_comps(res.0), map_comps(res.1)), used)
     }
 }
