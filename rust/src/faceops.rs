@@ -135,3 +135,39 @@ pub fn leaf_vertices<'py>(
     out.dedup();
     Ok(out.into_pyarray(py))
 }
+
+/// per leaf: the smallest value at the vertex occurrences of its faces
+/// (np.minimum.reduceat over the faces, then over the leaves; vptr[i]..vptr[i+1] the
+/// leaf's occurrences, all non-empty).  NaN wins, as in np.minimum.
+#[pyfunction]
+pub fn leaf_min<'py>(
+    py: Python<'py>,
+    vals: PyReadonlyArray1<'py, f64>,
+    vptr: PyReadonlyArray1<'py, i64>,
+    fverts: PyReadonlyArray1<'py, i64>,
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    let (x, vp, fv) = (vals.as_slice()?, vptr.as_slice()?, fverts.as_slice()?);
+    if vp.is_empty() || *vp.last().unwrap() as usize > fv.len() || vp.windows(2).any(|w| w[1] <= w[0])
+        || fv.iter().any(|&v| v < 0 || v as usize >= x.len())
+    {
+        return Err(pyo3::exceptions::PyValueError::new_err("inconsistent leaf arrays"));
+    }
+    let r: Vec<f64> = py.detach(|| {
+        (0..vp.len() - 1)
+            .into_par_iter()
+            .map(|c| {
+                let mut m = f64::INFINITY;
+                for &v in &fv[vp[c] as usize..vp[c + 1] as usize] {
+                    let y = x[v as usize];
+                    if y.is_nan() || m.is_nan() {
+                        m = f64::NAN;
+                    } else if y < m {
+                        m = y;
+                    }
+                }
+                m
+            })
+            .collect()
+    });
+    Ok(r.into_pyarray(py))
+}
