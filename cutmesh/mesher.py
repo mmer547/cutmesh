@@ -557,6 +557,25 @@ def _join_cell_faces(P, polys, cmin, cpart, flat_tol):
 
 
 def merge_coplanar_wall_faces(P, nn, vv, owner, nI, patches, max_angle=5.0):
+    """Join the boundary faces of one cell that lie in one plane (see
+    _merge_coplanar_wall_faces_py; the Rust kernel gives the same faces)."""
+    if _core is None or not hasattr(_core, "merge_wall_faces"):
+        return _merge_coplanar_wall_faces_py(P, nn, vv, owner, nI, patches, max_angle)
+    cmin = np.cos(np.radians(max_angle))
+    cpart = np.cos(np.radians(0.5 * max_angle))
+    flat_tol = 0.25 * np.sin(np.radians(max_angle))
+    nn2, vv2, ow2, counts, joined = _core.merge_wall_faces(
+        np.ascontiguousarray(P, float), np.ascontiguousarray(nn, np.int64), np.ascontiguousarray(vv, np.int64),
+        np.ascontiguousarray(owner, np.int64), int(nI), [int(p["startFace"]) for p in patches],
+        [int(p["nFaces"]) for p in patches], float(cmin), float(cpart), float(flat_tol))
+    new_p, start = [], nI
+    for p, nf in zip(patches, counts):
+        new_p.append(dict(p, startFace=start, nFaces=nf))
+        start += nf
+    return nn2, vv2, ow2, new_p, joined
+
+
+def _merge_coplanar_wall_faces_py(P, nn, vv, owner, nI, patches, max_angle=5.0):
     """Join the boundary faces of one cell that lie in one plane, belong to one patch and
     share edges into a single face.  Cut cells can carry a flat wall split into several
     faces; a piece off to the side of a thin cell has its centre far off the cell
@@ -725,13 +744,29 @@ def surface_contact(dom, pts, phi, cells, faces_of, csize, push=0.2, face_ok=Non
     return zero_edge, drop
 
 
-def contact_splits(dom, pts, phi, cells, faces_of, csize):
+def contact_splits(dom, pts, phi, cells, faces_of, csize, csr=None):
     """Faces partly in the fluid and partly lying on the wall: vertices with phi < 0 and
     a contiguous run of >= 3 surface vertices (phi == 0), e.g. the face on the wall
     plane at a hole rim, between the rim vertices and the wall.  Kept whole, the cell
     below keeps a solid wedge (the rim is chamfered).  They are split along the chord
     between the ends of the run (existing vertices, so both cells agree) into a fluid
-    part and a contact part.  Returns {face id: (poly, fluid part, contact part, h)}."""
+    part and a contact part.  Returns {face id: (poly, fluid part, contact part, h)}.
+    csr: (cptr, fptr, fverts, f_key) of the cells: the candidates are found in Rust."""
+    if csr is not None and _core is not None and hasattr(_core, "contact_candidates"):
+        cptr, fptr, fverts, f_key = csr
+        keys, polys, rest, run, hs, ca, cb, wa, wb = _core.contact_candidates(
+            np.ascontiguousarray(pts, float), np.ascontiguousarray(phi, float), [int(c) for c in cells],
+            np.ascontiguousarray(cptr, np.int64), np.ascontiguousarray(fptr, np.int64),
+            np.ascontiguousarray(fverts, np.int64), np.ascontiguousarray(f_key, np.int64),
+            np.ascontiguousarray(csize, float))
+        if not keys:
+            return {}
+        h = np.array(hs)
+        ends = np.array([[r[0], r[-1]] for r in run])
+        sd = dom.sdf(np.concatenate([ca, cb]))
+        _, de, _ = dom.closest(pts[ends.ravel()])
+        ok = _contact_ok(sd, de, h, np.array(wa), np.array(wb))
+        return {f: (p, a, b, x) for f, p, a, b, x, o in zip(keys, polys, rest, run, hs, ok.tolist()) if o}
     cand = {}
     for ci in cells:
         for fid, p in faces_of(ci):
@@ -769,12 +804,18 @@ def contact_splits(dom, pts, phi, cells, faces_of, csize):
 
     wa = np.array([width(cand[f][1]) for f in keys])
     wb = np.array([width(cand[f][2]) for f in keys])
-    # the contact part on the wall, or in the solid (the wedge at a concave edge, cut
-    # off by the chord through the vertex on the edge)
-    ok = (sd[:len(keys)] < -1e-3 * h) & ((np.abs(sd[len(keys):]) < 0.02 * h) | (sd[len(keys):] > 0.02 * h)) \
-        & (de.reshape(-1, 2) < 1e-3 * h[:, None]).all(1) \
-        & (wa > 0.05 * h) & (wb > 0.1 * h)        # a real contact area, not a sliver along the edge
+    ok = _contact_ok(sd, de, h, wa, wb)
     return {f: cand[f] for f, o in zip(keys, ok) if o}
+
+
+def _contact_ok(sd, de, h, wa, wb):
+    """contact_splits: the fluid part in the fluid, the contact part on the wall or in the
+    solid (the wedge at a concave edge, cut off by the chord through the vertex on the
+    edge), both run ends on the wall, and a real contact area (not a sliver along the edge)"""
+    n = len(h)
+    return (sd[:n] < -1e-3 * h) & ((np.abs(sd[n:]) < 0.02 * h) | (sd[n:] > 0.02 * h)) \
+        & (de.reshape(-1, 2) < 1e-3 * h[:, None]).all(1) \
+        & (wa > 0.05 * h) & (wb > 0.1 * h)
 
 
 def _same_orientation(p, q):
@@ -1935,7 +1976,8 @@ def generate(cfg, log=print):
     log(f"surface contact: {sum(v == 1 for v in ctx.zero_edge.values())} face edges in the solid,"
         f" {sum(len(s) for s in drop.values())} wall faces dropped from solid-side cells")
     # faces partly on the wall: split; the contact part is kept by the fluid-side cell
-    splits = contact_splits(dom, pts, phi_d, [c for c in cl + cb if c_cs[c]], leaf_faces, csize)
+    splits = contact_splits(dom, pts, phi_d, [c for c in cl + cb if c_cs[c]], leaf_faces, csize,
+                            csr=(cptr, fptr, fverts, f_key))
     split_keep = {}
     if splits:
         sk = np.array(list(splits), np.int64)

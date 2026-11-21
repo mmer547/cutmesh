@@ -269,7 +269,7 @@ impl CutKernel {
 }
 
 /// numpy's pairwise sum of a 1-D float64 array (np.sum / ndarray.sum)
-fn np_sum(a: &[f64]) -> f64 {
+pub(crate) fn np_sum(a: &[f64]) -> f64 {
     let n = a.len();
     if n < 8 {
         let mut r = 0.0;
