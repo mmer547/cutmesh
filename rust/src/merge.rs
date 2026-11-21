@@ -8,6 +8,7 @@
 
 use numpy::{PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
+use rayon::prelude::*;
 
 use crate::cut::{Face, FxMap, FxSet};
 use crate::{face_cs, sub, V3};
@@ -159,7 +160,9 @@ struct Merger<'a> {
     kb1: &'a [i64],
     kb2: &'a [i64],
     np_: i64,
-    occ: FxMap<i64, Vec<i64>>,
+    // face id -> pieces holding it (in piece order): ids sorted, and their pieces
+    occ_k: Vec<i64>,
+    occ_p: Vec<i64>,
     parent: Vec<i64>,
     members: FxMap<i64, Vec<i64>>,
     bulk_members: FxMap<i64, Vec<i64>>,
@@ -200,12 +203,12 @@ impl Merger<'_> {
     }
 
     fn face_neighbour(&mut self, fid: i64, me: &[i64]) -> i64 {
-        if let Some(o) = self.occ.get(&fid).cloned() {
-            for q in o {
-                let r = self.find(q);
-                if !me.contains(&r) {
-                    return r;
-                }
+        let a = self.occ_k.partition_point(|&k| k < fid);
+        let b = self.occ_k.partition_point(|&k| k <= fid);
+        for j in a..b {
+            let r = self.find(self.occ_p[j]);
+            if !me.contains(&r) {
+                return r;
             }
         }
         if (fid as usize) < self.kb1.len() && fid >= 0 {
@@ -305,26 +308,110 @@ pub fn merge_cells(
     cos_lim: f64,
 ) -> PyResult<MergeOut> {
     let pos = crate::points(&points)?;
+    merge_core(
+        &pos, pieces, &zone_of, bulk_zone.as_slice()?, cptr.as_slice()?, fptr.as_slice()?, fverts.as_slice()?,
+        fkey.as_slice()?, kb1.as_slice()?, kb2.as_slice()?, &small, nsmall, gvol, &hexvol, beta, &hpiece, cos_lim,
+    )
+}
+
+/// merge_cells with the pieces as flat arrays: piece i has the faces pfptr[i]..pfptr[i+1],
+/// face f has the id pkey[f] and the vertices pverts[pvptr[f]..pvptr[f+1]]
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+pub fn merge_cells_csr(
+    points: PyReadonlyArray2<f64>,
+    pfptr: PyReadonlyArray1<i64>,
+    pkey: PyReadonlyArray1<i64>,
+    pvptr: PyReadonlyArray1<i64>,
+    pverts: PyReadonlyArray1<i64>,
+    zone_of: PyReadonlyArray1<i64>,
+    bulk_zone: PyReadonlyArray1<i64>,
+    cptr: PyReadonlyArray1<i64>,
+    fptr: PyReadonlyArray1<i64>,
+    fverts: PyReadonlyArray1<i64>,
+    fkey: PyReadonlyArray1<i64>,
+    kb1: PyReadonlyArray1<i64>,
+    kb2: PyReadonlyArray1<i64>,
+    small: PyReadonlyArray1<i64>,
+    nsmall: usize,
+    gvol: PyReadonlyArray1<f64>,
+    hexvol: PyReadonlyArray1<f64>,
+    beta: f64,
+    hpiece: PyReadonlyArray1<f64>,
+    cos_lim: f64,
+) -> PyResult<MergeOut> {
+    let pos = crate::points(&points)?;
+    let (pf, pk, pvp, pv) = (pfptr.as_slice()?, pkey.as_slice()?, pvptr.as_slice()?, pverts.as_slice()?);
+    let bad = pf.is_empty()
+        || pf.windows(2).any(|w| w[1] < w[0])
+        || *pf.last().unwrap() as usize > pk.len()
+        || pvp.len() != pk.len() + 1
+        || pvp.windows(2).any(|w| w[1] < w[0])
+        || *pvp.last().unwrap_or(&0) as usize > pv.len();
+    if bad {
+        return Err(pyo3::exceptions::PyValueError::new_err("inconsistent piece arrays"));
+    }
+    let pieces: Vec<Vec<Face>> = (0..pf.len() - 1)
+        .into_par_iter()
+        .map(|i| {
+            (pf[i] as usize..pf[i + 1] as usize)
+                .map(|f| (pk[f], pv[pvp[f] as usize..pvp[f + 1] as usize].to_vec()))
+                .collect()
+        })
+        .collect();
+    merge_core(
+        &pos, pieces, zone_of.as_slice()?, bulk_zone.as_slice()?, cptr.as_slice()?, fptr.as_slice()?,
+        fverts.as_slice()?, fkey.as_slice()?, kb1.as_slice()?, kb2.as_slice()?, small.as_slice()?, nsmall,
+        gvol.as_slice()?.to_vec(), hexvol.as_slice()?, beta, hpiece.as_slice()?, cos_lim,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn merge_core(
+    pos: &[V3],
+    pieces: Vec<Vec<Face>>,
+    zone_of: &[i64],
+    bz: &[i64],
+    cp: &[i64],
+    fp: &[i64],
+    fv: &[i64],
+    fk: &[i64],
+    k1: &[i64],
+    k2: &[i64],
+    small: &[i64],
+    nsmall: usize,
+    gvol: Vec<f64>,
+    hexvol: &[f64],
+    beta: f64,
+    hpiece: &[f64],
+    cos_lim: f64,
+) -> PyResult<MergeOut> {
     let np_ = pieces.len();
-    let (bz, cp, fp, fv, fk, k1, k2) =
-        (bulk_zone.as_slice()?, cptr.as_slice()?, fptr.as_slice()?, fverts.as_slice()?, fkey.as_slice()?, kb1.as_slice()?, kb2.as_slice()?);
     let bad = |c: bool| if c { Err(pyo3::exceptions::PyValueError::new_err("inconsistent merge data")) } else { Ok(()) };
     bad(zone_of.len() != np_ || gvol.len() != np_ || hexvol.len() != np_ || hpiece.len() != np_ || k1.len() != k2.len())?;
-    bad(pieces.iter().flatten().any(|(_, p)| p.iter().any(|&v| v < 0 || v as usize >= pos.len())))?;
-    bad(fv.iter().any(|&v| v < 0 || v as usize >= pos.len()) || cp.len() != bz.len() + 1)?;
+    bad(pieces.par_iter().flatten().any(|(_, p)| p.iter().any(|&v| v < 0 || v as usize >= pos.len())))?;
+    bad(fv.par_iter().any(|&v| v < 0 || v as usize >= pos.len()) || cp.len() != bz.len() + 1)?;
     bad(*cp.last().unwrap_or(&0) as usize >= fp.len() || fk.len() + 1 < fp.len() || *fp.last().unwrap_or(&0) as usize > fv.len())?;
-    bad(small.iter().any(|&s| s < 0 || s as usize >= np_))?;
+    bad(small.iter().any(|&s| s < 0 || s as usize >= np_) || nsmall > small.len())?;
     bad(k1.iter().chain(k2.iter()).any(|&b| b >= bz.len() as i64))?;
-    let mut occ: FxMap<i64, Vec<i64>> = FxMap::default();
+    // face id -> pieces, sorted by id (stable: pieces in order)
+    let mut fl_k: Vec<i64> = Vec::new();
+    let mut fl_p: Vec<i64> = Vec::new();
     for (pi, fl) in pieces.iter().enumerate() {
         for (fid, _) in fl {
-            occ.entry(*fid).or_default().push(pi as i64);
+            fl_k.push(*fid);
+            fl_p.push(pi as i64);
         }
     }
+    let mut idx: Vec<usize> = (0..fl_k.len()).collect();
+    idx.par_sort_by_key(|&i| fl_k[i]);
+    let occ_k: Vec<i64> = idx.iter().map(|&i| fl_k[i]).collect();
+    let occ_p: Vec<i64> = idx.iter().map(|&i| fl_p[i]).collect();
+    drop((fl_k, fl_p, idx));
     let mut m = Merger {
-        pos: &pos,
+        pos,
         pieces: &pieces,
-        zone_of: &zone_of,
+        zone_of,
         bulk_zone: bz,
         cptr: cp,
         fptr: fp,
@@ -333,7 +420,8 @@ pub fn merge_cells(
         kb1: k1,
         kb2: k2,
         np_: np_ as i64,
-        occ,
+        occ_k,
+        occ_p,
         parent: (0..np_ as i64).collect(),
         members: FxMap::default(),
         bulk_members: FxMap::default(),
