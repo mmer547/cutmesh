@@ -53,6 +53,31 @@ class RustMatchesPython(unittest.TestCase):
     def test_sdf(self):
         np.testing.assert_allclose(self.dom.sdf(self.X), self.python_surface().sdf(self.X), atol=1e-12)
 
+    @unittest.skipUnless(hasattr(getattr(G._core, "TriMesh", None), "centroid_search"), "Rust centroid index not built")
+    def test_centroid_thresholds(self):
+        ref = self.python_surface()
+        pts = self.X[::11]
+        dist = ref.approx_distance(pts)
+        self.assertEqual(self.dom._rmax, ref._rmax)
+        for threshold in (0.0, 0.001, np.inf, np.nextafter(dist, 0), dist, np.nextafter(dist, np.inf)):
+            np.testing.assert_array_equal(self.dom.approx_below(pts, threshold), dist < threshold)
+        self.assertEqual(self.dom.approx_below(pts[:0], 0.01).shape, (0,))
+
+    @unittest.skipUnless(hasattr(getattr(G._core, "TriMesh", None), "centroid_search"), "Rust centroid index not built")
+    def test_rebuild_centroid_index(self):
+        # A single triangle with tied longest edges, at nonzero world coordinates.
+        t = np.array([[[5., 6., 7.], [6., 7., 7.], [6., 6., 8.]]])
+        s = G.Surface([("wall", t)])
+        for spacing in (0.24, 2.0):
+            s.build_search(spacing)
+            pieces, _ = G.subdivide_triangles(t, spacing)
+            centres = pieces.mean(1)
+            self.assertEqual(s._rmax, np.linalg.norm(pieces - centres[:, None], axis=2).max())
+            np.testing.assert_array_equal(s.approx_below(centres, 1e-12), True)
+            np.testing.assert_array_equal(s.approx_below(centres, 0.0), False)
+            # Requesting distances after a rebuild must use this spacing as well.
+            np.testing.assert_array_equal(s.approx_distance(centres), 0.0)
+
     @unittest.skipUnless(hasattr(getattr(G._core, "TriMesh", None), "samples"), "Rust sampling not built")
     def test_ordered_surface_samples(self):
         ref = self.python_surface()
