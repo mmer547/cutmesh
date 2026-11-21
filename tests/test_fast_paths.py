@@ -352,7 +352,7 @@ class RustCutKernel(unittest.TestCase):
             def __getattr__(self, k):
                 if k in ("merge_wall_faces", "contact_candidates", "surface_contact_samples",
                          "split_samples", "cut_batch_csr", "face_sign_counts", "vertex_min",
-                         "leaf_any", "leaf_vertices", "finer_face_neighbour", "leaf_min",
+                         "leaf_any", "leaf_vertices", "finer_face_neighbour", "leaf_min", "leaf_mean",
                          "PlaneClipRs"):
                     raise AttributeError(k)
                 return getattr(real, k)
@@ -570,6 +570,14 @@ class RustFaceOps(unittest.TestCase):
             x[rng.random(nv) < 0.01] = np.nan
             np.testing.assert_array_equal(geometry._core.leaf_min(x, vptr, fverts),
                                           np.minimum.reduceat(np.minimum.reduceat(x[fverts], fptr[:-1]), cptr[:-1]))
+            P = rng.normal(size=(nv, 3)) * 10.0
+            lv = np.sort(rng.choice(len(cptr) - 1, 40, replace=False)).astype(np.int64)
+            occ = np.concatenate([np.arange(vptr[c], vptr[c + 1]) for c in lv])
+            own = np.repeat(np.arange(len(lv)), vptr[lv + 1] - vptr[lv])
+            X = P[fverts[occ]]
+            ref = np.stack([np.bincount(own, X[:, k], len(lv)) for k in range(3)], 1)
+            ref /= np.bincount(own, minlength=len(lv))[:, None]
+            np.testing.assert_array_equal(geometry._core.leaf_mean(P, lv, vptr, fverts), ref)
 
 
 @unittest.skipUnless(geometry.rust_available() and hasattr(geometry._core, "PlaneClipRs"),

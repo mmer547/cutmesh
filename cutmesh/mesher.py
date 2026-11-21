@@ -964,6 +964,36 @@ class _HookCtx:
         self.new_vertices, self.new_parents = [], []
 
 
+class _LazyMap:
+    """a dict over a Python dict and, for the keys it does not have, a lookup function
+    (the Rust kernel's caches): get, [], in and assignment (into the dict)"""
+
+    def __init__(self, d, lookup):
+        self.d, self.lookup = d, lookup
+
+    def get(self, k, default=None):
+        v = self.d.get(k)
+        if v is not None or k in self.d:
+            return v
+        v = self.lookup(k)
+        return default if v is None else v
+
+    def __getitem__(self, k):
+        v = self.get(k, _LazyMap)
+        if v is _LazyMap:
+            raise KeyError(k)
+        return v
+
+    def __contains__(self, k):
+        return self.get(k, _LazyMap) is not _LazyMap
+
+    def __setitem__(self, k, v):
+        self.d[k] = v
+
+    def update(self, other):
+        self.d.update(other)
+
+
 class _FaceOcc:
     """{face id: [pieces holding it]} (pieces in order, a piece once per face it has)
     looked up in the sorted face ids instead of a dict built over every face"""
@@ -1032,7 +1062,12 @@ def _cut_with_fallback_rs(ctx, items, shared_cap, hk, csize, P0, max_iter=4, lea
                         float(hook.reach) if hook is not None else 0.0,
                         np.ascontiguousarray(csize, float), pinch_cb, cap_cb, float(ctx.pinch_min_area))
     del Pa, pa
-    if leaf_csr is not None:
+    if leaf_csr is not None and hasattr(K, "set_items_leaves"):
+        cptr_, fptr_, fverts_, f_key_ = leaf_csr
+        K.set_items_leaves(np.fromiter((ci for _, ci in items), np.int64, count=len(items)),
+                           cptr_, fptr_, fverts_, f_key_,
+                           [(k, fl) for k, (fl, _) in enumerate(items) if fl is not None])
+    elif leaf_csr is not None:
         K.set_items_csr(*_items_csr(items, *leaf_csr))
     else:
         K.set_items(items)
@@ -1057,15 +1092,22 @@ def _cut_with_fallback_rs(ctx, items, shared_cap, hk, csize, P0, max_iter=4, lea
             used[k] = u
     nsharp = sum(1 for ch_, did in used if ch_ or did)
     res = K.results_csr(not shared_cap) if leaf_csr is not None else K.results()
-    newp, newv, newpar, nid, cd, sd, clog, nf = K.export()
+    if hasattr(K, "take_caches"):
+        # the crossing cache and sub-face ids stay in Rust, looked up when asked for
+        newp, newv, newpar, nid, clog, nf = K.export_lazy()
+        caches = K.take_caches()
+        ctx.cache = _LazyMap(ctx.cache, caches.cache_get)
+        ctx.subids = _LazyMap(ctx.subids, lambda k: caches.subid_get((k[0], list(k[1]))))
+    else:
+        newp, newv, newpar, nid, cd, sd, clog, nf = K.export()
+        ctx.cache.update(cd)
+        ctx.subids.update(sd)
     del K
     ctx.pos.extend(newp.tolist())
     ctx.phi.extend([0.0] * len(newp))
     ctx.new_vertices.extend(newv)
     ctx.new_parents.extend(newpar)
     ctx.next_id = nid
-    ctx.cache.update(cd)
-    ctx.subids.update(sd)
     for which, key, val in clog:
         (ctx.chord_cache if which == 0 else ctx.pinch_cache)[key] = val
     ctx.onfeat.update(nf)

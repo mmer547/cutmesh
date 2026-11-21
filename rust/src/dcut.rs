@@ -51,7 +51,7 @@ pub struct CutKernel {
     pinch_min_area: f64,
     shared_cap: bool,
     items: Vec<(Vec<Face>, i64)>,
-    face_items: HashMap<i64, Vec<usize>>,
+    face_items: Option<HashMap<i64, Vec<usize>>>,
     res: Vec<Option<CellRes>>,
     // state of the current cut
     used_chords: Vec<Key3>,
@@ -129,7 +129,7 @@ impl CutKernel {
             pinch_min_area,
             shared_cap,
             items: Vec::new(),
-            face_items: HashMap::default(),
+            face_items: None,
             res: Vec::new(),
             used_chords: Vec::new(),
             pinch_now: HashSet::default(),
@@ -151,14 +151,75 @@ impl CutKernel {
             }
         }
         self.res = vec![None; items.len()];
-        self.face_items.clear();
-        for (k, (fl, _)) in items.iter().enumerate() {
-            for (fid, _) in fl {
-                self.face_items.entry(*fid).or_default().push(k);
-            }
-        }
+        self.face_items = None;
         self.items = items;
         Ok(())
+    }
+
+    /// set_items: item k is leaf leaves[k] with its own faces (leaf CSR: cptr, fptr,
+    /// fverts, f_key), unless overrides gives its faces [(k, faces)]
+    #[allow(clippy::too_many_arguments)]
+    fn set_items_leaves(
+        &mut self,
+        py: Python<'_>,
+        leaves: PyReadonlyArray1<i64>,
+        cptr: PyReadonlyArray1<i64>,
+        fptr: PyReadonlyArray1<i64>,
+        fverts: PyReadonlyArray1<i64>,
+        f_key: PyReadonlyArray1<i64>,
+        overrides: Vec<(usize, Vec<Face>)>,
+    ) -> PyResult<()> {
+        use rayon::prelude::*;
+        let (lv, cp, fp, fv, fk) = (leaves.as_slice()?, cptr.as_slice()?, fptr.as_slice()?, fverts.as_slice()?, f_key.as_slice()?);
+        let nc = cp.len().saturating_sub(1);
+        if lv.iter().any(|&c| c < 0 || c as usize >= nc) || *cp.last().unwrap_or(&0) as usize >= fp.len()
+            || fk.len() + 1 < fp.len() || overrides.iter().any(|(k, _)| *k >= lv.len())
+        {
+            return Err(pyo3::exceptions::PyValueError::new_err("inconsistent item arrays"));
+        }
+        let mut over: HashMap<usize, Vec<Face>> = overrides.into_iter().collect();
+        let mut items: Vec<(Vec<Face>, i64)> = py.detach(|| {
+            lv.par_iter()
+                .map(|&c| {
+                    let c = c as usize;
+                    let fl: Vec<Face> = (cp[c] as usize..cp[c + 1] as usize)
+                        .map(|f| (fk[f], fv[fp[f] as usize..fp[f + 1] as usize].to_vec()))
+                        .collect();
+                    (fl, c as i64)
+                })
+                .collect()
+        });
+        for (k, it) in items.iter_mut().enumerate() {
+            if let Some(fl) = over.remove(&k) {
+                it.0 = fl;
+            }
+        }
+        self.set_items(items)
+    }
+
+    /// the crossing cache and the sub-face ids, moved out of the kernel (instead of
+    /// export()ing them into Python dicts): looked up when Python asks
+    fn take_caches(&mut self) -> CutCaches {
+        CutCaches { cache: std::mem::take(&mut self.cache), subids: std::mem::take(&mut self.subids) }
+    }
+
+    /// export() without the new cache entries and sub-face ids (take_caches() has them)
+    #[allow(clippy::type_complexity)]
+    fn export_lazy<'py>(
+        &mut self,
+        py: Python<'py>,
+    ) -> PyResult<(Bound<'py, PyArray2<f64>>, Vec<i64>, Vec<(i64, i64)>, i64, Vec<(u8, Key3, Option<i64>)>, Vec<i64>)> {
+        let newp: Vec<V3> = self.pos[self.n0..].to_vec();
+        self.new_cache.clear();
+        self.new_subids.clear();
+        Ok((
+            vec3_array(py, newp)?,
+            std::mem::take(&mut self.new_vertices),
+            std::mem::take(&mut self.new_parents),
+            self.next_id,
+            std::mem::take(&mut self.cache_log),
+            std::mem::take(&mut self.new_onfeat),
+        ))
     }
 
     /// set_items with the items as flat arrays (csr.rs) and their parent leaves
@@ -186,8 +247,17 @@ impl CutKernel {
     }
 
     /// the items holding face fid (in item order, an item once per face it has)
-    fn items_of_face(&self, fid: i64) -> Vec<usize> {
-        self.face_items.get(&fid).cloned().unwrap_or_default()
+    fn items_of_face(&mut self, fid: i64) -> Vec<usize> {
+        if self.face_items.is_none() {
+            let mut fi: HashMap<i64, Vec<usize>> = HashMap::default();
+            for (k, (fl, _)) in self.items.iter().enumerate() {
+                for (f, _) in fl {
+                    fi.entry(*f).or_default().push(k);
+                }
+            }
+            self.face_items = Some(fi);
+        }
+        self.face_items.as_ref().unwrap().get(&fid).cloned().unwrap_or_default()
     }
 
     /// of the items ks (cut), those with a piece some face of which does not clearly see
@@ -1332,5 +1402,23 @@ impl CutKernel {
         };
         let used = used.into_iter().map(|k| rk(k, &vmap)).collect();
         ((map_comps(res.0), map_comps(res.1)), used)
+    }
+}
+
+/// the crossing cache and sub-face ids of a CutKernel (take_caches)
+#[pyclass]
+pub struct CutCaches {
+    cache: HashMap<(i64, i64), i64>,
+    subids: HashMap<(i64, Vec<i64>), i64>,
+}
+
+#[pymethods]
+impl CutCaches {
+    fn cache_get(&self, key: (i64, i64)) -> Option<i64> {
+        self.cache.get(&key).copied()
+    }
+
+    fn subid_get(&self, key: (i64, Vec<i64>)) -> Option<i64> {
+        self.subids.get(&key).copied()
     }
 }
