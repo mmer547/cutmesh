@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>meshDict 作成 — cutmesh</title>
+<meta name="description" content="cutmesh の設定ファイル meshDict.json をフォームで作る。STL の solid 名と大きさを読み、入力をその場で検査し、JSON を書き出す（ブラウザーの中だけで動き、ファイルはどこにも送らない）">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header"><div class="inner">
+  <a class="brand" href="index.html">cut<span>mesh</span></a>
+  <nav class="site-nav">
+    <a href="manual.html">マニュアル</a>
+    <a href="examples.html">実行例</a>
+    <a href="meshdict.html" aria-current="page">meshDict 作成</a>
+    <a href="https://github.com/mmer547/cutmesh">GitHub</a>
+  </nav>
+</div></header>
+
+<main class="page">
+<h1>meshDict 作成</h1>
+<p class="mdf-lead">フォームに入力すると、出力欄（右。狭い画面では下）に <code>meshDict.json</code> ができます。STL を読ませると solid 名（パッチ名）と大きさがわかり、
+名前の入力候補とセル数の目安に使います。既定値のままの項目は書き出しません。
+このページはブラウザーの中だけで動き、STL も meshDict もどこにも送りません。</p>
+
+<noscript><div class="warn"><p>このページは JavaScript を使います。</p></div></noscript>
+
+<div class="mdf-toolbar" role="toolbar" aria-label="ファイル">
+  <label class="btn primary mdf-filebtn">STL を読む<input type="file" id="mdf-stl" accept=".stl,.STL" hidden></label>
+  <label class="btn mdf-filebtn">meshDict を開く<input type="file" id="mdf-open" accept=".json,application/json" hidden></label>
+  <label class="mdf-select">例題から始める
+    <select id="mdf-example"><option value="">選ぶ…</option></select>
+  </label>
+  <button type="button" class="btn mdf-plain" id="mdf-clear">すべて消す</button>
+  <span class="mdf-toolbar-sep"></span>
+  <label class="mdf-check"><input type="checkbox" id="mdf-advanced"> 詳細な設定も表示</label>
+  <label class="mdf-check"><input type="checkbox" id="mdf-defaults"> 既定値も書き出す</label>
+</div>
+<p class="mdf-drop-hint">STL や meshDict.json はページに直接ドロップしても読めます。</p>
+
+<div id="mdf-stlinfo" class="mdf-stlinfo" hidden></div>
+
+<div class="mdf">
+  <form id="mdf-form" class="mdf-form" autocomplete="off" novalidate></form>
+  <aside class="mdf-out" aria-label="出力">
+    <div class="mdf-out-head">
+      <strong>meshDict.json</strong>
+      <span class="mdf-out-actions">
+        <button type="button" class="btn mdf-small" id="mdf-copy">コピー</button>
+        <button type="button" class="btn primary mdf-small" id="mdf-download">ダウンロード</button>
+      </span>
+    </div>
+    <ul id="mdf-issues" class="mdf-issues" aria-live="polite"></ul>
+    <pre class="mdf-json"><code id="mdf-json"></code></pre>
+    <p class="mdf-run">meshDict.json を STL と同じフォルダーに置いて実行します。</p>
+    <pre class="mdf-cmd"><code>cutmesh meshDict.json</code></pre>
+  </aside>
+</div>
+
+<datalist id="mdf-solids"></datalist>
+<datalist id="mdf-solids-default"></datalist>
+<datalist id="mdf-ptypes"></datalist>
+</main>
+
+<footer class="site-footer"><div class="inner">
+  cutmesh — 項目と既定値は <code>cutmesh/schema.py</code> から生成しています（<a href="meshdict.schema.json">JSON Schema</a>）。
+</div></footer>
+
+<script src="meshdict-data.js"></script>
+<script src="meshdict.js"></script>
+</body>
+</html>
