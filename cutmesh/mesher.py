@@ -877,6 +877,44 @@ def _points_kd(p):
     return cKDTree(_unique_points(p), balanced_tree=False, compact_nodes=False)
 
 
+class _PosList:
+    """CutContext.pos (a list of [x, y, z] that grows) over an array of the first
+    positions: a row becomes a list when it is read, instead of the whole array at once
+    (pts.tolist() of ten million points takes seconds).  Writes to the first rows go
+    into the array, which the caller shares on purpose."""
+
+    def __init__(self, a):
+        self.a, self.n0, self.added = a, len(a), []
+
+    def __len__(self):
+        return self.n0 + len(self.added)
+
+    def __getitem__(self, v):
+        if isinstance(v, slice):
+            return [self[i] for i in range(*v.indices(len(self)))]
+        if v < 0:
+            v += len(self)
+        return self.a[v].tolist() if v < self.n0 else self.added[v - self.n0]
+
+    def __setitem__(self, v, x):
+        if v < 0:
+            v += len(self)
+        if v < self.n0:
+            self.a[v] = x
+        else:
+            self.added[v - self.n0] = x
+
+    def append(self, x):
+        self.added.append(x)
+
+    def extend(self, xs):
+        self.added.extend(xs)
+
+    def array(self):
+        """np.array(positions)"""
+        return np.concatenate([self.a, np.array(self.added, float).reshape(-1, 3)])
+
+
 class _PosView:
     """positions for a Python hook called from the Rust cut kernel: the vertices it was
     given, and the ones it adds (ids from base on)"""
@@ -1949,7 +1987,7 @@ def generate(cfg, log=print):
     bulk_alive = cls < 0
     bulk_zone = np.full(nleaf, -1, np.int64)
     cut_leaves = np.nonzero(cls == 0)[0]
-    positions = pts.tolist()
+    positions = _PosList(pts)          # shares pts (both are updated together below)
     ctx = CutContext(positions, phi_d.tolist(), M_nkeys := int(f_key.max()) + 1)
     fc = cfg["featureCaps"]
     hk = make_feature_hook(dom_feat, csize) if fc in ("both", "domain", True) else None
@@ -2092,8 +2130,7 @@ def generate(cfg, log=print):
                 cpv, dv = dom_feat.closest(pts[cv])
                 w = (dv > 0) & (dv < 0.05 * hmin)
                 for v, x in zip(cv[w].tolist(), cpv[w]):
-                    pts[v] = x
-                    positions[v] = x.tolist()
+                    pts[v] = x                # positions shares pts
                 # the zone cuts read the zones' level sets of these vertices later: refresh
                 # them (a vertex on a zone surface stays on it, 0.05 hmin is below the snap)
                 mv = cv[w]
@@ -2203,7 +2240,7 @@ def generate(cfg, log=print):
         + (f", {nsh} cells follow feature edges ({nfb} fell back to chamfers to stay convex)"
            if hk else ""))
     newv = np.array(ctx.new_vertices, np.int64)
-    P = np.array(positions)
+    P = positions.array()
     del positions, ctx
     if len(newv):
         cp, d, _ = dom.closest(P[newv])
@@ -2240,7 +2277,7 @@ def generate(cfg, log=print):
             zfeat = FeatureSet(g.s.feature_edges(cfg["featureAngle"]), L=g.L)
         zh = make_feature_hook(zfeat, csize) if fc in ("both", "zone", True) else None
         rust_cut = _core is not None and not zh          # no hooks: whole batch in Rust
-        positions = None if rust_cut else P.tolist()
+        positions = None if rust_cut else _PosList(P)
         ctx = CutContext(positions, pz.tolist(), next_id)
         if zh:
             ctx.chord_hook = make_chord_hook(zfeat)
@@ -2266,7 +2303,7 @@ def generate(cfg, log=print):
         else:
             res, zsh, zfb = cut_with_fallback(ctx, [(pc[0], pc[1]) for pc in tocut], True, zh, csize, P0=P)
             next_id = ctx.next_id
-            P = np.array(positions)
+            P = positions.array()
             newv = np.array(ctx.new_vertices, np.int64)
             par = np.array(ctx.new_parents, np.int64).reshape(-1, 2)
         for pc, (negc, posc) in zip(tocut, res):
