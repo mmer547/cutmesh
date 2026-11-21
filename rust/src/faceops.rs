@@ -97,3 +97,41 @@ pub fn leaf_any<'py>(
     });
     Ok(r.into_pyarray(py))
 }
+
+/// the vertices (sorted, once each) of the leaves in leaf_mask that are in vmask (all
+/// when vmask is None): unique(fverts[occ][vmask[fverts[occ]]]) with occ the leaves'
+/// vertex occurrences (vptr[i]..vptr[i+1])
+#[pyfunction]
+#[pyo3(signature = (leaf_mask, vptr, fverts, vmask=None))]
+pub fn leaf_vertices<'py>(
+    py: Python<'py>,
+    leaf_mask: PyReadonlyArray1<'py, bool>,
+    vptr: PyReadonlyArray1<'py, i64>,
+    fverts: PyReadonlyArray1<'py, i64>,
+    vmask: Option<PyReadonlyArray1<'py, bool>>,
+) -> PyResult<Bound<'py, PyArray1<i64>>> {
+    let (lm, vp, fv) = (leaf_mask.as_slice()?, vptr.as_slice()?, fverts.as_slice()?);
+    let vm = match &vmask {
+        Some(m) => Some(m.as_slice()?),
+        None => None,
+    };
+    if vp.len() != lm.len() + 1 || *vp.last().unwrap_or(&0) as usize > fv.len()
+        || vp.windows(2).any(|w| w[1] < w[0])
+        || vm.is_some_and(|m| fv.iter().any(|&v| v < 0 || v as usize >= m.len()))
+    {
+        return Err(pyo3::exceptions::PyValueError::new_err("inconsistent leaf arrays"));
+    }
+    let mut out: Vec<i64> = py.detach(|| {
+        let mut v: Vec<i64> = (0..lm.len())
+            .into_par_iter()
+            .filter(|&c| lm[c])
+            .flat_map_iter(|c| {
+                fv[vp[c] as usize..vp[c + 1] as usize].iter().copied().filter(move |&x| vm.is_none_or(|m| m[x as usize]))
+            })
+            .collect();
+        v.par_sort_unstable();
+        v
+    });
+    out.dedup();
+    Ok(out.into_pyarray(py))
+}
