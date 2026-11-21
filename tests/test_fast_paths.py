@@ -172,6 +172,54 @@ class RustOctree(unittest.TestCase):
             np.testing.assert_array_equal(a.lev, b.lev)
             self.assertEqual(la, lb)
 
+    def test_balance_after_split(self):
+        # balanced, then a few leaves split: checking only the new leaves gives the
+        # splits of the full check
+        rng = np.random.default_rng(11)
+        nsplit = 0
+        for args in CASES:
+            a = random_octree(*args)
+            a.balance(lambda s: None)
+            for _ in range(3):
+                mark = (rng.random(len(a.lev)) < 0.02) & (a.lev < a.Lmax)
+                a.split(mark)
+                b = copy.deepcopy(a)
+                self.assertGreaterEqual(a._new_from, 0)
+                la, lb = [], []
+                a.balance(la.append)                   # only the new leaves checked
+                b._new_from = -1
+                b.balance(lb.append)                   # every leaf checked
+                np.testing.assert_array_equal(a.ijk, b.ijk)
+                np.testing.assert_array_equal(a.lev, b.lev)
+                self.assertEqual(la, lb)
+                nsplit += len(la)
+        self.assertGreater(nsplit, 0)
+
+    @unittest.skipUnless(hasattr(geometry._core, "finer_face_neighbour"), "Rust extension not built")
+    def test_finer_nearby(self):
+        # the face-neighbour lookup answers "a finer leaf centre within 0.95 h" as the
+        # KD-tree does, on balanced trees
+        from scipy.spatial import cKDTree
+        nfine = 0
+        for args in CASES:
+            oc = random_octree(*args)
+            if oc.periodic.any():
+                continue
+            oc.balance(lambda s: None)
+            c, hl = oc.centers(), oc.leaf_sizes()
+            cand = np.nonzero(oc.lev < oc.Lmax)[0]
+            ref = np.zeros(len(cand), bool)
+            for lv in np.unique(oc.lev[cand]).tolist():
+                m_ = oc.lev[cand] == lv
+                fl = np.nonzero(oc.lev > lv)[0]
+                if len(fl):
+                    hc = float(hl[cand[m_]][0])
+                    dd, _ = cKDTree(c[fl]).query(c[cand[m_]], distance_upper_bound=0.95 * hc)
+                    ref[m_] = dd < 0.95 * hc
+            np.testing.assert_array_equal(mesher._finer_nearby(oc, c, hl, cand), ref)
+            nfine += int(ref.sum())
+        self.assertGreater(nfine, 0)
+
     def test_build_cells(self):
         for args in CASES:
             oc = random_octree(*args)
@@ -279,7 +327,8 @@ class RustCutKernel(unittest.TestCase):
         class Hidden:                          # the extension without the stage-A kernels
             def __getattr__(self, k):
                 if k in ("merge_wall_faces", "contact_candidates", "surface_contact_samples",
-                         "split_samples", "cut_batch_csr"):
+                         "split_samples", "cut_batch_csr", "face_sign_counts", "vertex_min",
+                         "leaf_any", "leaf_vertices", "finer_face_neighbour"):
                     raise AttributeError(k)
                 return getattr(real, k)
         with mock.patch.object(mesher, "_rust_cut_ok", lambda ctx, hk: False), \
@@ -446,6 +495,52 @@ class RustCutBatch(unittest.TestCase):
                     self.assertEqual((A.leaf[i], A.zone[i]), (k, s))
                     self.assertEqual(A.faces(i), [(f, list(p)) for f, p in comp])
                 self.assertGreater(len(np1), 10)
+
+
+@unittest.skipUnless(geometry.rust_available() and hasattr(geometry._core, "leaf_vertices"),
+                     "Rust extension not built")
+class RustFaceOps(unittest.TestCase):
+    """the per-face / per-leaf reductions in Rust give the NumPy answers of the code
+    they replace in mesher.generate"""
+
+    def faces(self, seed):
+        rng = np.random.default_rng(seed)
+        nv, nleaf = 500, 120
+        fn = rng.integers(3, 7, 900)                       # face sizes
+        fptr = np.concatenate([[0], np.cumsum(fn)]).astype(np.int64)
+        fverts = rng.integers(0, nv, int(fptr[-1])).astype(np.int64)
+        cut = np.sort(rng.choice(np.arange(1, len(fn)), nleaf - 1, replace=False))
+        cptr = np.concatenate([[0], cut, [len(fn)]]).astype(np.int64)   # faces by leaf
+        return rng, nv, fn, fptr, fverts, cptr
+
+    def test_face_signs_and_vertex_min(self):
+        for seed in range(5):
+            rng, nv, fn, fptr, fverts, cptr = self.faces(seed)
+            phi = rng.choice([-1.0, 0.0, 0.0, 2.0, np.nan], nv) * rng.random(nv)
+            got = geometry._core.face_sign_counts(phi, fptr, fverts)
+            pv = phi[fverts]
+            for g, m in zip(got, (pv < 0, pv > 0, pv == 0)):
+                np.testing.assert_array_equal(g, np.add.reduceat(m.astype(np.int32), fptr[:-1]))
+            val = rng.random(len(fn))
+            val[rng.random(len(fn)) < 0.05] = np.nan
+            ref = np.full(nv + 3, np.inf)                  # vertices in no face stay inf
+            np.minimum.at(ref, fverts, np.repeat(val, fn))
+            np.testing.assert_array_equal(geometry._core.vertex_min(nv + 3, fptr, fverts, val), ref)
+
+    def test_leaf_any_and_vertices(self):
+        for seed in range(5):
+            rng, nv, fn, fptr, fverts, cptr = self.faces(seed)
+            vptr = fptr[cptr]
+            f_cell = np.repeat(np.arange(len(cptr) - 1), np.diff(cptr))
+            for p in (0.01, 0.2, 0.9):
+                m = rng.random(nv) < p
+                np.testing.assert_array_equal(geometry._core.leaf_any(m, vptr, fverts),
+                                              np.logical_or.reduceat(m[fverts], vptr[:-1]))
+                lost = rng.random(len(cptr) - 1) < p
+                v = fverts[lost[np.repeat(f_cell, fn)]]
+                np.testing.assert_array_equal(geometry._core.leaf_vertices(lost, vptr, fverts), geometry.unique(v))
+                np.testing.assert_array_equal(geometry._core.leaf_vertices(lost, vptr, fverts, m),
+                                              geometry.unique(v[m[v]]))
 
 
 @unittest.skipUnless(geometry.rust_available() and hasattr(geometry._core, "argsort_stable"),

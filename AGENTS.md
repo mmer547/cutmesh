@@ -66,7 +66,7 @@ CUTMESH_NO_RUST=1 python -m cutmesh meshDict.json   # Python だけで実行（�
 | A | カット片を CSR 配列のまま、カット → 統合 → 組み立て → パッチまで Rust で通す | Claude | `cutmesh/mesher.py`, `rust/src/dcut.rs`, `rust/src/merge.rs`, `rust/src/cut.rs` |
 | B1 | 品質チェック（`quality.py`）を Rust + rayon へ | Codex | `cutmesh/quality.py`, `rust/src/quality.rs`（新規） |
 | B2 | geometry 段階（gap のサンプルの重複、TriMesh 検索のまとめ問い合わせ） | Codex | `cutmesh/geometry.py`, `rust/src/lib.rs` の TriMesh |
-| C | octree と snapping の並列化 | A・B の後に決める | `cutmesh/octree.py`, `rust/src/octree.rs` |
+| C | octree と snapping の高速化 | Claude（2026-11-22〜） | `cutmesh/octree.py`, `rust/src/octree.rs`, `rust/src/faceops.rs`, `cutmesh/mesher.py` の octree・snapping 部分 |
 
 ## してはいけないこと
 

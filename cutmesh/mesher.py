@@ -859,14 +859,26 @@ def _unique_points(p):
     return p[o[keep]]
 
 
-def _nearest_in(pts, keep, q):
+def _nearest_in(pts, keep, q, cache=None):
     """cKDTree(pts).query(q) over the points of the mask keep only: (distance, index into
     pts).  A tree over all the vertices costs more than the few queries it answers; the
-    callers keep every vertex that can be near enough to matter (inf, 0 when none)."""
+    callers keep every vertex that can be near enough to matter (inf, 0 when none).
+    cache (a list): the answer of an earlier call with the same masked points and
+    queries is reused (the snapping attempts repeat most of these queries)."""
     idx = np.flatnonzero(keep)
     if not len(idx):
         return np.full(len(q), np.inf), np.zeros(len(q), np.int64)
-    d, j = cKDTree(pts[idx]).query(q)
+    P = pts[idx]
+    q = np.asarray(q, float)
+    if cache is not None:
+        for eidx, eP, eq, ed, ej in cache:
+            if (len(eidx) == len(idx) and eq.shape == q.shape and np.array_equal(eidx, idx)
+                    and np.array_equal(eq, q) and np.array_equal(eP, P)):
+                return ed.copy(), ej.copy()
+    d, j = cKDTree(P).query(q)
+    if cache is not None:
+        cache.append((idx, P, q.copy(), d.copy(), idx[j]))
+        del cache[:-6]
     return d, idx[j]
 
 
@@ -1318,6 +1330,25 @@ def select_clip_cells(pc, cand, faces_of, cells_of_face, special, pts):
     return E, mixed, dropped
 
 
+def _finer_nearby(oc, c, hl, cand):
+    """per candidate leaf: a finer leaf centre within 0.95 of its size.  In the balanced
+    tree that is a face neighbour split into finer leaves (Rust: a lookup instead of a
+    KD-tree per level)."""
+    if _core is not None and hasattr(_core, "finer_face_neighbour") and not any(oc.periodic):
+        return _core.finer_face_neighbour(np.ascontiguousarray(oc.ijk, np.int64), np.ascontiguousarray(oc.lev, np.int64),
+                                          [int(v) for v in oc.n], int(oc.Lmax), np.ascontiguousarray(cand, np.int64))
+    fine = np.zeros(len(cand), bool)
+    for lv in np.unique(oc.lev[cand]).tolist():
+        m_ = oc.lev[cand] == lv
+        fl = np.nonzero(oc.lev > lv)[0]
+        if not len(fl):
+            continue
+        hc = float(hl[cand[m_]][0])
+        dd, _ = cKDTree(c[fl]).query(c[cand[m_]], distance_upper_bound=0.95 * hc)
+        fine[m_] = dd < 0.95 * hc
+    return fine
+
+
 def _fluid_fraction(dom, c, h, n=6):
     """Fluid fraction of cells (centres c, sizes h) from the trilinear interpolation of
     the signed distance at their corners, and whether the wall cuts them."""
@@ -1679,9 +1710,13 @@ def generate(cfg, log=print):
         oc.refine(ssrc, vsrc, log=lambda s: log(s), keep_fn=keep_fn)
         sgn = np.array(list(itertools.product((-1, 0, 1), repeat=3)), float)   # 27 points
         corner = np.all(sgn != 0, axis=1)
+        n_old = 0      # after a pass: the leaves before this index were tested there, unsplit
         for it in range(max(nfill_g, nfill_w)):
             c = oc.centers(); hl = oc.leaf_sizes()
             near = oc.lev < oc.Lmax
+            # a leaf tested in the pass before and left unsplit gives the same answer
+            # (the tests depend on the cell alone, and they only drop out pass by pass)
+            near[:n_old] = False
             near[near] = dom.approx_below(c[near], 0.9 * hl[near] + dom._rmax)
             mark = np.zeros(len(oc.lev), bool)
             nh = nw = 0
@@ -1704,13 +1739,17 @@ def generate(cfg, log=print):
                 nw = int(wall.sum())
             if not mark.any():
                 break
+            oc.track()
             oc.split(mark)
             oc.balance(lambda s: None)
+            n_old = len(oc.src)
+            oc.untrack()
             log(f"thin gaps / walls: split {nh} cells with fluid inside but no fluid corner,"
                 f" {nw} with a solid wall inside but no solid corner")
         n_tc = int(cfg["thinCutCells"])
         thr = float(cfg["thinCutFraction"])
         nsplit = 0
+        cand_old = None    # candidates of the pass before (they depend on the cell alone)
         for it in range(n_tc):
             # A cut cell keeping little fluid next to finer cells: its centre sits on the
             # wall, far from the plane of the finer cells' centres, and the faces between
@@ -1718,26 +1757,27 @@ def generate(cfg, log=print):
             # the wall, into whole cells.
             c = oc.centers(); hl = oc.leaf_sizes()
             near = oc.lev < Lmax
+            if cand_old is not None:
+                near[:len(cand_old)] = False           # unsplit leaves: as in the pass before
             near[near] = dom.approx_below(c[near], 0.9 * hl[near] + dom._rmax)
             cand = np.nonzero(near)[0]
             fr, cut = _fluid_fraction(dom, c[cand], hl[cand])
             cand = cand[cut & (fr > 0) & (fr < thr)]
-            fine = np.zeros(len(cand), bool)
-            for lv in np.unique(oc.lev[cand]).tolist():
-                m_ = oc.lev[cand] == lv
-                fl = np.nonzero(oc.lev > lv)[0]
-                if not len(fl):
-                    continue
-                hc = float(hl[cand[m_]][0])
-                dd, _ = cKDTree(c[fl]).query(c[cand[m_]], distance_upper_bound=0.95 * hc)
-                fine[m_] = dd < 0.95 * hc
+            if cand_old is not None:                   # the unsplit leaves come first
+                cand = np.concatenate([np.flatnonzero(cand_old), cand])
+            is_cand = np.zeros(len(oc.lev), bool)
+            is_cand[cand] = True
+            fine = _finer_nearby(oc, c, hl, cand)
             mark = np.zeros(len(oc.lev), bool)
             mark[cand[fine]] = True
             if not mark.any():
                 break
             nsplit += int(mark.sum())
+            oc.track()
             oc.split(mark)
             oc.balance(lambda s: None)
+            cand_old = is_cand[oc.src]
+            oc.untrack()
         if n_tc:
             log(f"thin cut cells at level transitions: split {nsplit}")
     T(f"octree ({len(oc.lev)} leaves)")
@@ -1809,12 +1849,22 @@ def generate(cfg, log=print):
     free_snap = np.zeros(len(pts), bool)   # hanging vertices projected freely onto a surface
     no_free = np.zeros(len(pts), bool)     # free projections that broke a cell: not allowed
     msgs = []
-    occ_leaf = np.repeat(f_cell, fn)
     leaf_vptr = fptr[cptr[:-1]]                 # vertex occurrences by leaf (each has faces)
+    leaf_vptr_full = np.ascontiguousarray(fptr[cptr], np.int64)
 
     def leaf_any(m):
         """per leaf: some vertex of its faces in the mask m"""
+        if _core is not None and hasattr(_core, "leaf_any"):
+            return _core.leaf_any(np.ascontiguousarray(m, bool), leaf_vptr_full, fverts)
         return np.logical_or.reduceat(m[fverts], leaf_vptr)
+
+    def leaf_verts(lost, vmask=None):
+        """the vertices of the leaves in lost (those in vmask), sorted, once each"""
+        if _core is not None and hasattr(_core, "leaf_vertices"):
+            return _core.leaf_vertices(np.ascontiguousarray(lost, bool), leaf_vptr_full, fverts,
+                                       None if vmask is None else np.ascontiguousarray(vmask, bool))
+        v = fverts[lost[np.repeat(f_cell, fn)]]
+        return unique(v if vmask is None else v[vmask[v]])
 
     def side_width(kv, side):
         """Thickness of the fluid (side -1) / solid (side 1) at the vertices kv, from the
@@ -1828,11 +1878,18 @@ def generate(cfg, log=print):
         kv, cpk, dk = kv[off], cpk[off], dk[off]
         dirk = (pts[kv] - cpk) / np.maximum(dk, 1e-300)[:, None]
         width = np.full(len(kv), np.inf)
+        hk = vh_min[kv]
         for t in np.linspace(0.05, 1.5, 30):
-            q = cpk + (t * vh_min[kv])[:, None] * dirk
-            hit = np.isinf(width) & (dom.inside(q) != (side < 0))
-            width[hit] = t * vh_min[kv][hit]
+            # only the vertices still without a width are tested (inside() is per point)
+            u = np.flatnonzero(np.isinf(width))
+            if not len(u):
+                break
+            q = cpk[u] + (t * hk[u])[:, None] * dirk[u]
+            hit = dom.inside(q) != (side < 0)
+            width[u[hit]] = t * hk[u[hit]]
         return off, cpk, dirk, width
+
+    near_cache = []       # _nearest_in answers, shared by the snapping attempts
 
     def snap_features(feat, phi, label, concave=None):
         """corners first, then feature edges, then (farther) the concave feature edges;
@@ -1845,7 +1902,7 @@ def generate(cfg, log=print):
         lim = np.where(no_far, tol_f, tol_f2)
         if len(feat.corners):
             # a vertex within lim of a corner (on the surface) is within lim of the surface
-            d, j = _nearest_in(pts, np.abs(phi) < 2 * float(lim.max()) + hmin, feat.corners)
+            d, j = _nearest_in(pts, np.abs(phi) < 2 * float(lim.max()) + hmin, feat.corners, near_cache)
             for ci_, (dd, jj) in enumerate(zip(d.tolist(), j.tolist())):
                 if movable[jj] and not snapped[jj] and dd < lim[jj]:
                     far_snap[jj] = dd >= tol_f[jj]
@@ -1868,7 +1925,7 @@ def generate(cfg, log=print):
             cand = movable & ~snapped & (phi > 0) & (phi < 2 * tol_cc + hmin)
             c_sel, c_X, c_d = [], [], []
             if len(concave.corners):
-                d, j = _nearest_in(pts, np.abs(phi) < 2 * float(lim.max()) + hmin, concave.corners)
+                d, j = _nearest_in(pts, np.abs(phi) < 2 * float(lim.max()) + hmin, concave.corners, near_cache)
                 for X, dd, jj in zip(concave.corners, d.tolist(), j.tolist()):
                     if cand[jj] and dd < lim[jj]:
                         c_sel.append(jj); c_X.append(X); c_d.append(dd); cand[jj] = False
@@ -1879,7 +1936,8 @@ def generate(cfg, log=print):
             if ok.any():
                 dn, _ = cKDTree(pts[sel[ok]]).query(cp[ok])       # nearest solid candidate
                 d0, _ = _nearest_in(np.concatenate([pts, c_X]),               # a vertex there already
-                                    np.concatenate([np.abs(phi) < hmin, np.ones(len(c_X), bool)]), cp[ok])
+                                    np.concatenate([np.abs(phi) < hmin, np.ones(len(c_X), bool)]), cp[ok],
+                                    near_cache)
                 ok[ok] = (d[ok] <= dn * (1 + 1e-9)) & (d0 > 1e-6 * hmin)
             sel, cp, d = sel[ok], cp[ok], d[ok]
             _, first = np.unique(np.round(cp / (1e-6 * hmin)).astype(np.int64), axis=0, return_index=True)
@@ -1895,8 +1953,7 @@ def generate(cfg, log=print):
             lost = leaf_any(gone) & ~leaf_any((phi0 > 0) & ~gone) & leaf_any(phi0 < 0)
             nthin = 0
             if lost.any():
-                occ = lost[occ_leaf]
-                at = np.isin(sel, fverts[occ])
+                at = np.isin(sel, leaf_verts(lost))
                 off, _, _, width = side_width(sel[at], 1.0)
                 thin = np.zeros(len(sel), bool)
                 thin[np.nonzero(at)[0][off]] = np.isfinite(width)
@@ -1934,8 +1991,7 @@ def generate(cfg, log=print):
             lost = leaf_any(on) & ~leaf_any(on & ~snap) & leaf_any(-side * phi_d > 0)
             if not lost.any():
                 continue
-            occ = lost[occ_leaf]
-            kv = unique(fverts[occ][on[fverts[occ]]])
+            kv = leaf_verts(lost, on)
             # thickness of this side; where it is not within 1.5 cells, the snap removes a
             # sliver as intended (vertices on the wall: dropping that side is right)
             off, cpk, dirk, width = side_width(kv, side)
@@ -1981,7 +2037,7 @@ def generate(cfg, log=print):
                 sel, cp, d = sel[ok], cp[ok], d[ok]
             if len(sel):
                 dn, _ = cKDTree(pts[sel]).query(cp)               # nearest candidate
-                d0, _ = _nearest_in(pts, np.abs(phi_d) < hmin, cp)   # a vertex there already
+                d0, _ = _nearest_in(pts, np.abs(phi_d) < hmin, cp, near_cache)   # a vertex there already
                 ok = (d <= dn * (1 + 1e-9)) & (d0 > 1e-6 * hmin)
                 sel, cp, d = sel[ok], cp[ok], d[ok]
                 _, first = np.unique(np.round(cp / (1e-6 * hmin)).astype(np.int64), axis=0, return_index=True)
@@ -2093,20 +2149,17 @@ def generate(cfg, log=print):
         if not (far_snap.any() or free_snap.any()):
             break
         mv_ = (pts != pts0).any(1)           # hanging vertices move with their parents too
-        touch = np.maximum.reduceat(mv_[fverts].astype(np.int8), fptr[:-1])
-        tl = np.nonzero(np.maximum.reduceat(touch, cptr[:-1]))[0]
+        tl = np.nonzero(leaf_any(mv_))[0]
         badl = tl[_leaf_bad(pts, tl, fptr, fverts, cptr, csize)] if len(tl) else tl
         if ccv_far.any():
             # a vertex pushed onto a concave edge must not straighten a face corner either
-            tc = np.maximum.reduceat(np.maximum.reduceat(ccv_far[fverts].astype(np.int8), fptr[:-1]), cptr[:-1])
-            tc = np.nonzero(tc)[0]
+            tc = np.nonzero(leaf_any(ccv_far))[0]
             badl = np.union1d(badl, tc[_leaf_bad(pts, tc, fptr, fverts, cptr, csize, flat_at=ccv_far)])
         if slide_far.any():
             # a slid vertex often lands on the line of the wall vertices next to it (the
             # cell becomes a wedge with a straight face corner, still convex and uncut):
             # only a corner pushed clearly past straight breaks the cell
-            tc = np.maximum.reduceat(np.maximum.reduceat(slide_far[fverts].astype(np.int8), fptr[:-1]), cptr[:-1])
-            tc = np.nonzero(tc)[0]
+            tc = np.nonzero(leaf_any(slide_far))[0]
             badl = np.union1d(badl, tc[_leaf_bad(pts, tc, fptr, fverts, cptr, csize, flat_at=slide_far,
                                                  flat_angle=-1.0)])
         if not len(badl):
@@ -2510,8 +2563,7 @@ def generate(cfg, log=print):
     # ------------------------------------------------------------ distorted uncut cells
     # uncut leaves whose corners were snapped can become non-convex: hand them to the
     # merging stage like cut cells
-    touch = np.maximum.reduceat(moved_any[fverts].astype(np.int8), fptr[:-1])
-    touch = np.maximum.reduceat(touch, cptr[:-1]).astype(bool) & bulk_alive
+    touch = leaf_any(moved_any) & bulk_alive
     tl = np.nonzero(touch)[0]
     nbad_bulk = 0
     if len(tl):
