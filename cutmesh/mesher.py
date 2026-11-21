@@ -859,14 +859,26 @@ def _unique_points(p):
     return p[o[keep]]
 
 
-def _nearest_in(pts, keep, q):
+def _nearest_in(pts, keep, q, cache=None):
     """cKDTree(pts).query(q) over the points of the mask keep only: (distance, index into
     pts).  A tree over all the vertices costs more than the few queries it answers; the
-    callers keep every vertex that can be near enough to matter (inf, 0 when none)."""
+    callers keep every vertex that can be near enough to matter (inf, 0 when none).
+    cache (a list): the answer of an earlier call with the same masked points and
+    queries is reused (the snapping attempts repeat most of these queries)."""
     idx = np.flatnonzero(keep)
     if not len(idx):
         return np.full(len(q), np.inf), np.zeros(len(q), np.int64)
-    d, j = cKDTree(pts[idx]).query(q)
+    P = pts[idx]
+    q = np.asarray(q, float)
+    if cache is not None:
+        for eidx, eP, eq, ed, ej in cache:
+            if (len(eidx) == len(idx) and eq.shape == q.shape and np.array_equal(eidx, idx)
+                    and np.array_equal(eq, q) and np.array_equal(eP, P)):
+                return ed.copy(), ej.copy()
+    d, j = cKDTree(P).query(q)
+    if cache is not None:
+        cache.append((idx, P, q.copy(), d.copy(), idx[j]))
+        del cache[:-6]
     return d, idx[j]
 
 
@@ -1837,7 +1849,6 @@ def generate(cfg, log=print):
     free_snap = np.zeros(len(pts), bool)   # hanging vertices projected freely onto a surface
     no_free = np.zeros(len(pts), bool)     # free projections that broke a cell: not allowed
     msgs = []
-    occ_leaf = np.repeat(f_cell, fn)
     leaf_vptr = fptr[cptr[:-1]]                 # vertex occurrences by leaf (each has faces)
     leaf_vptr_full = np.ascontiguousarray(fptr[cptr], np.int64)
 
@@ -1846,6 +1857,14 @@ def generate(cfg, log=print):
         if _core is not None and hasattr(_core, "leaf_any"):
             return _core.leaf_any(np.ascontiguousarray(m, bool), leaf_vptr_full, fverts)
         return np.logical_or.reduceat(m[fverts], leaf_vptr)
+
+    def leaf_verts(lost, vmask=None):
+        """the vertices of the leaves in lost (those in vmask), sorted, once each"""
+        if _core is not None and hasattr(_core, "leaf_vertices"):
+            return _core.leaf_vertices(np.ascontiguousarray(lost, bool), leaf_vptr_full, fverts,
+                                       None if vmask is None else np.ascontiguousarray(vmask, bool))
+        v = fverts[lost[np.repeat(f_cell, fn)]]
+        return unique(v if vmask is None else v[vmask[v]])
 
     def side_width(kv, side):
         """Thickness of the fluid (side -1) / solid (side 1) at the vertices kv, from the
@@ -1870,6 +1889,8 @@ def generate(cfg, log=print):
             width[u[hit]] = t * hk[u[hit]]
         return off, cpk, dirk, width
 
+    near_cache = []       # _nearest_in answers, shared by the snapping attempts
+
     def snap_features(feat, phi, label, concave=None):
         """corners first, then feature edges, then (farther) the concave feature edges;
         moved vertices get phi = 0.  Returns the ids of the vertices now on the features."""
@@ -1881,7 +1902,7 @@ def generate(cfg, log=print):
         lim = np.where(no_far, tol_f, tol_f2)
         if len(feat.corners):
             # a vertex within lim of a corner (on the surface) is within lim of the surface
-            d, j = _nearest_in(pts, np.abs(phi) < 2 * float(lim.max()) + hmin, feat.corners)
+            d, j = _nearest_in(pts, np.abs(phi) < 2 * float(lim.max()) + hmin, feat.corners, near_cache)
             for ci_, (dd, jj) in enumerate(zip(d.tolist(), j.tolist())):
                 if movable[jj] and not snapped[jj] and dd < lim[jj]:
                     far_snap[jj] = dd >= tol_f[jj]
@@ -1904,7 +1925,7 @@ def generate(cfg, log=print):
             cand = movable & ~snapped & (phi > 0) & (phi < 2 * tol_cc + hmin)
             c_sel, c_X, c_d = [], [], []
             if len(concave.corners):
-                d, j = _nearest_in(pts, np.abs(phi) < 2 * float(lim.max()) + hmin, concave.corners)
+                d, j = _nearest_in(pts, np.abs(phi) < 2 * float(lim.max()) + hmin, concave.corners, near_cache)
                 for X, dd, jj in zip(concave.corners, d.tolist(), j.tolist()):
                     if cand[jj] and dd < lim[jj]:
                         c_sel.append(jj); c_X.append(X); c_d.append(dd); cand[jj] = False
@@ -1915,7 +1936,8 @@ def generate(cfg, log=print):
             if ok.any():
                 dn, _ = cKDTree(pts[sel[ok]]).query(cp[ok])       # nearest solid candidate
                 d0, _ = _nearest_in(np.concatenate([pts, c_X]),               # a vertex there already
-                                    np.concatenate([np.abs(phi) < hmin, np.ones(len(c_X), bool)]), cp[ok])
+                                    np.concatenate([np.abs(phi) < hmin, np.ones(len(c_X), bool)]), cp[ok],
+                                    near_cache)
                 ok[ok] = (d[ok] <= dn * (1 + 1e-9)) & (d0 > 1e-6 * hmin)
             sel, cp, d = sel[ok], cp[ok], d[ok]
             _, first = np.unique(np.round(cp / (1e-6 * hmin)).astype(np.int64), axis=0, return_index=True)
@@ -1931,8 +1953,7 @@ def generate(cfg, log=print):
             lost = leaf_any(gone) & ~leaf_any((phi0 > 0) & ~gone) & leaf_any(phi0 < 0)
             nthin = 0
             if lost.any():
-                occ = lost[occ_leaf]
-                at = np.isin(sel, fverts[occ])
+                at = np.isin(sel, leaf_verts(lost))
                 off, _, _, width = side_width(sel[at], 1.0)
                 thin = np.zeros(len(sel), bool)
                 thin[np.nonzero(at)[0][off]] = np.isfinite(width)
@@ -1970,8 +1991,7 @@ def generate(cfg, log=print):
             lost = leaf_any(on) & ~leaf_any(on & ~snap) & leaf_any(-side * phi_d > 0)
             if not lost.any():
                 continue
-            occ = lost[occ_leaf]
-            kv = unique(fverts[occ][on[fverts[occ]]])
+            kv = leaf_verts(lost, on)
             # thickness of this side; where it is not within 1.5 cells, the snap removes a
             # sliver as intended (vertices on the wall: dropping that side is right)
             off, cpk, dirk, width = side_width(kv, side)
@@ -2017,7 +2037,7 @@ def generate(cfg, log=print):
                 sel, cp, d = sel[ok], cp[ok], d[ok]
             if len(sel):
                 dn, _ = cKDTree(pts[sel]).query(cp)               # nearest candidate
-                d0, _ = _nearest_in(pts, np.abs(phi_d) < hmin, cp)   # a vertex there already
+                d0, _ = _nearest_in(pts, np.abs(phi_d) < hmin, cp, near_cache)   # a vertex there already
                 ok = (d <= dn * (1 + 1e-9)) & (d0 > 1e-6 * hmin)
                 sel, cp, d = sel[ok], cp[ok], d[ok]
                 _, first = np.unique(np.round(cp / (1e-6 * hmin)).astype(np.int64), axis=0, return_index=True)
