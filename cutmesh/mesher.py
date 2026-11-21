@@ -929,7 +929,7 @@ def _argsort_stable(a):
 
 
 def _rust_merge_ok():
-    return _core is not None and hasattr(_core, "merge_cells")
+    return _core is not None and hasattr(_core, "merge_cells_csr")
 
 
 def _rust_cut_ok(ctx, hk):
@@ -2455,12 +2455,17 @@ def generate(cfg, log=print):
     rust_merge = _rust_merge_ok()
     if rust_merge:
         # the same greedy loop in Rust (candidates in this set order, same arithmetic)
-        par_, mem_, bmem_, gvol_, merged, rejected = _core.merge_cells(
-            np.ascontiguousarray(P, float), [pc[0] for pc in pieces], [int(z) for z in zone_of],
-            np.ascontiguousarray(bulk_zone, np.int64), np.ascontiguousarray(cptr, np.int64),
-            np.ascontiguousarray(fptr, np.int64), np.ascontiguousarray(fverts, np.int64),
-            np.ascontiguousarray(f_key, np.int64), kb1, kb2, small.tolist(), int(nsmall), gvol.tolist(),
-            hexvol.tolist(), beta, [float(csize[pc[1]]) for pc in pieces], float(cos_lim))
+        # the pieces as flat arrays (flattened above): no conversion of the Python lists
+        i64 = lambda a: np.ascontiguousarray(a, np.int64)            # noqa: E731
+        p_leaf = np.fromiter((pc[1] for pc in pieces), np.int64, count=nP)
+        par_, mem_, bmem_, gvol_, merged, rejected = _core.merge_cells_csr(
+            np.ascontiguousarray(P, float),
+            i64(np.concatenate([[0], np.cumsum(np.bincount(py_cell, minlength=nP))])), i64(py_key),
+            i64(np.concatenate([[0], np.cumsum(p_n)])), i64(p_verts), i64(zone_of),
+            i64(bulk_zone), i64(cptr), i64(fptr), i64(fverts), i64(f_key), kb1, kb2, i64(small), int(nsmall),
+            np.ascontiguousarray(gvol, float), np.ascontiguousarray(hexvol, float), beta,
+            np.ascontiguousarray(csize[p_leaf], float), float(cos_lim))
+        del p_leaf
         parent[:] = par_
         members.update(mem_)
         bulk_members.update(bmem_)

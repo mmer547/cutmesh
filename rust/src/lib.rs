@@ -1011,6 +1011,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<SegSet>()?;
     m.add_class::<dcut::CutKernel>()?;
     m.add_function(wrap_pyfunction!(merge::merge_cells, m)?)?;
+    m.add_function(wrap_pyfunction!(merge::merge_cells_csr, m)?)?;
     m.add_function(wrap_pyfunction!(merge::pyset_order, m)?)?;
     m.add_function(wrap_pyfunction!(face_geometry, m)?)?;
     m.add_function(wrap_pyfunction!(cell_geometry, m)?)?;
