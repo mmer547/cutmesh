@@ -467,6 +467,8 @@ class Surface:
 
     def samples(self, spacing, regions=None):
         sel = np.arange(len(self.tris)) if regions is None else np.nonzero(np.isin(self.region, regions))[0]
+        if hasattr(self._rs, "samples"):
+            return self._rs.samples(np.asarray(sel, np.int64), spacing)
         pts, ids = _sample_triangles(self.tris[sel], spacing)
         return pts, sel[ids]
 

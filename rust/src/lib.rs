@@ -16,6 +16,7 @@ mod merge;
 mod layers;
 mod octree;
 mod quality;
+mod sampling;
 
 pub(crate) type V3 = [f64; 3];
 
@@ -328,6 +329,30 @@ impl TriMesh {
         })
     }
 
+    fn visit_segment_hits(&self, p: V3, d: V3, mut hit: impl FnMut(f64, i64)) {
+        if self.bvh.nodes.is_empty() {
+            return;
+        }
+        let mut stack: Vec<u32> = vec![0];
+        while let Some(ni) = stack.pop() {
+            let n = &self.bvh.nodes[ni as usize];
+            if !seg_box(p, d, n, self.tol) {
+                continue;
+            }
+            if n.count > 0 {
+                for &i in &self.bvh.prims[n.start as usize..(n.start + n.count) as usize] {
+                    let [ta, tb, tc] = self.t[i as usize];
+                    if let Some(t) = seg_tri(p, d, ta, tb, tc) {
+                        hit(t, i as i64);
+                    }
+                }
+            } else {
+                stack.push(n.start);
+                stack.push(n.right);
+            }
+        }
+    }
+
     fn inside_one(&self, p: V3) -> bool {
         let q = [p[0] + self.pert[0], p[1] + self.pert[1], p[2] + self.pert[2]];
         let mut parity = false;
@@ -406,6 +431,17 @@ impl TriMesh {
         Ok(TriMesh { t, bvh, pert, tol: 1e-9 * len })
     }
 
+    /// The same vertices, centroids and original triangle IDs as Surface.samples.
+    fn samples<'py>(&self, py: Python<'py>, selected: PyReadonlyArray1<'py, i64>, spacing: f64)
+        -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<i64>>)> {
+        let selected = selected.as_array().to_vec();
+        if selected.iter().any(|&i| i as usize >= self.t.len()) {
+            return Err(pyo3::exceptions::PyValueError::new_err("triangle id out of range"));
+        }
+        let (p, ids) = py.detach(|| sampling::samples(&self.t, &selected, spacing));
+        Ok((vec3_array(py, p)?, ids.into_pyarray(py)))
+    }
+
     /// (closest points[n, 3], distances[n], triangle ids[n])
     fn closest<'py>(
         &self,
@@ -446,27 +482,7 @@ impl TriMesh {
                 .map(|(&p, &q)| {
                     let d = sub(q, p);
                     let mut out: Vec<(f64, i64)> = Vec::new();
-                    if self.bvh.nodes.is_empty() {
-                        return out;
-                    }
-                    let mut stack: Vec<u32> = vec![0];
-                    while let Some(ni) = stack.pop() {
-                        let n = &self.bvh.nodes[ni as usize];
-                        if !seg_box(p, d, n, self.tol) {
-                            continue;
-                        }
-                        if n.count > 0 {
-                            for &i in &self.bvh.prims[n.start as usize..(n.start + n.count) as usize] {
-                                let [ta, tb, tc] = self.t[i as usize];
-                                if let Some(t) = seg_tri(p, d, ta, tb, tc) {
-                                    out.push((t, i as i64));
-                                }
-                            }
-                        } else {
-                            stack.push(n.start);
-                            stack.push(n.right);
-                        }
-                    }
+                    self.visit_segment_hits(p, d, |t, i| out.push((t, i)));
                     out.sort_by(|x, y| x.partial_cmp(y).unwrap());
                     out
                 })
@@ -483,6 +499,42 @@ impl TriMesh {
             }
         }
         Ok((si.into_pyarray(py), tt.into_pyarray(py), tri.into_pyarray(py)))
+    }
+
+    /// Wall-to-wall distance for autoGapRefinement. Probe the fluid side, then
+    /// retain only the first crossing. An unhit segment keeps infinite width.
+    fn gap_widths<'py>(&self, py: Python<'py>, p: PyReadonlyArray2<'py, f64>,
+                       triangles: PyReadonlyArray1<'py, i64>, limits: PyReadonlyArray1<'py, f64>,
+                       eps: f64, probe: f64) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let p = points(&p)?;
+        let triangles = triangles.as_array().to_vec();
+        let limits = limits.as_array().to_vec();
+        if triangles.len() != p.len() || limits.len() != p.len() ||
+            triangles.iter().any(|&i| i as usize >= self.t.len()) {
+            return Err(pyo3::exceptions::PyValueError::new_err("inconsistent gap samples"));
+        }
+        let widths: Vec<f64> = py.detach(|| {
+            // Normals of the sampled triangles only: a fine pass may touch few of a large STL.
+            p.par_iter().enumerate().map(|(i, &q)| {
+                let [ta, tb, tc] = self.t[triangles[i] as usize];
+                let n = cross(sub(tb, ta), sub(tc, ta));
+                let mag = dot(n, n).sqrt().max(1e-300);
+                let n = n.map(|x| x / mag);
+                let back = self.inside_one(axpy(q, -probe, n));
+                let flip = if probe == eps || self.inside_one(axpy(q, probe, n)) != back {
+                    back
+                } else {
+                    self.inside_one(axpy(q, -eps, n))
+                };
+                let into = if flip { n.map(|x| -x) } else { n };
+                let a = axpy(q, eps, into);
+                let b = axpy(q, limits[i], into);
+                let mut first = f64::INFINITY;
+                self.visit_segment_hits(a, sub(b, a), |t, _| first = first.min(t));
+                if first.is_finite() { eps + first * (limits[i] - eps) } else { f64::INFINITY }
+            }).collect()
+        });
+        Ok(widths.into_pyarray(py))
     }
 
     /// Triangles within distance r[i] of p[i] (exact), ascending per point:
