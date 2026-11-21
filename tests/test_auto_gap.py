@@ -5,6 +5,7 @@ python -m unittest discover -s tests
 import os
 import sys
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -72,6 +73,29 @@ class AutoGapSamples(unittest.TestCase):
         groups, nun = _auto_gap_samples(dom, 0.1, np.array([1]), 3.0, 4)
         self.assertEqual(groups, [])
         self.assertEqual(nun, 0)
+
+    def test_same_spacing_reuses_widths_in_fine_sample_order(self):
+        near = box((0, 0, 0), (1, 1, 1))[0][1]
+        walls = np.concatenate([near, near + 4])
+        dom = Surface([("low", walls[::2]), ("high", walls[1::2])])
+        h0 = 0.5
+        high_probes = []
+
+        def widths(dom, p, ti, lw, h0, nacross, eps):
+            high_probes.append(p[lw == 2])
+            return np.where(p[:, 0] > 2, np.inf, np.where(p[:, 1] < 0.5, h0 / 8, h0 / 4))
+
+        with mock.patch("cutmesh.mesher._gap_widths", widths):
+            groups, nun = _auto_gap_samples(dom, h0, np.array([1, 2]), 2.0, 3)
+        expected, _ = _interior_samples(dom.tris[dom.tris[:, 0, 0] < 2], h0 / 8)
+        self.assertEqual(len(groups), 1)
+        lv, pts, n = groups[0]
+        self.assertEqual(lv, 3)
+        self.assertEqual(n, nun)
+        self.assertEqual(nun, (expected[:, 1] < 0.5).sum())
+        np.testing.assert_array_equal(pts, expected)
+        coarse, _ = _interior_samples(dom.tris[dom.region == 1], h0 / 8)
+        np.testing.assert_array_equal(np.concatenate(high_probes), coarse)
 
     def test_stator_gap(self):
         # stirred tank with a fixed ring 0.5 mm outside the blade corners: only the ring's

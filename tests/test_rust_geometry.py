@@ -5,6 +5,8 @@ python -m unittest discover -s tests   (skipped when the extension is not built)
 import os
 import sys
 import unittest
+from types import SimpleNamespace
+from unittest import mock
 
 import numpy as np
 
@@ -50,6 +52,34 @@ class RustMatchesPython(unittest.TestCase):
 
     def test_sdf(self):
         np.testing.assert_allclose(self.dom.sdf(self.X), self.python_surface().sdf(self.X), atol=1e-12)
+
+    @unittest.skipUnless(hasattr(getattr(G._core, "TriMesh", None), "samples"), "Rust sampling not built")
+    def test_ordered_surface_samples(self):
+        ref = self.python_surface()
+        for spacing, regions in ((0.01, None), (0.007, [1, 3]), (1.0, [0]), (0.01, [])):
+            with self.subTest(spacing=spacing, regions=regions):
+                pts, ti = self.dom.samples(spacing, regions)
+                want, parents = ref.samples(spacing, regions)
+                np.testing.assert_array_equal(pts.view(np.uint64), want.view(np.uint64))
+                np.testing.assert_array_equal(ti, parents)
+
+    @unittest.skipUnless(hasattr(getattr(G._core, "TriMesh", None), "gap_widths"), "Rust gap widths not built")
+    def test_batched_gap_widths(self):
+        from cutmesh.mesher import _gap_widths
+        rs = self.dom._rs
+        previous = SimpleNamespace(inside=rs.inside, segment_hits=rs.segment_hits)
+        ref = self.python_surface()
+        p = self.dom.tris.mean(1)
+        ti = np.arange(len(p))
+        limits_level = ti % 3
+        for eps in (0.0001, 0.1 * self.dom.inside_shift):
+            got = _gap_widths(self.dom, p, ti, limits_level, 0.2, 2.0, eps)
+            with mock.patch.object(self.dom, "_rs", previous):
+                separate = _gap_widths(self.dom, p, ti, limits_level, 0.2, 2.0, eps)
+            np.testing.assert_array_equal(got, separate)
+            py = _gap_widths(ref, p, ti, limits_level, 0.2, 2.0, eps)
+            np.testing.assert_allclose(got, py, rtol=0, atol=1e-12)
+            self.assertTrue(np.isinf(got).any() and np.isfinite(got).any())
 
     def test_feature_segments(self):
         seg = self.dom.feature_edges(30.0)

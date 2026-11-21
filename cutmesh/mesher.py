@@ -1172,9 +1172,11 @@ def _fluid_side(dom, p, nrm, eps):
     side is taken from the probe behind the triangle as before."""
     e = max(eps, 4.0 * dom.inside_shift)
     back = dom.inside(p - e * nrm)
-    front = dom.inside(p + e * nrm)
-    flip = np.where(back != front, back, dom.inside(p - eps * nrm))
-    return np.where(flip[:, None], -nrm, nrm)
+    if e != eps:
+        ambiguous = back == dom.inside(p + e * nrm)
+        if ambiguous.any():
+            back[ambiguous] = dom.inside(p[ambiguous] - eps * nrm[ambiguous])
+    return np.where(back[:, None], -nrm, nrm)
 
 
 def _interior_samples(tris, spacing):
@@ -1189,11 +1191,14 @@ def _gap_widths(dom, p, ti, lw, h0, nacross, eps):
     """Gap width w at wall samples p (on triangles ti, surface level lw): from each sample a
     line goes into the fluid along the normal, and the first wall it hits within nacross
     cells of level lw gives w (inf: no wall that close)."""
+    wmax = nacross * h0 / 2.0 ** lw                         # wider gaps are resolved anyway
+    if hasattr(dom._rs, "gap_widths"):
+        return dom._rs.gap_widths(p, np.asarray(ti, np.int64), wmax, eps,
+                                  max(eps, 4.0 * dom.inside_shift))
     T = dom.tris[ti]
     nrm = np.cross(T[:, 1] - T[:, 0], T[:, 2] - T[:, 0])
     nrm /= np.maximum(np.linalg.norm(nrm, axis=1), 1e-300)[:, None]
     into = _fluid_side(dom, p, nrm, eps)
-    wmax = nacross * h0 / 2.0 ** lw                         # wider gaps are resolved anyway
     a = p + eps * into
     b = p + wmax[:, None] * into
     seg, t, _ = dom.segment_hits(a, b)
@@ -1231,6 +1236,7 @@ def _auto_gap_samples(dom, h0, region_level, nacross, lmax):
     eps = 1e-3 * h0 / 2 ** lmax
     tri_level = region_level[dom.region]
     cand = []
+    finest_coarse = None
     for lv in np.unique(tri_level):
         if lv >= lmax:
             continue
@@ -1239,6 +1245,8 @@ def _auto_gap_samples(dom, h0, region_level, nacross, lmax):
         ti = sel[ids]
         w = _gap_widths(dom, p, ti, tri_level[ti], h0, nacross, eps)
         cand.append(np.unique(ti[w < nacross * h0 / 2.0 ** lv]))
+        if lv + 1 == lmax:
+            finest_coarse = ti, w
     cand = np.concatenate(cand) if cand else np.zeros(0, np.int64)
     if not len(cand):
         return [], 0
@@ -1246,7 +1254,18 @@ def _auto_gap_samples(dom, h0, region_level, nacross, lmax):
     p, ids = _interior_samples(dom.tris[cand], h0 / 2 ** lmax)
     ti = cand[ids]
     lw = tri_level[ti]
-    w = _gap_widths(dom, p, ti, lw, h0, nacross, eps)
+    if finest_coarse is None:
+        w = _gap_widths(dom, p, ti, lw, h0, nacross, eps)
+    else:
+        # Both subdivisions visit pieces breadth-first in original triangle order.
+        # At the same spacing, filtering to their common parents gives identical rows.
+        coarse_ti, coarse_w = finest_coarse
+        reuse = lw == lmax - 1
+        w = np.empty(len(p))
+        w[reuse] = coarse_w[np.isin(coarse_ti, cand)]
+        if not reuse.all():
+            fresh = ~reuse
+            w[fresh] = _gap_widths(dom, p[fresh], ti[fresh], lw[fresh], h0, nacross, eps)
     with np.errstate(divide="ignore"):
         need = np.ceil(np.log2(nacross * h0 / w)).astype(float)
     need = np.where(np.isfinite(w), need, -1)
