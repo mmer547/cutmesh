@@ -1332,10 +1332,11 @@ def generate(cfg, log=print):
     T(f"polyhedral cells ({len(pts)} points)")
 
     def leaf_faces(ci):
-        out = []
-        for f in range(cptr[ci], cptr[ci + 1]):
-            out.append((int(f_key[f]), fverts[fptr[f]:fptr[f + 1]].tolist()))
-        return out
+        a, b = int(cptr[ci]), int(cptr[ci + 1])
+        fp = fptr[a:b + 1].tolist()              # one conversion per cell, not per face
+        o = fp[0]
+        vs = fverts[o:fp[-1]].tolist()
+        return [(k, vs[fp[j] - o:fp[j + 1] - o]) for j, k in enumerate(f_key[a:b].tolist())]
 
     def classify_leaves(phi, leaves):
         """-1 all vertices <= 0, +1 all >= 0 (and some > 0), 0 straddling."""
@@ -2183,15 +2184,21 @@ def generate(cfg, log=print):
         if np.any(pyr <= 0.02 * np.linalg.norm(sf, axis=1) * hcell):
             return None
         me = {r_small, r_target}
-        worst = 1.0
-        for (fid, _), s in zip(keep, sf):
+        sel, cen = [], []
+        for i, (fid, _) in enumerate(keep):
             nb = face_neighbour(fid, me)
-            if nb < 0:
-                continue
-            d = node_centre(nb) - cc
-            c = float(np.dot(d, s) / (np.linalg.norm(d) * np.linalg.norm(s) + 1e-300))
-            worst = min(worst, c)
-        return worst
+            if nb >= 0:
+                sel.append(i); cen.append(node_centre(nb))
+        if not sel:
+            return 1.0
+        d = (np.array(cen) - cc)[:, None, :]
+        s = sf[sel][:, None, :]
+        dT, sT = d.transpose(0, 2, 1), s.transpose(0, 2, 1)
+        # row-wise dot products through matmul: bit for bit what np.dot / np.linalg.norm
+        # of each row give (the same BLAS kernel; a sum over the axis rounds differently
+        # and changes borderline merges)
+        c = (d @ sT)[:, 0, 0] / (np.sqrt((d @ dT)[:, 0, 0]) * np.sqrt((s @ sT)[:, 0, 0]) + 1e-300)
+        return min(1.0, float(c.min()))
 
     merged = rejected = 0
     for qi, pi in enumerate(small.tolist()):
@@ -2482,7 +2489,10 @@ def run(config_path, case_dir=None, log=print, check=True):
                 + " / ".join(ami.patch_names(z["name"], cfg["openfoam"]))
                 + f", {st['points']} points duplicated on the zone side")
         T("sliding-mesh interfaces")
-    write_polymesh(case_dir, R["points"], R["faces"], R["owner"], R["neighbour"], R["patches"],
+    # one flattening of the face lists serves the binary writer and the quality check
+    ff = quality.FlatFaces(R["faces"]) if (check or cfg["writeFormat"] == "binary") else None
+    write_polymesh(case_dir, R["points"], (ff.n, ff.v) if cfg["writeFormat"] == "binary" else R["faces"],
+                   R["owner"], R["neighbour"], R["patches"],
                    R["cell_zones"], R["face_zones"], fmt=cfg["writeFormat"])
     mrf_z = [z for z in R["zones"] if not z["ami"]]
     if cfg["writeMRFProperties"] and mrf_z:
@@ -2501,7 +2511,7 @@ def run(config_path, case_dir=None, log=print, check=True):
             log(f"sliding mesh (openfoam.org): after reading the mesh run {hint}")
     T("write polyMesh")
     if check:
-        R["quality"] = quality.check(R["points"], R["faces"], R["owner"], R["neighbour"], log=log)
+        R["quality"] = quality.check(R["points"], ff, R["owner"], R["neighbour"], log=log)
         T("quality check")
     nC = _n_cells(R)
     log(f"total {time.time() - T.t0:.1f}s, {nC} cells")
