@@ -9,6 +9,8 @@ python benchmark/run_bench.py benchmark/suites/synthetic.json -j 4
 python benchmark/run_bench.py benchmark/suites/showcase.json -j 4  # 配管・ダクト・外部流れ（実行例。どれも PASS）
 python benchmark/run_bench.py benchmark/suites/local.json       # 手元の実形状（無いファイルはスキップ）
 python benchmark/run_bench.py benchmark/suites/large.json -j 1  # 約 100 万セル・回転ゾーン（速さの確認。1 ケースずつ）
+python benchmark/run_bench.py benchmark/suites/scale.json -j 1 --only tilted_1m   # 高速化の確認（100 万 / 800 万セル）
+python benchmark/mesh_hash.py CASE_A CASE_B                     # 2 つのメッシュがバイト単位で同じか
 python benchmark/stl_check.py some.stl                          # 入力 STL の診断だけ
 ```
 
@@ -22,6 +24,7 @@ PASS したケースの polyMesh は削除します（`--keep` で残す）。�
 |---|---|
 | `run_bench.py` | スイートを実行して判定・集計する。1 ケース 1 プロセス（落ちても固まっても他のケースは続く）、タイムアウト付き |
 | `render_mesh.py` | メッシュの画像: `overview.png`（壁面を 2 方向から、パッチごとに色分け）と `cut.png`（x 方向の中央より奥のセルだけを残した 3D 図 + x・y・z の中央断面）。checkMesh の基準を満たさないセル（体積 ≤ 0、非直交性 > 70°、歪度 > 4）は赤。`run_bench.py` が毎回呼ぶ（`--no-images` で省略）。単独でも `python benchmark/render_mesh.py <case>` で使える |
+| `mesh_hash.py` | 書き出した polyMesh の各ファイルの SHA-256。2 つのケースが同じメッシュかを比べる（`--save` / `--check` で保存した値とも比べられる）。`run_bench.py` が毎回記録する |
 | `stl_check.py` | 入力 STL の診断: 開いた辺、非多様体の辺、向きの不一致、潰れた三角形、重複した三角形、部品の数、オイラー標数、符号付き体積 |
 | `make_synthetic.py` | 人工形状 25 個と実用的な形状 8 個（`showcase`）を `data/synthetic/` に生成 |
 | `fetch_thingi10k.py` | Thingi10K から段階ごとに抜き出して `data/thingi10k/` と `suites/thingi10k.json` を作る（`pip install thingi10k` が必要。初回はデータセット全体をダウンロードする） |
@@ -51,6 +54,7 @@ run_bench.py SUITE --cells-across 48                    # 全ケースの解像�
 run_bench.py SUITE --set addLayers='{"nLayers": 3}'     # 全ケースの meshDict を上書き（境界層つきで回す）
 run_bench.py SUITE --baseline benchmark/baselines/synthetic.json   # 基準との差分（悪化があれば終了コード 1）
 run_bench.py SUITE --save-baseline                      # 基準を更新
+run_bench.py SUITE --baseline OLD/results.json --same-mesh   # メッシュが変わったら悪化として扱う（高速化の確認）
 ```
 
 ### 基準との比較（`--baseline`）
@@ -65,6 +69,7 @@ run_bench.py SUITE --save-baseline                      # 基準を更新
 | `minVol` | 最小セル体積が 1/10 未満になった |
 | `slower` / `faster` | 時間が、30 秒を超えるケースでは 5%、2 秒を超えるケースでは 30% を超えて変わった |
 | `slower <case> / <step>` | 1 秒以上かかる段階が 20% を超えて遅くなった（段階名の括弧内の件数は除いて突き合わせる） |
+| `same` / `mesh` | メッシュのハッシュが同じ / 変わった（`--same-mesh` のときは変わったら `WORSE`）。基準と CPU・OS・NumPy の版が違うと比べない（`note` の行が出る） |
 
 時間は他のケースと並列に走らせると 10〜30% ぶれるので、時間を比べるときは `-j 1` にします。
 `summary.md` の末尾に、段階ごとの時間の表が出ます。
@@ -123,6 +128,22 @@ Thingi10K などは単位や大きさがばらばらなので、この方法で�
 ステーターの 2 ケースには `probes` を付けています。翼の先端の正面で隙間を横切る線分を内側半分と外側半分に分け、
 内側半分にセルがあって回転ゾーンに入っていること、外側半分にセルがあってゾーンに入っていないことを確かめます
 （隙間がつぶれても体積の差はわずかで、リーク検査にも出ないため）。足りなければ WARN になります。
+
+## 高速化の確認用スイート（`suites/scale.json`）
+
+1000 万セルを 1 分で作る目標（[../AGENTS.md](../AGENTS.md)）に向けて、高速化の変更を確かめるスイートです。
+傾けた攪拌槽（`tank_tilted` と同じ形状と設定）の解像度だけを上げています。凸エッジの厳密カットと円筒の回転ゾーンが
+働くので、公開データの中では実際の対象に一番近い形です。
+
+| ケース | baseCellSize | セル数 | 時間（書き出しと品質チェックまで） | メモリ |
+|---|---|---|---|---|
+| `tilted_1m` | 0.0052 | 983,169 | 54.7 s | 6.8 GB |
+| `tilted_8m` | 0.0024 | 8,256,407 | 339.7 s | 46.3 GB |
+
+（2026-11-21、16 コア Ryzen AI MAX+ 395、Windows、Rust 拡張あり。基準は `baselines/scale.json`）
+
+高速化の PR では、変更前と変更後を同じマシンで回し、`--baseline 変更前/results.json --same-mesh` でメッシュが
+バイト単位で同じことを確かめます。`tilted_8m` は約 46 GB のメモリを使うので、最終確認のときだけ回します。
 
 ## 現在の結果（2026-11-13、入力 STL の自動修正を入れた後）
 
