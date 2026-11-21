@@ -453,10 +453,11 @@ fn tree_of(ijk: &[I3], lev: &[u32], n: I3, lmax: u32, periodic: [bool; 3]) -> Tr
 
 /// leaves to split so that no leaf of level m has a neighbour (face, edge or vertex)
 /// coarser than m - 1, as one pass of Octree.balance
-fn balance_marks(ijk: &[I3], lev: &[u32], n: I3, lmax: u32, periodic: [bool; 3]) -> Vec<bool> {
+/// (only the leaves from `from` on are checked: the others are known to be fine)
+fn balance_marks(ijk: &[I3], lev: &[u32], n: I3, lmax: u32, periodic: [bool; 3], from: usize) -> Vec<bool> {
     let tree = tree_of(ijk, lev, n, lmax, periodic);
     let off = off26();
-    let bad: Vec<usize> = (0..lev.len())
+    let bad: Vec<usize> = (from.min(lev.len())..lev.len())
         .into_par_iter()
         .filter(|&i| lev[i] >= 2)
         .flat_map_iter(|i| {
@@ -498,8 +499,14 @@ fn split(ijk: &[I3], lev: &[u32], mark: &[bool]) -> (Vec<I3>, Vec<u32>) {
     (a, l)
 }
 
-/// balance(ijk[n, 3], lev[n], n[3], lmax, periodic[3]) -> (ijk, lev, splits per pass)
+/// balance(ijk[n, 3], lev[n], n[3], lmax, periodic[3], new_from) -> (ijk, lev, splits per pass)
+///
+/// new_from: the tree was balanced before its leaves from new_from on were added by a
+/// split.  A leaf that was there before only gets finer neighbours, so only the new
+/// leaves (and then the children of each pass) can need a coarse neighbour split: the
+/// same splits as checking every leaf, without the scan of the whole tree.
 #[pyfunction]
+#[pyo3(signature = (ijk, lev, n, lmax, periodic, new_from=None, prefix=0))]
 pub fn balance<'py>(
     py: Python<'py>,
     ijk: PyReadonlyArray2<'py, i64>,
@@ -507,7 +514,9 @@ pub fn balance<'py>(
     n: [i64; 3],
     lmax: u32,
     periodic: [bool; 3],
-) -> PyResult<(Bound<'py, PyArray2<i64>>, Bound<'py, PyArray1<i64>>, Vec<usize>)> {
+    new_from: Option<usize>,
+    prefix: usize,
+) -> PyResult<(Bound<'py, PyArray2<i64>>, Bound<'py, PyArray1<i64>>, Vec<usize>, Vec<i64>)> {
     let a = ijk.as_array();
     let lv = lev.as_array();
     if a.nrows() != lv.len() || a.ncols() != 3 {
@@ -518,14 +527,26 @@ pub fn balance<'py>(
     if lev.iter().any(|&l| l > lmax) {
         return Err(pyo3::exceptions::PyValueError::new_err("leaf level above max level"));
     }
+    // the first `prefix` leaves are followed: which of them are left unsplit (split()
+    // keeps the unsplit leaves first, in order)
+    let mut origin: Vec<i64> = (0..lev.len() as i64).map(|i| if (i as usize) < prefix { i } else { -1 }).collect();
     let passes = py.detach(|| {
         let mut passes = Vec::new();
+        let mut from = new_from.unwrap_or(0);
         loop {
-            let mark = balance_marks(&ijk, &lev, n, lmax, periodic);
+            let mark = balance_marks(&ijk, &lev, n, lmax, periodic, from);
             let ns = mark.iter().filter(|&&m| m).count();
             passes.push(ns);
             if ns == 0 {
                 break;
+            }
+            if new_from.is_some() {
+                from = lev.len() - ns; // split() puts the children after the kept leaves
+            }
+            if prefix > 0 {
+                let mut o2: Vec<i64> = origin.iter().zip(mark.iter()).filter(|p| !*p.1).map(|p| *p.0).collect();
+                o2.resize(o2.len() + 8 * ns, -1);
+                origin = o2;
             }
             let (a2, l2) = split(&ijk, &lev, &mark);
             ijk = a2;
@@ -536,7 +557,8 @@ pub fn balance<'py>(
     let nl = lev.len();
     let arr = numpy::ndarray::Array2::from_shape_vec((nl, 3), ijk.into_iter().flatten().collect()).unwrap();
     let lv: Vec<i64> = lev.into_iter().map(|l| l as i64).collect();
-    Ok((arr.into_pyarray(py), lv.into_pyarray(py), passes))
+    let survivors: Vec<i64> = origin.into_iter().take_while(|&o| o >= 0).collect();
+    Ok((arr.into_pyarray(py), lv.into_pyarray(py), passes, if prefix > 0 { survivors } else { Vec::new() }))
 }
 
 // ------------------------------------------------------------------ leaf validity

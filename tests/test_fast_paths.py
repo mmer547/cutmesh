@@ -172,6 +172,29 @@ class RustOctree(unittest.TestCase):
             np.testing.assert_array_equal(a.lev, b.lev)
             self.assertEqual(la, lb)
 
+    def test_balance_after_split(self):
+        # balanced, then a few leaves split: checking only the new leaves gives the
+        # splits of the full check
+        rng = np.random.default_rng(11)
+        nsplit = 0
+        for args in CASES:
+            a = random_octree(*args)
+            a.balance(lambda s: None)
+            for _ in range(3):
+                mark = (rng.random(len(a.lev)) < 0.02) & (a.lev < a.Lmax)
+                a.split(mark)
+                b = copy.deepcopy(a)
+                self.assertGreaterEqual(a._new_from, 0)
+                la, lb = [], []
+                a.balance(la.append)                   # only the new leaves checked
+                b._new_from = -1
+                b.balance(lb.append)                   # every leaf checked
+                np.testing.assert_array_equal(a.ijk, b.ijk)
+                np.testing.assert_array_equal(a.lev, b.lev)
+                self.assertEqual(la, lb)
+                nsplit += len(la)
+        self.assertGreater(nsplit, 0)
+
     def test_build_cells(self):
         for args in CASES:
             oc = random_octree(*args)

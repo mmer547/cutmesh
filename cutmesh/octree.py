@@ -108,10 +108,25 @@ class Octree:
             todo = todo[~hit]
         return out
 
+    def track(self):
+        """follow the current leaves through split() and balance(): afterwards the first
+        len(self.src) leaves are the unsplit ones, self.src their indices now (the
+        others are new); untrack() stops"""
+        self.src = np.arange(len(self.lev))
+
+    def untrack(self):
+        self.src = None
+
     def split(self, mask):
         idx = np.nonzero(mask)[0]
         if len(idx) == 0:
             return 0
+        # balance() checks only the new leaves when the tree was balanced before this
+        # split (-1: several splits since, check all)
+        self._new_from = len(self.lev) - len(idx) if getattr(self, "_balanced", False) else -1
+        self._balanced = False
+        if getattr(self, "src", None) is not None:
+            self.src = self.src[~mask[:len(self.src)]]
         keep = ~mask
         child_ijk = (2 * self.ijk[idx])[:, None, :] + CHILD[None]
         child_lev = np.repeat(self.lev[idx] + 1, 8)
@@ -155,9 +170,15 @@ class Octree:
 
     def balance(self, log=print):
         if _core is not None and hasattr(_core, "balance"):
-            self.ijk, self.lev, passes = _core.balance(
+            nf = getattr(self, "_new_from", -1)
+            src = getattr(self, "src", None)
+            self.ijk, self.lev, passes, surv = _core.balance(
                 np.ascontiguousarray(self.ijk, np.int64), np.ascontiguousarray(self.lev, np.int64),
-                [int(v) for v in self.n], int(self.Lmax), [bool(v) for v in self.periodic])
+                [int(v) for v in self.n], int(self.Lmax), [bool(v) for v in self.periodic],
+                nf if nf >= 0 else None, 0 if src is None else len(src))
+            if src is not None and len(src):
+                self.src = src[np.asarray(surv, np.int64)]
+            self._balanced, self._new_from = True, -1
             tot = len(self.lev) - 7 * sum(passes)
             for it, n in enumerate(passes[:-1]):
                 tot += 7 * n
