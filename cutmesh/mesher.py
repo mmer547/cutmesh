@@ -1848,10 +1848,15 @@ def generate(cfg, log=print):
         kv, cpk, dk = kv[off], cpk[off], dk[off]
         dirk = (pts[kv] - cpk) / np.maximum(dk, 1e-300)[:, None]
         width = np.full(len(kv), np.inf)
+        hk = vh_min[kv]
         for t in np.linspace(0.05, 1.5, 30):
-            q = cpk + (t * vh_min[kv])[:, None] * dirk
-            hit = np.isinf(width) & (dom.inside(q) != (side < 0))
-            width[hit] = t * vh_min[kv][hit]
+            # only the vertices still without a width are tested (inside() is per point)
+            u = np.flatnonzero(np.isinf(width))
+            if not len(u):
+                break
+            q = cpk[u] + (t * hk[u])[:, None] * dirk[u]
+            hit = dom.inside(q) != (side < 0)
+            width[u[hit]] = t * hk[u[hit]]
         return off, cpk, dirk, width
 
     def snap_features(feat, phi, label, concave=None):
