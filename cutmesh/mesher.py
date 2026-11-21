@@ -496,6 +496,66 @@ def _merged_face_ok(P, loop, parts, nrms, cmin, flat_tol):
     return bool(np.all(at > 1e-9 * a))
 
 
+def _join_cell_faces(P, polys, cmin, cpart, flat_tol):
+    """merge_coplanar_wall_faces for the boundary faces of one cell in one patch:
+    (faces, number of faces joined away)"""
+    joined = 0
+    nrm = []
+    for q in polys:
+        Q = P[q]
+        s = np.cross(Q - Q.mean(0), np.roll(Q, -1, 0) - Q.mean(0)).sum(0)
+        nrm.append(s / max(np.linalg.norm(s), 1e-300))
+    par = list(range(len(polys)))
+
+    def fnd(i):
+        while par[i] != i:
+            par[i] = par[par[i]]; i = par[i]
+        return i
+    emap = {}
+    for i, q in enumerate(polys):
+        for k in range(len(q)):
+            emap[(q[k], q[(k + 1) % len(q)])] = i
+    for (a, b), i in emap.items():
+        j = emap.get((b, a))
+        if j is not None and j != i and float(np.dot(nrm[i], nrm[j])) > cmin:
+            par[fnd(i)] = fnd(j)
+    groups = {}
+    for i in range(len(polys)):
+        groups.setdefault(fnd(i), []).append(i)
+    res = []
+    for ids in groups.values():
+        if len(ids) == 1:
+            res.append(polys[ids[0]]); continue
+        de = {}
+        for i in ids:
+            q = polys[i]
+            for k in range(len(q)):
+                e = (q[k], q[(k + 1) % len(q)])
+                de[e] = de.get(e, 0) + 1
+        segs = [e for e in de if (e[1], e[0]) not in de]
+        nxt = {}
+        ok = True
+        for a, b in segs:
+            if a in nxt:
+                ok = False; break
+            nxt[a] = b
+        loop = []
+        a = a0 = None
+        if ok and segs:
+            a0 = segs[0][0]; a = a0
+            for _ in range(len(segs) + 1):
+                loop.append(a); a = nxt.get(a)
+                if a is None or a == a0:
+                    break
+        if (ok and a0 is not None and a == a0 and len(loop) == len(segs) and len(loop) >= 3
+                and _merged_face_ok(P, loop, [polys[i] for i in ids], [nrm[i] for i in ids],
+                                    cpart, flat_tol)):
+            res.append(loop); joined += len(ids) - 1
+        else:
+            res.extend(polys[i] for i in ids)
+    return res, joined
+
+
 def merge_coplanar_wall_faces(P, nn, vv, owner, nI, patches, max_angle=5.0):
     """Join the boundary faces of one cell that lie in one plane, belong to one patch and
     share edges into a single face.  Cut cells can carry a flat wall split into several
@@ -515,76 +575,36 @@ def merge_coplanar_wall_faces(P, nn, vv, owner, nI, patches, max_angle=5.0):
     new_p, start, joined = [], nI, 0
     for p in patches:
         f0, nf = p["startFace"], p["nFaces"]
-        fl, ol = [], []
-        f = f0
-        while f < f0 + nf:
-            g = f
-            while g < f0 + nf and owner[g] == owner[f]:
-                g += 1
+        # runs of faces of one cell: only those with several faces can join; the others
+        # are copied as they are, a range of faces at a time
+        o = np.asarray(owner[f0:f0 + nf])
+        rs = np.flatnonzero(np.concatenate([[True], o[1:] != o[:-1]])) + f0
+        re_ = np.concatenate([rs[1:], [f0 + nf]])
+        multi = np.flatnonzero(re_ - rs > 1)
+        pn, pv, po = [], [], []
+        nfo = 0
+        prev = f0
+        for m in multi.tolist():
+            f, g = int(rs[m]), int(re_[m])
+            if f > prev:
+                pn.append(nn[prev:f]); pv.append(vv[ptr[prev]:ptr[f]]); po.append(owner[prev:f])
+                nfo += f - prev
             polys = [vv[ptr[k]:ptr[k + 1]].tolist() for k in range(f, g)]
-            if len(polys) > 1:
-                nrm = []
-                for q in polys:
-                    Q = P[q]
-                    s = np.cross(Q - Q.mean(0), np.roll(Q, -1, 0) - Q.mean(0)).sum(0)
-                    nrm.append(s / max(np.linalg.norm(s), 1e-300))
-                par = list(range(len(polys)))
-
-                def fnd(i):
-                    while par[i] != i:
-                        par[i] = par[par[i]]; i = par[i]
-                    return i
-                emap = {}
-                for i, q in enumerate(polys):
-                    for k in range(len(q)):
-                        emap[(q[k], q[(k + 1) % len(q)])] = i
-                for (a, b), i in emap.items():
-                    j = emap.get((b, a))
-                    if j is not None and j != i and float(np.dot(nrm[i], nrm[j])) > cmin:
-                        par[fnd(i)] = fnd(j)
-                groups = {}
-                for i in range(len(polys)):
-                    groups.setdefault(fnd(i), []).append(i)
-                res = []
-                for ids in groups.values():
-                    if len(ids) == 1:
-                        res.append(polys[ids[0]]); continue
-                    de = {}
-                    for i in ids:
-                        q = polys[i]
-                        for k in range(len(q)):
-                            e = (q[k], q[(k + 1) % len(q)])
-                            de[e] = de.get(e, 0) + 1
-                    segs = [e for e in de if (e[1], e[0]) not in de]
-                    nxt = {}
-                    ok = True
-                    for a, b in segs:
-                        if a in nxt:
-                            ok = False; break
-                        nxt[a] = b
-                    loop = []
-                    a = a0 = None
-                    if ok and segs:
-                        a0 = segs[0][0]; a = a0
-                        for _ in range(len(segs) + 1):
-                            loop.append(a); a = nxt.get(a)
-                            if a is None or a == a0:
-                                break
-                    if (ok and a0 is not None and a == a0 and len(loop) == len(segs) and len(loop) >= 3
-                            and _merged_face_ok(P, loop, [polys[i] for i in ids], [nrm[i] for i in ids],
-                                                cpart, flat_tol)):
-                        res.append(loop); joined += len(ids) - 1
-                    else:
-                        res.extend(polys[i] for i in ids)
-                polys = res
-            for q in polys:
-                fl.append(q); ol.append(owner[f])
-            f = g
-        out_n.append(np.array([len(q) for q in fl], np.int64))
-        out_v.append(np.array([v for q in fl for v in q], np.int64))
-        out_o.append(np.array(ol, np.int64))
-        new_p.append(dict(p, startFace=start, nFaces=len(fl)))
-        start += len(fl)
+            polys, nj = _join_cell_faces(P, polys, cmin, cpart, flat_tol)
+            joined += nj
+            pn.append(np.array([len(q) for q in polys], np.int64))
+            pv.append(np.array([v for q in polys for v in q], np.int64))
+            po.append(np.full(len(polys), owner[f], np.int64))
+            nfo += len(polys)
+            prev = g
+        if f0 + nf > prev:
+            pn.append(nn[prev:f0 + nf]); pv.append(vv[ptr[prev]:ptr[f0 + nf]]); po.append(owner[prev:f0 + nf])
+            nfo += f0 + nf - prev
+        out_n += [np.asarray(x, np.int64) for x in pn]
+        out_v += [np.asarray(x, np.int64) for x in pv]
+        out_o += [np.asarray(x, np.int64) for x in po]
+        new_p.append(dict(p, startFace=start, nFaces=nfo))
+        start += nfo
     return (np.concatenate(out_n), np.concatenate(out_v), np.concatenate(out_o), new_p, joined)
 
 
@@ -842,6 +862,24 @@ class _HookCtx:
     def __init__(self, pos, phi, onfeat=()):
         self.pos, self.phi, self.onfeat = pos, phi, onfeat
         self.new_vertices, self.new_parents = [], []
+
+
+class _FaceOcc:
+    """{face id: [pieces holding it]} (pieces in order, a piece once per face it has)
+    looked up in the sorted face ids instead of a dict built over every face"""
+
+    def __init__(self, key, cell):
+        o = np.argsort(key, kind="stable")
+        self.k, self.c = key[o], cell[o]
+
+    def get(self, fid, default=()):
+        a = int(np.searchsorted(self.k, fid))
+        b = int(np.searchsorted(self.k, fid, side="right"))
+        return self.c[a:b].tolist() if b > a else default
+
+
+def _rust_merge_ok():
+    return _core is not None and hasattr(_core, "merge_cells")
 
 
 def _rust_cut_ok(ctx, hk):
@@ -2210,23 +2248,20 @@ def generate(cfg, log=print):
 
     # ------------------------------------------------------------ small-cell merging
     nP = len(pieces)
-    occ = {}
-    for pi, pc in enumerate(pieces):
-        for k, (fid, poly) in enumerate(pc[0]):
-            occ.setdefault(fid, []).append(pi)
     # bulk neighbour of an original octree face key
     bsel = np.nonzero(bulk_alive[f_cell])[0]
     key2bulk = np.full(M_nkeys, -1, np.int64)
     key2bulk[f_key[bsel]] = f_cell[bsel]
-    py_polys, py_cell, py_key = [], [], []
-    for pi, pc in enumerate(pieces):
-        for fid, poly in pc[0]:
-            py_polys.append(poly); py_cell.append(pi); py_key.append(fid)
-    py_cell = np.array(py_cell, np.int64); py_key = np.array(py_key, np.int64)
+    py_polys = [poly for pc in pieces for _, poly in pc[0]]
+    py_key = np.fromiter((fid for pc in pieces for fid, _ in pc[0]), np.int64, count=len(py_polys))
+    py_cell = np.repeat(np.arange(nP, dtype=np.int64), [len(pc[0]) for pc in pieces]).astype(np.int64)
+    occ = _FaceOcc(py_key, py_cell)       # face id -> pieces holding it, in piece order
     vol = np.zeros(nP)
     farea = {}
+    p_n = np.zeros(0, np.int64); p_verts = np.zeros(0, np.int64)
     if nP:
         ffp = quality.FlatFaces(py_polys)
+        p_n, p_verts = ffp.n, ffp.v
         Cf, Sf = quality.face_geometry(P, ffp)
         ref = np.zeros((nP, 3)); ref[py_cell] = Cf
         cnt_ = np.bincount(py_cell, minlength=nP)
@@ -2360,7 +2395,20 @@ def generate(cfg, log=print):
         return min(1.0, float(c.min()))
 
     merged = rejected = 0
-    for qi, pi in enumerate(small.tolist()):
+    rust_merge = _rust_merge_ok()
+    if rust_merge:
+        # the same greedy loop in Rust (candidates in this set order, same arithmetic)
+        par_, mem_, bmem_, gvol_, merged, rejected = _core.merge_cells(
+            np.ascontiguousarray(P, float), [pc[0] for pc in pieces], [int(z) for z in zone_of],
+            np.ascontiguousarray(bulk_zone, np.int64), np.ascontiguousarray(cptr, np.int64),
+            np.ascontiguousarray(fptr, np.int64), np.ascontiguousarray(fverts, np.int64),
+            np.ascontiguousarray(f_key, np.int64), kb1, kb2, small.tolist(), int(nsmall), gvol.tolist(),
+            hexvol.tolist(), beta, [float(csize[pc[1]]) for pc in pieces], float(cos_lim))
+        parent[:] = par_
+        members.update(mem_)
+        bulk_members.update(bmem_)
+        gvol[:] = gvol_
+    for qi, pi in enumerate([] if rust_merge else small.tolist()):
         if find(pi) != pi or (qi < nsmall and gvol[pi] >= beta * hexvol[pi]):
             continue
         fa = node_faces(pi)
@@ -2451,8 +2499,7 @@ def generate(cfg, log=print):
     bn = fn[bsel]
     b_off = np.repeat(fptr[bsel] - np.concatenate([[0], np.cumsum(bn)[:-1]]), bn)
     b_verts = fverts[np.arange(int(bn.sum())) + b_off]
-    pn = np.array([len(p) for p in py_polys], np.int64)
-    p_verts = np.fromiter((v for p in py_polys for v in p), np.int64, count=int(pn.sum()))
+    pn = p_n                                  # the pieces' faces, flattened above
     del py_polys
     o_n = np.concatenate([bn, pn])
     o_ptr = np.concatenate([[0], np.cumsum(o_n)])

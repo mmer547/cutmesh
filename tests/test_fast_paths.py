@@ -143,7 +143,34 @@ class RustOctree(unittest.TestCase):
 
 
 class NumpyOrder(unittest.TestCase):
-    """the Rust ports repeat NumPy's summation order; fails if NumPy changes it"""
+    """the Rust ports repeat NumPy's summation order and CPython's set order; fails if
+    NumPy / CPython (or the CPU's FMA path) changes them"""
+
+    def test_matmul_rows(self):
+        # (n, 1, 3) @ (n, 3, 1) adds the products as fma(a2, b2, fma(a1, b1, a0 b0));
+        # checked here through exact rational arithmetic
+        from fractions import Fraction as F
+        rng = np.random.default_rng(4)
+        d = rng.normal(size=(2000, 1, 3)) * rng.uniform(0, 10, (2000, 1, 1))
+        s = rng.normal(size=(2000, 1, 3))
+        m = (d @ s.transpose(0, 2, 1))[:, 0, 0]
+        a, b = d[:, 0], s[:, 0]
+
+        def fma(x, y, z):
+            return float(F(x) * F(y) + F(z))
+        ref = [fma(a[i, 2], b[i, 2], fma(a[i, 1], b[i, 1], a[i, 0] * b[i, 0])) for i in range(len(a))]
+        np.testing.assert_array_equal(m, ref)
+
+    @unittest.skipUnless(geometry.rust_available() and hasattr(geometry._core, "pyset_order"),
+                         "Rust extension not built")
+    def test_set_order(self):
+        rng = np.random.default_rng(5)
+        for _ in range(3000):
+            keys = rng.integers(0, int(rng.choice([16, 1000, 10 ** 7])), int(rng.integers(1, 40))).tolist()
+            s = set()
+            for k in keys:
+                s.add(k)
+            self.assertEqual(list(s), geometry._core.pyset_order(keys))
 
     def test_einsum_rows(self):
         rng = np.random.default_rng(2)
@@ -162,14 +189,16 @@ class NumpyOrder(unittest.TestCase):
 @unittest.skipUnless(geometry.rust_available() and hasattr(geometry._core, "CutKernel"),
                      "Rust extension not built")
 class RustCutKernel(unittest.TestCase):
-    """meshes with the cuts in the Rust kernel equal those of the Python cut"""
+    """meshes with the cuts in the Rust kernel and the Rust merging equal those of the
+    Python code"""
 
     def same(self, d, cfg):
         p = os.path.join(d, "m.json")
         with open(p, "w") as f:
             json.dump(cfg, f)
         A = mesher.generate(mesher.load_config(p), log=lambda s: None)
-        with mock.patch.object(mesher, "_rust_cut_ok", lambda ctx, hk: False):
+        with mock.patch.object(mesher, "_rust_cut_ok", lambda ctx, hk: False), \
+                mock.patch.object(mesher, "_rust_merge_ok", lambda: False):
             B = mesher.generate(mesher.load_config(p), log=lambda s: None)
         np.testing.assert_array_equal(A["points"], B["points"])
         for k in ("owner", "neighbour"):
