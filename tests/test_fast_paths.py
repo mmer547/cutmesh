@@ -195,6 +195,31 @@ class RustOctree(unittest.TestCase):
                 nsplit += len(la)
         self.assertGreater(nsplit, 0)
 
+    @unittest.skipUnless(hasattr(geometry._core, "finer_face_neighbour"), "Rust extension not built")
+    def test_finer_nearby(self):
+        # the face-neighbour lookup answers "a finer leaf centre within 0.95 h" as the
+        # KD-tree does, on balanced trees
+        from scipy.spatial import cKDTree
+        nfine = 0
+        for args in CASES:
+            oc = random_octree(*args)
+            if oc.periodic.any():
+                continue
+            oc.balance(lambda s: None)
+            c, hl = oc.centers(), oc.leaf_sizes()
+            cand = np.nonzero(oc.lev < oc.Lmax)[0]
+            ref = np.zeros(len(cand), bool)
+            for lv in np.unique(oc.lev[cand]).tolist():
+                m_ = oc.lev[cand] == lv
+                fl = np.nonzero(oc.lev > lv)[0]
+                if len(fl):
+                    hc = float(hl[cand[m_]][0])
+                    dd, _ = cKDTree(c[fl]).query(c[cand[m_]], distance_upper_bound=0.95 * hc)
+                    ref[m_] = dd < 0.95 * hc
+            np.testing.assert_array_equal(mesher._finer_nearby(oc, c, hl, cand), ref)
+            nfine += int(ref.sum())
+        self.assertGreater(nfine, 0)
+
     def test_build_cells(self):
         for args in CASES:
             oc = random_octree(*args)

@@ -690,3 +690,47 @@ pub(crate) fn einsum3(a: V3, b: V3) -> f64 {
 fn cross3(a: V3, b: V3) -> V3 {
     [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
 }
+
+/// finer_face_neighbour(ijk[n, 3], lev[n], n[3], lmax, cand) -> per candidate leaf:
+/// one of its six face neighbours at its own level is split into finer leaves.  In a
+/// balanced tree that is "a finer leaf centre within 0.95 cell sizes" (the face-touching
+/// children are 0.83 h away; any other finer leaf is at least 1.06 h away).  No
+/// periodic wrap, as the distance test has none.
+#[pyfunction]
+pub fn finer_face_neighbour<'py>(
+    py: Python<'py>,
+    ijk: PyReadonlyArray2<'py, i64>,
+    lev: PyReadonlyArray1<'py, i64>,
+    n: [i64; 3],
+    lmax: u32,
+    cand: PyReadonlyArray1<'py, i64>,
+) -> PyResult<Bound<'py, PyArray1<bool>>> {
+    let a = ijk.as_array();
+    let lv = lev.as_array();
+    let cand = cand.as_slice()?;
+    if a.nrows() != lv.len() || a.ncols() != 3 || cand.iter().any(|&c| c < 0 || c as usize >= lv.len()) {
+        return Err(pyo3::exceptions::PyValueError::new_err("inconsistent leaf arrays"));
+    }
+    let ijk: Vec<I3> = (0..lv.len()).map(|i| [a[[i, 0]], a[[i, 1]], a[[i, 2]]]).collect();
+    let lev: Vec<u32> = lv.iter().map(|&l| l as u32).collect();
+    if lev.iter().any(|&l| l > lmax) {
+        return Err(pyo3::exceptions::PyValueError::new_err("leaf level above max level"));
+    }
+    let r: Vec<bool> = py.detach(|| {
+        let tree = tree_of(&ijk, &lev, n, lmax, [false; 3]);
+        cand.par_iter()
+            .map(|&c| {
+                let (q, l) = (ijk[c as usize], lev[c as usize]);
+                (0..3).any(|ax| {
+                    [-1i64, 1].iter().any(|&s| {
+                        let mut p = q;
+                        p[ax] += s;
+                        let (inside, r) = tree.covering(l, p);
+                        inside && r < 0
+                    })
+                })
+            })
+            .collect()
+    });
+    Ok(r.into_pyarray(py))
+}
