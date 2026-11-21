@@ -2046,16 +2046,23 @@ def generate(cfg, log=print):
         live = (cls[sc] <= 0)
         sc, sf = sc[live], sf[live]
         samp, hh = [], []
-        for ci, fid in zip(sc.tolist(), sf.tolist()):
-            _, _, run, hf = splits[fid]
-            Q = pts[run]
-            c0 = Q.mean(0)
-            nrm = _newell(Q - c0)
-            nrm /= max(np.linalg.norm(nrm), 1e-300)
-            cc = pts[[v for _, p_ in leaf_faces(ci) for v in p_]].mean(0)
-            if np.dot(cc - c0, nrm) < 0:
-                nrm = -nrm
-            samp.append(c0 + 0.1 * hf * nrm); hh.append(hf)
+        if _core is not None and hasattr(_core, "split_samples"):
+            hh = [splits[fid][3] for fid in sf.tolist()]
+            samp = _core.split_samples(np.ascontiguousarray(pts, float), sc.tolist(),
+                                       [splits[fid][2] for fid in sf.tolist()], hh,
+                                       np.ascontiguousarray(cptr, np.int64), np.ascontiguousarray(fptr, np.int64),
+                                       np.ascontiguousarray(fverts, np.int64))
+        else:
+            for ci, fid in zip(sc.tolist(), sf.tolist()):
+                _, _, run, hf = splits[fid]
+                Q = pts[run]
+                c0 = Q.mean(0)
+                nrm = _newell(Q - c0)
+                nrm /= max(np.linalg.norm(nrm), 1e-300)
+                cc = pts[[v for _, p_ in leaf_faces(ci) for v in p_]].mean(0)
+                if np.dot(cc - c0, nrm) < 0:
+                    nrm = -nrm
+                samp.append(c0 + 0.1 * hf * nrm); hh.append(hf)
         sd = dom.sdf(np.array(samp))
         for ci, fid, d_, hf in zip(sc.tolist(), sf.tolist(), sd.tolist(), hh):
             # the cell drops the contact part where it is on its solid side (an uncut

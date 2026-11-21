@@ -256,3 +256,52 @@ pub fn surface_contact_samples<'py>(
         eends,
     ))
 }
+
+/// The sample points of the split faces in domain cut (mesher.generate, split_keep):
+/// for each (cell, contact part, h): the mean of the contact part pushed 0.1 h along
+/// its normal, turned to the side of the cell's vertex mean.  Same arithmetic as the
+/// Python loop (np.mean, _newell, np.linalg.norm, np.dot).
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+pub fn split_samples<'py>(
+    py: Python<'py>,
+    points: PyReadonlyArray2<'py, f64>,
+    cells: Vec<usize>,
+    runs: Vec<Vec<i64>>,
+    hf: Vec<f64>,
+    cptr: PyReadonlyArray1<'py, i64>,
+    fptr: PyReadonlyArray1<'py, i64>,
+    fverts: PyReadonlyArray1<'py, i64>,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let p = crate::points(&points)?;
+    let (cptr, fptr, fverts) = (cptr.as_slice()?, fptr.as_slice()?, fverts.as_slice()?);
+    if runs.len() != cells.len() || hf.len() != cells.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("lengths differ"));
+    }
+    let out: Vec<V3> = py.detach(|| {
+        (0..cells.len())
+            .into_par_iter()
+            .map(|k| {
+                let q: Vec<V3> = runs[k].iter().map(|&v| p[v as usize]).collect();
+                let m = q.len();
+                let c0 = mean(&q);
+                let x: Vec<V3> = q.iter().map(|&a| sub(a, c0)).collect();
+                let t: Vec<V3> = (0..m).map(|j| cross(x[j], x[(j + 1) % m])).collect();
+                let mut nrm = rows_sum(&t);
+                let nn = norm1(nrm);
+                let d = if 1e-300 > nn { 1e-300 } else { nn };
+                nrm = [nrm[0] / d, nrm[1] / d, nrm[2] / d];
+                let ci = cells[k];
+                let (fa, fb) = (cptr[ci] as usize, cptr[ci + 1] as usize);
+                let all: Vec<V3> = (fptr[fa] as usize..fptr[fb] as usize).map(|j| p[fverts[j] as usize]).collect();
+                let cc = mean(&all);
+                if dot1(sub(cc, c0), nrm) < 0.0 {
+                    nrm = [-nrm[0], -nrm[1], -nrm[2]];
+                }
+                let s = 0.1 * hf[k];
+                [c0[0] + s * nrm[0], c0[1] + s * nrm[1], c0[2] + s * nrm[2]]
+            })
+            .collect()
+    });
+    crate::vec3_array(py, out)
+}
