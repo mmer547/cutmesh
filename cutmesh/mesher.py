@@ -910,13 +910,22 @@ class _FaceOcc:
     looked up in the sorted face ids instead of a dict built over every face"""
 
     def __init__(self, key, cell):
-        o = np.argsort(key, kind="stable")
+        o = _argsort_stable(key)
         self.k, self.c = key[o], cell[o]
 
     def get(self, fid, default=()):
         a = int(np.searchsorted(self.k, fid))
         b = int(np.searchsorted(self.k, fid, side="right"))
         return self.c[a:b].tolist() if b > a else default
+
+
+def _argsort_stable(a):
+    """np.argsort(a, kind="stable") of an int64 array, sorted on all cores in Rust when
+    it is large (a stable sort has one answer)"""
+    a = np.asarray(a)
+    if len(a) > 100000 and a.dtype == np.int64 and _core is not None and hasattr(_core, "argsort_stable"):
+        return _core.argsort_stable(np.ascontiguousarray(a))
+    return np.argsort(a, kind="stable")
 
 
 def _rust_merge_ok():
@@ -1981,7 +1990,10 @@ def generate(cfg, log=print):
     split_keep = {}
     if splits:
         sk = np.array(list(splits), np.int64)
-        occ_ = np.nonzero(np.isin(f_key, sk))[0]
+        mk = np.zeros(M_nkeys, bool)          # a lookup, not np.isin over every face
+        mk[sk] = True
+        occ_ = np.nonzero(mk[f_key])[0]
+        del mk
         sc, sf = f_cell[occ_], f_key[occ_]
         live = (cls[sc] <= 0)
         sc, sf = sc[live], sf[live]
@@ -2080,7 +2092,7 @@ def generate(cfg, log=print):
                         m_ = mv[phi_z[i][mv] != 0]
                         if len(m_):
                             phi_z[i][m_] = z["geom"].sdf(pts[m_])
-            ko = np.argsort(f_key, kind="stable")
+            ko = _argsort_stable(f_key)
             ks = f_key[ko]
 
             def cells_of_face(fid):
@@ -2362,7 +2374,7 @@ def generate(cfg, log=print):
     # bulk cells on either side of an original octree face key
     kb1 = np.full(M_nkeys, -1, np.int64); kb2 = np.full(M_nkeys, -1, np.int64)
     kk = f_key[bsel]; kc = f_cell[bsel]
-    o_ = np.argsort(kk, kind="stable"); kk = kk[o_]; kc = kc[o_]
+    o_ = _argsort_stable(kk); kk = kk[o_]; kc = kc[o_]
     first = np.ones(len(kk), bool); first[1:] = kk[1:] != kk[:-1]
     kb1[kk[first]] = kc[first]
     kb2[kk[~first]] = kc[~first]
@@ -2528,7 +2540,7 @@ def generate(cfg, log=print):
     alive = np.nonzero(bulk_alive)[0]
     rp = np.nonzero((proot == np.arange(nP)) & ~removed)[0]
     node_leaf = np.concatenate([alive, np.array([pieces[r][1] for r in rp], np.int64)])
-    order = np.argsort(node_leaf, kind="stable")
+    order = _argsort_stable(node_leaf)
     ids = np.empty(len(order), np.int64); ids[order] = np.arange(len(order))
     nC = len(order)
     leaf_cid = np.full(nleaf, -1, np.int64); leaf_cid[alive] = ids[:len(alive)]
@@ -2553,8 +2565,12 @@ def generate(cfg, log=print):
     o_key = np.concatenate([f_key[bsel], py_key])
     del b_verts, p_verts
     srt = np.nonzero(o_cell >= 0)[0]
-    srt = srt[np.argsort(o_key[srt], kind="stable")]
-    uk, st, cnt = np.unique(o_key[srt], return_index=True, return_counts=True)
+    srt = srt[_argsort_stable(o_key[srt])]
+    # runs of equal keys in the sorted order (np.unique would sort them again)
+    ks_ = o_key[srt]
+    st = np.flatnonzero(np.concatenate([[True], ks_[1:] != ks_[:-1]])) if len(ks_) else np.zeros(0, np.int64)
+    cnt = np.diff(np.concatenate([st, [len(ks_)]]))
+    del ks_
     if (cnt > 2).any():
         log(f"WARNING: {int((cnt > 2).sum())} faces shared by more than two cells")
     two = st[cnt == 2]

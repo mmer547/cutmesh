@@ -347,6 +347,17 @@ class RustWallMerge(unittest.TestCase):
         self.assertGreater(joined, 100)
 
 
+@unittest.skipUnless(geometry.rust_available() and hasattr(geometry._core, "argsort_stable"),
+                     "Rust extension not built")
+class RustArgsort(unittest.TestCase):
+    def test_stable(self):
+        rng = np.random.default_rng(7)
+        for n, hi in ((0, 1), (1, 5), (1000, 3), (300000, 1000), (300000, 2 ** 40)):
+            a = rng.integers(-hi, hi, n).astype(np.int64)
+            np.testing.assert_array_equal(mesher._argsort_stable(a), np.argsort(a, kind="stable"))
+            np.testing.assert_array_equal(geometry._core.argsort_stable(a), np.argsort(a, kind="stable"))
+
+
 def l_prism(c=0.037, L=0.1, H=0.03, ang=(7.0, 5.0, 11.0)):
     """L-shaped channel [0, L]^2 minus [0, c]^2 times [0, H], turned: outward triangles"""
     P = [(c, 0), (L, 0), (L, L), (c, L), (0, L), (0, c), (c, c)]

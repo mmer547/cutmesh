@@ -17,6 +17,7 @@ mod layers;
 mod octree;
 mod wallmerge;
 mod contact;
+mod sortutil;
 
 pub(crate) type V3 = [f64; 3];
 
@@ -1022,5 +1023,6 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(octree::leaf_bad, m)?)?;
     m.add_function(wrap_pyfunction!(wallmerge::merge_wall_faces, m)?)?;
     m.add_function(wrap_pyfunction!(contact::contact_candidates, m)?)?;
+    m.add_function(wrap_pyfunction!(sortutil::argsort_stable, m)?)?;
     Ok(())
 }
