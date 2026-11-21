@@ -1,5 +1,7 @@
 """checkMesh-style geometry and topology checks (same formulas as OpenFOAM's
 primitiveMeshTools where practical), vectorised over flattened face lists."""
+import itertools
+
 import numpy as np
 
 from .geometry import _core      # Rust extension or None
@@ -16,7 +18,7 @@ class FlatFaces:
         else:
             self.n = np.array([len(f) for f in faces], np.int64)
             self.ptr = np.concatenate([[0], np.cumsum(self.n)])
-            self.v = np.fromiter((x for f in faces for x in f), np.int64, count=int(self.ptr[-1]))
+            self.v = np.fromiter(itertools.chain.from_iterable(faces), np.int64, count=int(self.ptr[-1]))
         self.fid = np.repeat(np.arange(len(self.n)), self.n)
         nxt = np.arange(len(self.v)) + 1
         nxt[self.ptr[1:] - 1] = self.ptr[:-1]
@@ -121,21 +123,30 @@ def check(points, faces, owner, neighbour, log=print):
     sa = np.bincount(owner, magSf, nC) + np.bincount(neighbour, magSf[:nI], nC)
     closed = np.linalg.norm(s, axis=1) / np.maximum(sa, 1e-300)
     # --- cell edge closedness (each directed edge has its reverse within the cell)
-    cell_of_v = np.concatenate([owner[ff.fid], neighbour[ff.fid[ff.fid < nI]]])
-    a = np.concatenate([ff.v, ff.v[ff.nxt][ff.fid < nI]])
-    b = np.concatenate([ff.v[ff.nxt], ff.v[ff.fid < nI]])
-    # neighbour side sees the face reversed: swap a/b for those
-    nown = len(ff.v)
-    a2 = a.copy(); b2 = b.copy()
-    a2[nown:] = ff.v[ff.nxt][ff.fid < nI]
-    b2[nown:] = ff.v[ff.fid < nI]
-    NP = len(points) + 1
-    fw = (cell_of_v * NP + a2) * NP + b2
-    bw = (cell_of_v * NP + b2) * NP + a2
-    fs = np.sort(fw)
-    pos = np.clip(np.searchsorted(fs, bw), 0, len(fs) - 1)
-    open_edges = int(np.sum(fs[pos] != bw))
+    inn = ff.fid < nI
+    cell_of_v = np.concatenate([owner[ff.fid], neighbour[ff.fid[inn]]])
+    # the neighbour side sees the face reversed
+    a = np.concatenate([ff.v, ff.v[ff.nxt][inn]])
+    b = np.concatenate([ff.v[ff.nxt], ff.v[inn]])
+    # key (cell, undirected edge, direction): one int64 packing (cell, a, b) overflows
+    # above ~2M cells, so the edge is numbered first
+    lo, hi = np.minimum(a, b), np.maximum(a, b)
+    _, eid = np.unique(lo * (len(points) + 1) + hi, return_inverse=True)
+    K = (cell_of_v * (int(eid.max()) + 1 if len(eid) else 1) + eid.ravel()) * 2
+    fs = np.sort(K + (a < b))
     dup = int(np.count_nonzero(fs[1:] == fs[:-1]))     # repeats in the sorted list
+    # runs of equal keys; the two directions of one edge in one cell are adjacent runs
+    # (keys 2k, 2k+1): a run without its partner is that many edges with no reverse
+    if len(fs):
+        st = np.flatnonzero(np.concatenate([[True], fs[1:] != fs[:-1]]))
+        cnt = np.diff(np.append(st, len(fs)))
+        k = fs[st] // 2
+        same = k[1:] == k[:-1]
+        partner = np.zeros(len(st), bool)
+        partner[1:] |= same; partner[:-1] |= same
+        open_edges = int(cnt[~partner].sum())
+    else:
+        open_edges = 0
     # --- non-orthogonality / skewness
     d = C[neighbour] - C[owner[:nI]]
     cosang = np.einsum("ij,ij->i", d, Sf[:nI]) / np.maximum(np.linalg.norm(d, axis=1) * magSf[:nI], 1e-300)

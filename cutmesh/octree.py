@@ -8,7 +8,7 @@ cylindrical block); see cylbase.py.
 import itertools
 import numpy as np
 
-from .geometry import sdf_below, unique, unique_rows
+from .geometry import searchsorted, sdf_below, unique, unique_rows
 
 OFF26 = np.array([d for d in itertools.product((-1, 0, 1), repeat=3) if d != (0, 0, 0)])
 CHILD = np.array(list(itertools.product((0, 1), repeat=3)))   # (8,3)
@@ -85,7 +85,7 @@ class Octree:
         if len(keys) == 0 or len(q) == 0:
             return out
         k = self._key(l, q)
-        p = np.clip(np.searchsorted(keys, k), 0, len(keys) - 1)
+        p = np.clip(searchsorted(keys, k), 0, len(keys) - 1)
         hit = keys[p] == k
         out[hit] = idx[p[hit]]
         return out
@@ -193,7 +193,7 @@ class Octree:
         points = self.map_lattice(pts_lat)
 
         def vid_of(keys):
-            p = np.clip(np.searchsorted(ukeys, keys), 0, len(ukeys) - 1)
+            p = np.clip(searchsorted(ukeys, keys), 0, len(ukeys) - 1)
             return np.where(ukeys[p] == keys, p, -1)
 
         # hanging vertices = edge midpoints / face centres of some leaf that exist as vertices

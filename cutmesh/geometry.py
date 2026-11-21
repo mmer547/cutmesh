@@ -35,6 +35,20 @@ def unique(x):
     return x[m]
 
 
+def searchsorted(a, v):
+    """np.searchsorted(a, v) (side "left"), with large queries looked up in sorted order:
+    random queries into a large array miss the cache on every step (2M queries into 13M
+    keys: 5.7 s; sorted first: 0.25 s with the sort)."""
+    v = np.asarray(v)
+    if v.size < 4096:
+        return np.searchsorted(a, v)
+    f = v.ravel()
+    o = np.argsort(f)
+    out = np.empty(len(f), np.int64)
+    out[o] = np.searchsorted(a, f[o])
+    return out.reshape(v.shape)
+
+
 def unique_rows(a):
     """np.unique(a, axis=0) for a 2-D integer array (rows sorted lexicographically),
     through one int64 key per row when the value ranges allow"""
@@ -240,10 +254,58 @@ def subdivide_triangles(tris, maxedge):
 
 
 def _sample_triangles(tris, spacing):
-    """Points on triangles (vertices + centroids of a subdivision). Returns (pts, tri_index)."""
-    T, par = subdivide_triangles(tris, spacing)
-    pts = np.concatenate([T.reshape(-1, 3), T.mean(1)])
-    ids = np.concatenate([np.repeat(par, 3), par])
+    """Points on triangles (vertices + centroids of a subdivision). Returns (pts, tri_index).
+    The subdivision of subdivide_triangles, with each vertex once per input triangle:
+    the sub-triangles share their vertices (an edge's midpoint is made once, by vertex
+    ids), where listing every sub-triangle's corners repeats each about 6 times.  The
+    points are the same set as before (in another order)."""
+    T = np.asarray(tris, float)
+    n0 = len(T)
+    if not n0:
+        return np.zeros((0, 3)), np.zeros(0, np.int64)
+    I = np.arange(3 * n0, dtype=np.int64).reshape(n0, 3)
+    parent = np.arange(n0)
+    newP, newPar = [T.reshape(-1, 3)], [np.repeat(parent, 3)]
+    npts = 3 * n0
+    ekey = np.zeros(0, np.int64); emid = np.zeros(0, np.int64)     # sorted edge key -> midpoint id
+    doneT, doneP = [], []
+    while len(T):
+        e = np.stack([((T[:, 1] - T[:, 0]) ** 2).sum(1),
+                      ((T[:, 2] - T[:, 1]) ** 2).sum(1),
+                      ((T[:, 0] - T[:, 2]) ** 2).sum(1)], 1)
+        k = e.argmax(1)
+        big = e[np.arange(len(T)), k] > spacing * spacing
+        doneT.append(T[~big]); doneP.append(parent[~big])
+        if not big.any():
+            break
+        B = T[big]; Ib = I[big]; kb = k[big]; pb = parent[big]
+        r = np.stack([kb, (kb + 1) % 3, (kb + 2) % 3], 1)
+        rows = np.arange(len(B))[:, None]
+        B = B[rows, r]; Ib = Ib[rows, r]
+        m = 0.5 * (B[:, 0] + B[:, 1])
+        key = (np.minimum(Ib[:, 0], Ib[:, 1]) << 32) | np.maximum(Ib[:, 0], Ib[:, 1])
+        # sorted distinct queries: the lookups walk the table in order
+        u, first, inv = np.unique(key, return_index=True, return_inverse=True)
+        pos = np.searchsorted(ekey, u)
+        found = pos < len(ekey)
+        found[found] = ekey[pos[found]] == u[found]
+        mu = np.empty(len(u), np.int64)
+        mu[found] = emid[pos[found]]
+        nf = np.flatnonzero(~found)
+        if len(nf):
+            ids = npts + np.arange(len(nf))
+            npts += len(nf)
+            mu[nf] = ids
+            newP.append(m[first[nf]]); newPar.append(pb[first[nf]])
+            at = pos[nf]                            # both sorted: insert keeps the order
+            ekey = np.insert(ekey, at, u[nf]); emid = np.insert(emid, at, ids)
+        mid = mu[inv.ravel()]
+        T = np.concatenate([np.stack([B[:, 0], m, B[:, 2]], 1), np.stack([m, B[:, 1], B[:, 2]], 1)])
+        I = np.concatenate([np.stack([Ib[:, 0], mid, Ib[:, 2]], 1), np.stack([mid, Ib[:, 1], Ib[:, 2]], 1)])
+        parent = np.concatenate([pb, pb])
+    T = np.concatenate(doneT)
+    pts = np.concatenate(newP + [T.mean(1)])
+    ids = np.concatenate(newPar + [np.concatenate(doneP)])
     return pts, ids
 
 

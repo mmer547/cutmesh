@@ -33,7 +33,7 @@ from scipy import sparse
 from scipy.spatial import cKDTree
 
 from . import quality
-from .geometry import _core, paused_gc, unique, unique_rows
+from .geometry import _core, paused_gc, searchsorted, unique, unique_rows
 
 # Rust kernels (absent without the extension or in an older build of it)
 _jacobi_band = getattr(_core, "jacobi_band", None)
@@ -800,7 +800,7 @@ def add_layers(mesh, spec=None, log=print):
             pa_, pb_ = W[wa], W[wb]
             # face across each edge (any boundary face)
             rk = pb_ * (nP0 + 1) + pa_
-            pos_ = np.clip(np.searchsorted(bkey_s, rk), 0, len(bkey_s) - 1)
+            pos_ = np.clip(searchsorted(bkey_s, rk), 0, len(bkey_s) - 1)
             g = np.where(bkey_s[pos_] == rk, bf_s[pos_], -1)
             gl = np.where(g >= 0, lpos[np.maximum(g, 0)], -1)
             ga = np.where(gl >= 0, aidx[np.maximum(gl, 0)], -1)      # active layer face across
