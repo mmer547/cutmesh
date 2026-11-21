@@ -18,13 +18,19 @@ meshDict:
         "origin": [0, 0, 0], "axis": [0, 0, 1],
         "zRange": [z0, z1],                 # optional: default STL extent + one cell
         "nz": 40,                           # or "dz"; default dz = baseCellSize
+        "maxSizeRatio": 2.5                 # cell size jump allowed across block faces
+    }
+The core and the blocks are laid out automatically (auto_layout(): a 2 x 2 core and
+concentric blocks whose cells point around the axis, with circles of nodes kept off the
+coaxial cylinders of the geometry), out to "rOuter" (default: STL radius + 2/3 cell), for
+cells "cellSize" across (default: the smaller of baseCellSize and dz).  Or by hand:
         "core": {"halfWidth": 0.01, "n": 8},
         "blocks": [                         # outward; the first one is the O-grid ring
             {"rOuter": 0.03, "nr": 6},                  # nTheta = 4 n
             {"rOuter": 0.15, "nr": 12, "nTheta": 96}],  # default nTheta: square-ish cells
-        "maxSizeRatio": 2.5                 # cell size jump allowed across block faces
-    }
+        (a block may give "radii": its nr + 1 radial nodes, default evenly spaced)
 """
+import json
 import math
 
 import numpy as np
@@ -37,6 +43,126 @@ TH0 = -0.25 * math.pi          # angle of the square's corner (a, -a): v = 0
 # this (block cells are not powers of two of the target, so 1.0 would add a level for
 # a few percent)
 SIZE_TOL = 1.3
+# automatic layout: each block's radii grow by about AUTO_RATIO, so its cells are about 0.8
+# to 1.25 times as wide around at its inner and outer radius as at its middle
+AUTO_RATIO = 1.5625
+# automatic layout: radial layers are at most this times the target size deep (the longest
+# edge must stay within SIZE_TOL of baseCellSize, or refinement adds a level)
+AUTO_DR = 1.15
+
+
+def _dyadic(t, levels=3):
+    """how far a surface at t (in cell sizes from a node) stays from the nodes of the cell
+    refined 0 .. levels - 1 times: at most 1/3, reached at t = 1/3 or 2/3"""
+    return min(abs(2 ** L * t - round(2 ** L * t)) for L in range(levels))
+
+
+def auto_layout(h, r_outer, avoid=()):
+    """core {"halfWidth", "n"} and blocks [{"rOuter", "nr", "nTheta"(, "radii")}] out to
+    r_outer for cells about h across (no edge longer than about 1.2 h), pointing around
+    the axis everywhere but in the 2 x 2 core.
+
+    Refinement halves all edges of a cell together until the longest is within SIZE_TOL
+    of the target, so a base cell only a little longer than baseCellSize gets a whole
+    level more: hence edges of at most about h (the caller's h <= baseCellSize).  The size
+    of a cell's edges is their mean per index direction (MappedBlock._geometry): around
+    the axis that is about the arc at the middle radius.
+
+    The core is 2 x 0.5 .. 0.95 h wide and the O-grid ring (8 around) ends at twice its
+    half width; outward the blocks grow by radius ratios of about AUTO_RATIO to r_outer,
+    with nTheta (a multiple of 4) for cells h wide around at the middle radius.  Blocks
+    are joined by overlaying their faces, so any ratio of nTheta is conformal.
+
+    avoid: radii of coaxial cylinders of the geometry (shaft, hub, walls, rotating zones).
+    A cylinder close to a circle of nodes leaves slivers of cut cells along it, and since
+    refinement halves the cells, the place that stays clear at every level is a third of
+    the way through a layer (_dyadic): so each cylinder gets a layer h deep with it at 1/3
+    (or 2/3), the layers between are filled evenly (<= AUTO_DR h) and the blocks end at
+    the nodes nearest their radii ("radii": the radial nodes, when not even).  The core's
+    half width is chosen likewise for cylinders inside it (along the middle of its sides)
+    and for the O-grid circle."""
+    avoid = sorted(float(x) for x in avoid)
+
+    def score(t):
+        """clearance (in cells, at refinement levels 0 .. 2) of the cylinders inside the
+        core from the middle of its sides, and of those near the O-grid circle from that"""
+        sc = [_dyadic((t - x) / t) for x in avoid if x < t]
+        sc += [_dyadic(abs(2 * t - x) / t) for x in avoid if t * math.sqrt(2) < x < 3 * t]
+        return min(sc + [1.0])
+
+    cs = [0.8, 0.825, 0.85, 0.875, 0.9, 0.925, 0.95] + [0.775 - 0.025 * k for k in range(12)]
+    cands = [min(c * h, 0.5 * r_outer) for c in cs]
+    sc = [score(t) for t in cands]
+    ok = [t for t, v in zip(cands, sc) if v >= 0.25]
+    a = ok[0] if ok else cands[int(np.argmax(sc))]
+    r1 = 2 * a
+    if r_outer <= r1 * (1 + 1e-9):
+        return {"halfWidth": a, "n": 2}, [{"rOuter": r_outer, "nr": 1}]
+    # fixed circles: the O-grid circle, the outer one, a layer h deep around each cylinder
+    tol = 1e-6 * h
+    anchors = [r1, r_outer]
+    for x in avoid:
+        if not (r1 < x < r_outer):
+            continue
+        for lo, hi in ((x - h / 3, x + 2 * h / 3), (x - 2 * h / 3, x + h / 3)):
+            if lo < r1 - tol or hi > r_outer + tol:
+                continue
+            new = [v for v in (lo, hi) if min(abs(v - u) for u in anchors) > tol]
+            if all(min(abs(v - u) for u in anchors) >= 0.4 * h for v in new):
+                anchors += new
+                break
+    anchors.sort()
+    nodes = [r1]
+    for A, B in zip(anchors, anchors[1:]):
+        n = max(1, int(math.ceil((B - A) / (AUTO_DR * h) - 1e-6)))
+        nodes += [A + (B - A) * j / n for j in range(1, n + 1)]
+    nodes = np.array(nodes)
+    # block ends: the nodes nearest radii growing by AUTO_RATIO
+    nb = max(1, int(round(math.log(r_outer / r1) / math.log(AUTO_RATIO))))
+    ends = [len(nodes) - 1]
+    for k in range(nb - 1, 0, -1):
+        i = int(np.argmin(np.abs(nodes - r1 * (r_outer / r1) ** (k / nb))))
+        if 0 < i < ends[0]:
+            ends.insert(0, i)
+    blocks = [{"rOuter": r1, "nr": 1}]
+    i0 = 0
+    for i1 in ends:
+        ri, ro = float(nodes[i0]), float(nodes[i1])
+        nr = i1 - i0
+        arc = 2 * math.pi * 0.5 * (ri + ro)
+        nth = 4 * max(2, int(round(arc / h / 4)))
+        if arc / nth > 1.2 * h:
+            nth += 4
+        blk = {"rOuter": ro, "nr": nr, "nTheta": nth}
+        rs = nodes[i0:i1 + 1]
+        if nr > 1 and np.abs(rs - np.linspace(ri, ro, nr + 1)).max() > 1e-9 * ro:
+            blk["radii"] = rs.tolist()
+        blocks.append(blk)
+        i0 = i1
+    return {"halfWidth": a, "n": 2}, blocks
+
+
+def coaxial_radii(x, y, tol, min_angles=6):
+    """radii of circles of points around the axis (in-plane coordinates x, y): points
+    at one radius (within tol) at no fewer than min_angles angles, with no gap over 90
+    degrees between them, i.e. a cylinder or a circular edge of the geometry"""
+    r = np.hypot(x, y)
+    th = np.arctan2(y, x)
+    key = np.round(r / tol).astype(np.int64)
+    order = np.argsort(key, kind="stable")
+    ks = key[order]
+    cut = np.concatenate([[0], np.nonzero(np.diff(ks))[0] + 1, [len(ks)]])
+    out = []
+    for i0, i1 in zip(cut[:-1], cut[1:]):
+        if i1 - i0 < min_angles or ks[i0] == 0:
+            continue
+        sel = order[i0:i1]
+        t = np.unique(np.round(th[sel], 6))
+        if len(t) < min_angles:
+            continue
+        if np.diff(np.concatenate([t, [t[0] + 2 * math.pi]])).max() < 0.5 * math.pi:
+            out.append(float(r[sel].mean()))
+    return out
 
 
 # ----------------------------------------------------------------------------- blocks
@@ -174,7 +300,10 @@ def _overlaps(A, B, S, tol):
 
 # ----------------------------------------------------------------------------- base mesh
 class CylindricalBase:
-    def __init__(self, spec, dom, h0, hmin, Lmax_target, log=print):
+    def __init__(self, spec, dom, h0, hmin, Lmax_target, log=print, cylinders=(), surfaces=()):
+        """cylinders: (point, axis, radius) of rotating zones / refinement regions and
+        surfaces: triangle arrays of STL zones, whose coaxial radii the automatic layout
+        keeps its circles of nodes away from (besides those of the domain STL)"""
         self.spec = spec
         self.h0 = float(h0)
         self.log = log
@@ -198,10 +327,33 @@ class CylindricalBase:
         else:
             nz = max(1, int(math.ceil((z1 - z0) / float(spec.get("dz", self.h0)))))
         self.z0, self.dz, self.nz = z0, (z1 - z0) / nz, nz
-        core = spec["core"]
+        if ("core" in spec) != ("blocks" in spec):
+            raise ValueError("baseMesh: give both core and blocks, or neither (automatic layout)")
+        if "core" in spec:
+            core, blocks = spec["core"], spec["blocks"]
+        else:
+            h = float(spec.get("cellSize", min(self.h0, self.dz)))
+            # default: the outermost wall a third of a layer inside the last circle
+            r_out = float(spec.get("rOuter", rmax + 2 * h / 3))
+            P = np.concatenate([V] + [np.asarray(t, float).reshape(-1, 3) - o for t in surfaces])
+            avoid = coaxial_radii(P @ e1, P @ e2, 1e-3 * h)
+            for p_, ax, rc in cylinders:
+                ax = np.asarray(ax, float) / np.linalg.norm(ax)
+                d = np.asarray(p_, float) - o
+                if np.linalg.norm(np.cross(ax, ez)) < 1e-6 and \
+                        np.linalg.norm(d - np.dot(d, ez) * ez) < 1e-6 * max(rc, h):
+                    avoid.append(float(rc))
+            core, blocks = auto_layout(h, r_out, avoid)
+            if avoid:
+                log("cylindrical base: coaxial radii kept off the circles of nodes: "
+                    + ", ".join(f"{x:g}" for x in sorted(set(round(x, 9) for x in avoid))))
+            log("cylindrical base: automatic layout for cells of " + f"{h:g}: \"core\": "
+                + json.dumps(core) + ", \"blocks\": " + json.dumps(
+                    [{k: (round(v, 6) if isinstance(v, float) else
+                          [round(x, 6) for x in v] if isinstance(v, list) else v) for k, v in b.items()}
+                     for b in blocks]))
         a = float(core["halfWidth"])
         nc = int(core["n"])
-        blocks = spec["blocks"]
         if not blocks:
             raise ValueError("baseMesh: at least one block (the O-grid ring) is needed")
         R = [float(b["rOuter"]) for b in blocks]
@@ -241,9 +393,11 @@ class CylindricalBase:
             y = (1 - tr) * ys + tr * R[0] * np.sin(th)
             return to_phys(x, y, z0_ + p[:, 2] * dz)
 
-        def annulus_map(ri, ro, nr, nth):
+        def annulus_map(ri, ro, nr, nth, radii=None):
+            nodes = np.linspace(ri, ro, nr + 1) if radii is None else np.asarray(radii, float)
+
             def m(p):
-                r = ri + (ro - ri) * p[:, 0] / nr
+                r = np.interp(p[:, 0], np.arange(nr + 1), nodes)
                 th = TH0 + 2 * math.pi * p[:, 1] / nth
                 return to_phys(r * np.cos(th), r * np.sin(th), z0_ + p[:, 2] * dz)
             return m
@@ -261,13 +415,20 @@ class CylindricalBase:
         self.blocks.append(MappedBlock("ring 1", (nr0, nth0, nz), depth(max(rad)), ring_map, (False, True, False)))
         for k, b in enumerate(blocks[1:], start=1):
             nr = int(b["nr"])
+            radii = None
+            if "radii" in b:            # radial nodes (the automatic layout's, or by hand)
+                radii = np.array(b["radii"], float)
+                if len(radii) != nr + 1 or np.any(np.diff(radii) <= 0):
+                    raise ValueError(f"baseMesh: block {k + 1}: radii must be nr + 1 = {nr + 1} increasing radii")
+                radii[0], radii[-1] = R[k - 1], R[k]
             # default: cells about as wide around as across (refinement goes by the
             # longest edge, so elongated base cells end up over-refined)
             dr = (R[k] - R[k - 1]) / nr
             nth = int(b.get("nTheta", max(4, round(math.pi * (R[k] + R[k - 1]) / dr))))
-            size0 = max((R[k] - R[k - 1]) / nr, 2 * math.pi * R[k] / nth, dz)
+            drmax = dr if radii is None else float(np.diff(radii).max())
+            size0 = max(drmax, 2 * math.pi * R[k] / nth, dz)
             self.blocks.append(MappedBlock(f"ring {k + 1}", (nr, nth, nz), depth(size0),
-                                           annulus_map(R[k - 1], R[k], nr, nth), (False, True, False)))
+                                           annulus_map(R[k - 1], R[k], nr, nth, radii), (False, True, False)))
         # smallest base cell (tolerances of the mesher)
         self.min_base_size = float(min(np.linalg.norm(mb._geometry()[1], axis=2).min() for mb in self.blocks))
 

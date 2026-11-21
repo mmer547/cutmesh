@@ -10,13 +10,7 @@
     "type": "cylindrical",
     "origin": [0, 0, 0],
     "axis": [0, 0, 1],
-    "nz": 24,
-    "core": { "halfWidth": 0.0375, "n": 6 },
-    "blocks": [
-      { "rOuter": 0.06, "nr": 2 },
-      { "rOuter": 0.10, "nr": 3 },
-      { "rOuter": 0.155, "nr": 4 }
-    ]
+    "nz": 24
   },
   "rotatingZones": [
     {

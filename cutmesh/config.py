@@ -24,7 +24,8 @@ OTHER_KEYS = {"domain", "baseCellSize", "gapRefinement", "autoGapRefinement", "c
 ZONE_KEYS = {"name", "cylinder", "stl", "origin", "axis", "surfaceLevel", "volumeLevel", "omega",
              "nonRotatingPatches", "wallProximity", "conforming", "ami"}
 CYLINDER_KEYS = {"point1", "point2", "radius", "origin"}
-BASEMESH_KEYS = {"type", "origin", "axis", "zRange", "nz", "dz", "core", "blocks", "maxSizeRatio"}
+BASEMESH_KEYS = {"type", "origin", "axis", "zRange", "nz", "dz", "core", "blocks", "maxSizeRatio",
+                 "rOuter", "cellSize"}
 
 
 def _is_comment(k):
@@ -286,6 +287,14 @@ def validate_config(cfg, log=None, layer_keys=None):
         c.unknown(bm, BASEMESH_KEYS, "in baseMesh: ")
         if bm.get("type", "cartesian") not in ("cartesian", "cylindrical"):
             c.err(f"baseMesh.type must be \"cartesian\" or \"cylindrical\", got {bm['type']!r}")
+        if bm.get("type") == "cylindrical":
+            if ("core" in bm) != ("blocks" in bm):
+                c.err("baseMesh: give both core and blocks, or neither (automatic layout)")
+            if "core" in bm and ("rOuter" in bm or "cellSize" in bm):
+                c.err("baseMesh: rOuter and cellSize are for the automatic layout (without core and blocks)")
+            for k in ("rOuter", "cellSize"):
+                if k in bm:
+                    c.num(bm[k], "baseMesh." + k, lo=0, lo_open=True)
 
     if c.errors:
         raise ConfigError("meshDict: " + str(len(c.errors)) + " problem(s):\n  "

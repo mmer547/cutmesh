@@ -118,8 +118,8 @@ python -m cutmesh.ami case -out case_ami_later    # 作ったメッシュを後�
 
 <section class="example" id="tank-cyl">
 <h3>円筒ベースメッシュ（<code>meshDict_cylindrical.json</code>）</h3>
-<ul class="stats"><li><span data-stat="cylindrical.cells">136,620</span> セル</li><li><span data-stat="cylindrical.seconds">23</span> 秒</li><li>同心ブロックのベースメッシュ</li></ul>
-<p>八分木の根を、軸まわりの同心ブロック（中心の正方形 + 3 つのリング）にした例です。セルが周方向に並ぶので、回転ゾーンの界面や槽の壁に沿ったメッシュになります。
+<ul class="stats"><li><span data-stat="cylindrical.cells">137,144</span> セル</li><li><span data-stat="cylindrical.seconds">22</span> 秒</li><li>同心ブロックのベースメッシュ</li></ul>
+<p>八分木の根を、軸まわりの同心ブロックにした例です。ブロックの配置は自動（中心の 2×2 の正方形と、外へ広がる同心リング）で、正方形はハブの中に入るので、流体側のセルはほぼすべて周方向に並びます。回転ゾーンの界面や槽の壁に沿ったメッシュになります。
 ブロックの境界では分割数の比が整数でなくても、面を重ね合わせて適合したメッシュにします。</p>
 <p class="cmd-label">実行コマンド</p>
 <pre><code>cd examples/stirred_tank
@@ -128,7 +128,7 @@ python run.py meshDict_cylindrical.json     # 断面図も描く場合</code></p
 <figure class="vfig">
   <a class="img only-plain" href="images/cylindrical_slices.png"><img src="images/cylindrical_slices.png" alt="円筒ベースメッシュの水平断面と、その中央の拡大" loading="lazy"></a>
     <a class="img only-layers" href="images/cylindrical_slices_layers.png"><img src="images/cylindrical_slices_layers.png" alt="円筒ベースメッシュの水平断面と、その中央の拡大（境界層あり）" loading="lazy"></a>
-  <figcaption>翼の中央の高さの水平断面と、回転ゾーンのまわりの拡大<span class="only-layers">。境界層あり（<span data-stat="cylindrical_layers.cells">233,592</span> セル、<span data-stat="cylindrical_layers.seconds">29</span> 秒、目標の厚さ <span data-stat="cylindrical_layers.layerFull">94.3</span>%）</span></figcaption>
+  <figcaption>翼の中央の高さの水平断面と、回転ゾーンのまわりの拡大<span class="only-layers">。境界層あり（<span data-stat="cylindrical_layers.cells">199,076</span> セル、<span data-stat="cylindrical_layers.seconds">25</span> 秒、目標の厚さ <span data-stat="cylindrical_layers.layerFull">87.0</span>%）</span></figcaption>
 </figure>
 <details>
   <summary>baseMesh の設定</summary>
@@ -136,14 +136,9 @@ python run.py meshDict_cylindrical.json     # 断面図も描く場合</code></p
   "type": "cylindrical",
   "origin": [0, 0, 0],
   "axis": [0, 0, 1],
-  "nz": 24,
-  "core": { "halfWidth": 0.0375, "n": 6 },
-  "blocks": [
-    { "rOuter": 0.06, "nr": 2 },
-    { "rOuter": 0.10, "nr": 3 },
-    { "rOuter": 0.155, "nr": 4 }
-  ]
+  "nz": 24
 }</code></pre>
+<p>ログに出る自動配置: 中心 2×2（半幅 11.9 mm）、半径 23.8 / 34.8 / 58.4 / 91.8 / 158.3 mm、周方向 8 / 16 / 24 / 36 / 64 分割。翼の先端（50.1 mm）・回転ゾーン（70 mm）・槽の壁（150 mm）は層の 1/3 の位置に来る。</p>
 </details>
 </section>
 

@@ -1142,7 +1142,10 @@ def generate(cfg, log=print):
     bm = cfg.get("baseMesh") or {}
     cyl = None
     if bm.get("type", "cartesian") == "cylindrical":
-        cyl = CylindricalBase(bm, dom, h0, hmin, Lmax, log=log)
+        cyls = [(c.p1, c.a, c.R) for c, _ in regions] + \
+               [(z["geom"].p1, z["geom"].a, z["geom"].R) for z in zones if isinstance(z["geom"], Cylinder)]
+        surfs = [z["geom"].s.tris for z in zones if isinstance(z["geom"], SurfaceZone)]
+        cyl = CylindricalBase(bm, dom, h0, hmin, Lmax, log=log, cylinders=cyls, surfaces=surfs)
         if cyl.min_base_size < hmin:
             hmin = cyl.min_base_size
             log(f"smallest cell of the cylindrical base {hmin:g}")
