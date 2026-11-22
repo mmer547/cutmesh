@@ -24,6 +24,7 @@ mod featclip;
 mod fhook;
 mod quality;
 mod sampling;
+mod centroids;
 
 pub(crate) type V3 = [f64; 3];
 
@@ -471,6 +472,14 @@ impl TriMesh {
         let pert = [len * 0.0, len * 3.14159265e-7, len * 2.71828183e-7];
         let bvh = Bvh::build(&lo, &hi);
         Ok(TriMesh { t, bvh, pert, tol: 1e-9 * len })
+    }
+
+    /// Index the centroids of Surface.build_search's longest-edge subdivision.
+    fn centroid_search(&self, py: Python<'_>, spacing: f64) -> PyResult<centroids::CentroidSearch> {
+        if spacing == 0.0 {
+            return Err(pyo3::exceptions::PyValueError::new_err("search spacing must be nonzero"));
+        }
+        py.detach(|| centroids::CentroidSearch::build(&self.t, spacing))
     }
 
     /// The same vertices, centroids and original triangle IDs as Surface.samples.

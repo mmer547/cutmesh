@@ -441,7 +441,8 @@ class Surface:
         # inside() shifts every query point by this much (the ray origin perturbation, the
         # same in Rust): a probe closer to the surface may be judged on the wrong side
         self.inside_shift = float(self.L * np.linalg.norm(INSIDE_PERT))
-        self._kd = None
+        self._search_tree = None
+        self._centroid_search = None
         self._kd_spacing = None
         self._rs = _core.TriMesh(np.ascontiguousarray(self.tris)) if _core else None
         self._nb = None
@@ -454,16 +455,32 @@ class Surface:
 
     # ---------------- sampling / nearest search ----------------
     def build_search(self, spacing):
-        """KD-tree over centroids of a subdivision of the STL (edges <= spacing).
-        Closest-point queries are exact: candidates are all sub-triangles whose
-        centroid lies within (best distance + max centroid radius)."""
+        """Index the centroids of the STL subdivision with edges <= spacing."""
+        if hasattr(self._rs, "centroid_search"):
+            self._centroid_search = self._rs.centroid_search(spacing)
+            self._rmax = self._centroid_search.rmax
+            self._sub = self._sub_parent = self._search_tree = None
+        else:
+            self._build_search_tree(spacing)
+            self._centroid_search = None
+        self._kd_spacing = spacing
+
+    def _build_search_tree(self, spacing):
         T, par = subdivide_triangles(self.tris, spacing)
+        c = T.mean(1)
+        tree = cKDTree(c)
+        self._rmax = float(np.linalg.norm(T - c[:, None], axis=2).max())
         self._sub = T
         self._sub_parent = par
-        c = T.mean(1)
-        self._rmax = float(np.linalg.norm(T - c[:, None], axis=2).max())
-        self._kd = cKDTree(c)
-        self._kd_spacing = spacing
+        self._search_tree = tree
+
+    @property
+    def _kd(self):
+        # Distance queries and the Python closest-point path need the full
+        # subdivision. Rust radius queries only need its centroid index.
+        if self._search_tree is None and self._kd_spacing is not None:
+            self._build_search_tree(self._kd_spacing)
+        return self._search_tree
 
     def samples(self, spacing, regions=None):
         sel = np.arange(len(self.tris)) if regions is None else np.nonzero(np.isin(self.region, regions))[0]
@@ -493,10 +510,11 @@ class Surface:
         cp = np.zeros((n, 3)); d = np.zeros(n); sid = np.zeros(n, np.int64)
         if n == 0:
             return cp, d, sid
+        kd = self._kd
         k = min(k, len(self._sub))
         for s0 in range(0, n, chunk):
             q = p[s0:s0 + chunk]
-            dk, idx = self._kd.query(q, k=k, workers=-1)
+            dk, idx = kd.query(q, k=k, workers=-1)
             idx = idx.reshape(len(q), -1); dk = dk.reshape(len(q), -1)
             c1, d1, s1 = self._exact(q, idx)
             if k < len(self._sub):
@@ -593,16 +611,15 @@ class Surface:
         return d
 
     def approx_below(self, p, thr):
-        """approx_distance(p) < thr (thr: scalar or one per point), exactly as the KD-tree
-        test gives it.  With the Rust extension the exact distance decides most points:
-        the nearest sub-triangle centroid is never closer than the closest point on the
-        STL, and never farther than that plus _rmax (the centroid of the sub-triangle
-        holding the closest point).  Only the points in between go to the KD-tree, which
-        is slow for points far from the surface (it visits many nodes before it can stop)."""
+        """Whether a subdivision centroid is strictly within thr (scalar or per point).
+        The Rust index can stop at the first such centroid."""
         p = np.atleast_2d(p)
         thr = np.broadcast_to(np.asarray(thr, float), (len(p),))
+        if self._centroid_search is not None and self._rs is not None:
+            return self._centroid_search.below(np.ascontiguousarray(p, float), thr)
         if self._rs is None or len(p) == 0:
             return self.approx_distance(p, upper=float(thr.max(initial=0.0))) < thr
+        # Older extensions use exact STL distances to limit the KD-tree queries.
         _, d, _ = self._rs.closest(np.ascontiguousarray(p, float))
         eps = 1e-9 * self.L
         res = d + self._rmax + eps < thr
