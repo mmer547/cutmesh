@@ -2652,13 +2652,16 @@ def generate(cfg, log=print):
     py_cell = np.repeat(np.arange(nP, dtype=np.int64), np.diff(pieces.fptr))
     occ = _FaceOcc(py_key, py_cell)       # face id -> pieces holding it, in piece order
     vol = np.zeros(nP)
-    farea = {}
     p_n = np.zeros(0, np.int64); p_verts = np.zeros(0, np.int64)
-    if nP:
+    if nP and _core is not None and hasattr(_core, "piece_geometry"):
+        # the same arithmetic per piece, in parallel (faceops.rs)
+        p_n, p_verts = np.diff(pieces.vptr), pieces.verts
+        vol, bad_piece = _core.piece_geometry(np.ascontiguousarray(P, float), pieces.fptr, pieces.vptr, pieces.verts,
+                                              np.ascontiguousarray(csize[pieces.leaf], float))
+    elif nP:
         ffp = quality.FlatFaces((np.diff(pieces.vptr), pieces.verts))
         p_n, p_verts = ffp.n, ffp.v
         Cf, Sf = quality.face_geometry(P, ffp)
-        ref = np.zeros((nP, 3)); ref[py_cell] = Cf
         cnt_ = np.bincount(py_cell, minlength=nP)
         # np.add.at column by column (bincount adds in the same index order)
         est = np.stack([np.bincount(py_cell, Cf[:, k], nP) for k in range(3)], 1) if nP else np.zeros((0, 3))
@@ -2674,8 +2677,7 @@ def generate(cfg, log=print):
         selfpyr = np.einsum("ij,ij->i", Sf, Cf - cc[py_cell])
         badf = selfpyr < 0.05 * np.linalg.norm(Sf, axis=1) * hp[py_cell]
         bad_piece = np.bincount(py_cell, badf.astype(int), nP) > 0
-        farea = dict(zip(py_key.tolist(), np.linalg.norm(Sf, axis=1).tolist()))
-        del ffp, Cf, Sf, ref, est, pv, cc, selfpyr, badf
+        del ffp, Cf, Sf, est, pv, cc, selfpyr, badf
     else:
         bad_piece = np.zeros(0, bool)
     hexvol = cvol[pieces.leaf].astype(float)

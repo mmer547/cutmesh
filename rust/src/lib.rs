@@ -1119,6 +1119,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(faceops::leaf_vertices, m)?)?;
     m.add_function(wrap_pyfunction!(faceops::leaf_min, m)?)?;
     m.add_function(wrap_pyfunction!(faceops::leaf_mean, m)?)?;
+    m.add_function(wrap_pyfunction!(faceops::piece_geometry, m)?)?;
     m.add_function(wrap_pyfunction!(fhook::feature_hook_py, m)?)?;
     Ok(())
 }

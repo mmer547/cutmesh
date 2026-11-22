@@ -207,3 +207,72 @@ pub fn leaf_mean<'py>(
     });
     crate::vec3_array(py, r)
 }
+
+/// piece_geometry(points, pfptr, pvptr, pverts, h per piece) -> (volume, bad) per piece:
+/// the piece geometry of mesher.generate's merging stage (face centres and area vectors
+/// as quality.face_geometry, sums per piece in face order as np.bincount, einsum rows
+/// as (p0 + p2) + p1, norms as sqrt((x0^2 + x1^2) + x2^2)); bad: some face does not
+/// clearly see the centre
+#[pyfunction]
+pub fn piece_geometry<'py>(
+    py: Python<'py>,
+    points: numpy::PyReadonlyArray2<'py, f64>,
+    pfptr: PyReadonlyArray1<'py, i64>,
+    pvptr: PyReadonlyArray1<'py, i64>,
+    pverts: PyReadonlyArray1<'py, i64>,
+    hp: PyReadonlyArray1<'py, f64>,
+) -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<bool>>)> {
+    use crate::octree::einsum3;
+    let p = crate::points(&points)?;
+    let (pf, vp, pv, hp) = (pfptr.as_slice()?, pvptr.as_slice()?, pverts.as_slice()?, hp.as_slice()?);
+    let n = pf.len().saturating_sub(1);
+    if hp.len() != n || *pf.last().unwrap_or(&0) as usize + 1 > vp.len() || *vp.last().unwrap_or(&0) as usize > pv.len()
+        || pv.iter().any(|&v| v < 0 || v as usize >= p.len())
+    {
+        return Err(pyo3::exceptions::PyValueError::new_err("inconsistent piece arrays"));
+    }
+    let r: Vec<(f64, bool)> = py.detach(|| {
+        (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let faces = pf[i] as usize..pf[i + 1] as usize;
+                let cs: Vec<(crate::V3, crate::V3)> = faces
+                    .clone()
+                    .map(|f| {
+                        let idx: Vec<usize> = pv[vp[f] as usize..vp[f + 1] as usize].iter().map(|&v| v as usize).collect();
+                        crate::face_cs(&p, &idx)
+                    })
+                    .collect();
+                let cnt = cs.len().max(1) as f64;
+                let mut est = [0.0f64; 3];
+                for (c, _) in &cs {
+                    for k in 0..3 {
+                        est[k] += c[k];
+                    }
+                }
+                for e in est.iter_mut() {
+                    *e /= cnt;
+                }
+                let mut vol = 0.0f64;
+                let mut w = [0.0f64; 3];
+                for (c, s) in &cs {
+                    let pvf = einsum3(*s, crate::sub(*c, est));
+                    vol += pvf;
+                    for k in 0..3 {
+                        w[k] += pvf * (0.75 * c[k] + 0.25 * est[k]);
+                    }
+                }
+                let vol = vol / 3.0;
+                let den = if vol.abs() > 0.0 { 3.0 * vol } else { 1.0 };
+                let cc = [w[0] / den, w[1] / den, w[2] / den];
+                let bad = cs.iter().any(|(c, s)| {
+                    let nrm = ((s[0] * s[0] + s[1] * s[1]) + s[2] * s[2]).sqrt();
+                    einsum3(*s, crate::sub(*c, cc)) < 0.05 * nrm * hp[i]
+                });
+                (vol, bad)
+            })
+            .collect()
+    });
+    let (vol, bad): (Vec<f64>, Vec<bool>) = r.into_iter().unzip();
+    Ok((vol.into_pyarray(py), bad.into_pyarray(py)))
+}

@@ -352,7 +352,7 @@ class RustCutKernel(unittest.TestCase):
             def __getattr__(self, k):
                 if k in ("merge_wall_faces", "contact_candidates", "surface_contact_samples",
                          "split_samples", "cut_batch_csr", "face_sign_counts", "vertex_min",
-                         "leaf_any", "leaf_vertices", "finer_face_neighbour", "leaf_min", "leaf_mean", "feature_hook",
+                         "leaf_any", "leaf_vertices", "finer_face_neighbour", "leaf_min", "leaf_mean", "feature_hook", "piece_geometry",
                          "PlaneClipRs"):
                     raise AttributeError(k)
                 return getattr(real, k)
@@ -551,6 +551,36 @@ class RustFaceOps(unittest.TestCase):
             ref = np.full(nv + 3, np.inf)                  # vertices in no face stay inf
             np.minimum.at(ref, fverts, np.repeat(val, fn))
             np.testing.assert_array_equal(geometry._core.vertex_min(nv + 3, fptr, fverts, val), ref)
+
+    def test_piece_geometry(self):
+        # volumes and "bad" flags of pieces as the NumPy code of the merging stage
+        rng = np.random.default_rng(21)
+        P = rng.normal(size=(400, 3))
+        pieces = []
+        for _ in range(300):
+            nf = int(rng.integers(1, 8))
+            pieces.append([list(rng.choice(400, int(rng.integers(3, 7)), replace=False)) for _ in range(nf)])
+        fptr = np.concatenate([[0], np.cumsum([len(p) for p in pieces])]).astype(np.int64)
+        vn = np.array([len(f) for p in pieces for f in p], np.int64)
+        vptr = np.concatenate([[0], np.cumsum(vn)]).astype(np.int64)
+        verts = np.array([v for p in pieces for f in p for v in f], np.int64)
+        hp = rng.uniform(0.1, 2.0, len(pieces))
+        nP = len(pieces)
+        py_cell = np.repeat(np.arange(nP), np.diff(fptr))
+        Cf, Sf = quality.face_geometry(P, quality.FlatFaces((vn, verts)))
+        cnt = np.bincount(py_cell, minlength=nP)
+        est = np.stack([np.bincount(py_cell, Cf[:, k], nP) for k in range(3)], 1) / np.maximum(cnt, 1)[:, None]
+        pv = np.einsum("ij,ij->i", Sf, Cf - est[py_cell])
+        vol = np.bincount(py_cell, pv, nP) / 3.0
+        w = pv[:, None] * (0.75 * Cf + 0.25 * est[py_cell])
+        cc = np.stack([np.bincount(py_cell, w[:, k], nP) for k in range(3)], 1)
+        cc /= np.where(np.abs(vol) > 0, 3.0 * vol, 1.0)[:, None]
+        selfpyr = np.einsum("ij,ij->i", Sf, Cf - cc[py_cell])
+        bad = np.bincount(py_cell, (selfpyr < 0.05 * np.linalg.norm(Sf, axis=1) * hp[py_cell]).astype(int), nP) > 0
+        v2, b2 = geometry._core.piece_geometry(P, fptr, vptr, verts, hp)
+        np.testing.assert_array_equal(v2, vol)
+        np.testing.assert_array_equal(b2, bad)
+        self.assertTrue(bad.any() and not bad.all())
 
     def test_leaf_any_and_vertices(self):
         for seed in range(5):
