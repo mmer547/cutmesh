@@ -182,3 +182,114 @@ details pre { margin: 0.6em 0 0.4em; }
 .vswitch button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .layer-switch { display: flex; align-items: center; gap: 10px; margin: 1em 0; font-size: 0.9rem; color: var(--fg-soft); }
 .layer-switch[hidden] { display: none; }
+
+/* meshDict form (meshdict.html, meshdict.js) */
+.mdf-lead { color: var(--fg-soft); max-width: 60em; }
+.mdf-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin: 1.2em 0 0.3em; }
+.mdf-toolbar-sep { flex: 1; }
+.mdf-filebtn { cursor: pointer; }
+.mdf-filebtn:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+button.btn { background: transparent; font: inherit; font-weight: 600; font-size: 0.95rem; cursor: pointer; }
+button.btn.primary { background: var(--accent); }
+.btn.mdf-plain { border-color: var(--line); color: var(--fg-soft); }
+.btn.mdf-small { padding: 4px 12px; font-size: 0.85rem; }
+.mdf-select { display: inline-flex; align-items: center; gap: 8px; font-size: 0.92rem; color: var(--fg-soft); }
+.mdf-check { display: inline-flex; align-items: center; gap: 6px; font-size: 0.92rem; color: var(--fg-soft); cursor: pointer; }
+.mdf-drop-hint { margin: 0 0 1em; font-size: 0.82rem; color: var(--fg-faint); }
+.mdf select, .mdf-toolbar select, .mdf-text, .mdf-textarea {
+  font: inherit; font-size: 0.92rem; color: var(--fg); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; min-width: 0;
+}
+.mdf-text:focus, .mdf-textarea:focus, .mdf select:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
+.mdf-text:disabled { opacity: 0.5; }
+.mdf-num { font-family: var(--mono); font-size: 0.88rem; }
+.mdf-textarea { width: 100%; font-family: var(--mono); font-size: 0.85rem; resize: vertical; }
+.mdf-bad { border-color: #d14343; }
+
+.mdf { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 480px); gap: 32px; align-items: start; }
+.mdf-group { margin: 0 0 28px; }
+.mdf-group h2 { margin: 0 0 10px; font-size: 1.2rem; display: flex; align-items: baseline; gap: 10px; }
+.mdf-doc { font-size: 0.8rem; font-weight: 400; }
+.mdf-field { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 2px 16px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.mdf-label { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-top: 4px; }
+.mdf-label code { font-weight: 600; }
+.mdf-req, .mdf-adv { font-size: 0.7rem; border-radius: 999px; padding: 0 7px; line-height: 1.6; }
+.mdf-req { background: var(--accent); color: var(--bg); }
+.mdf-adv { border: 1px solid var(--line); color: var(--fg-faint); }
+.mdf-input { min-width: 0; }
+.mdf-input > .mdf-text, .mdf-input > select { width: 100%; max-width: 320px; }
+.mdf-help { grid-column: 2; font-size: 0.83rem; color: var(--fg-soft); line-height: 1.6; }
+.mdf-default { margin-left: 8px; color: var(--fg-faint); white-space: nowrap; }
+.mdf-hidden-note { font-size: 0.83rem; color: var(--fg-faint); margin: 8px 0 0; }
+.mdf-vec { display: grid; grid-template-columns: repeat(3, minmax(0, 110px)); gap: 6px; }
+.mdf-inline { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.mdf-inline .mdf-text { width: 160px; }
+.mdf-map { display: grid; gap: 6px; }
+.mdf-maprow { display: grid; grid-template-columns: minmax(0, 200px) minmax(0, 120px) auto; gap: 6px; align-items: center; }
+.mdf-mapadd { display: flex; flex-wrap: wrap; gap: 14px; }
+.mdf-link { border: 0; background: none; padding: 2px 0; color: var(--accent); font: inherit; font-size: 0.88rem; cursor: pointer; }
+.mdf-link:hover { text-decoration: underline; }
+.mdf-x {
+  border: 1px solid var(--line); background: var(--bg); color: var(--fg-faint); border-radius: 6px;
+  width: 28px; height: 28px; line-height: 1; font-size: 1rem; cursor: pointer;
+}
+.mdf-x:hover { color: #d14343; border-color: #d14343; }
+.mdf-list .mdf-text { width: 100%; max-width: 420px; }
+.mdf-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.mdf-chip {
+  border: 1px solid var(--line); background: var(--bg-soft); color: var(--fg-soft); border-radius: 999px;
+  padding: 1px 10px; font: inherit; font-size: 0.8rem; cursor: pointer;
+}
+.mdf-chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+
+/* nested objects and lists of objects span the whole width */
+.mdf-sub, .mdf-listfield { grid-template-columns: minmax(0, 1fr); }
+.mdf-sub > .mdf-help, .mdf-listfield > .mdf-help { grid-column: 1; }
+.mdf-subhead { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.mdf-subhead .mdf-label { padding-top: 0; }
+.mdf-subbody, .mdf-card { border-left: 3px solid var(--accent-soft); padding-left: 14px; margin-top: 6px; }
+.mdf-subbody .mdf-field, .mdf-card .mdf-field { grid-template-columns: 180px minmax(0, 1fr); }
+.mdf-subbody .mdf-sub, .mdf-card .mdf-sub { grid-template-columns: minmax(0, 1fr); }
+.mdf-subbody .mdf-field:last-child, .mdf-card .mdf-field:last-child { border-bottom: 0; }
+.mdf-card { background: var(--bg-soft); border-radius: 0 var(--radius) var(--radius) 0; padding: 8px 14px; margin: 10px 0; }
+.mdf-cardhead { display: flex; justify-content: space-between; align-items: center; }
+.mdf-shape { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; padding: 6px 0; font-size: 0.92rem; }
+.mdf-shape-label { color: var(--fg-soft); }
+.mdf-listfield > .btn { justify-self: start; margin-top: 6px; }
+
+/* output */
+.mdf-out {
+  position: sticky; top: 72px; border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--bg-soft); padding: 12px 14px; max-height: calc(100vh - 88px); overflow: auto;
+}
+.mdf-out-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.mdf-out-actions { display: flex; gap: 8px; }
+.mdf-json { margin: 10px 0; max-height: 60vh; background: var(--bg); }
+.mdf-cmd { margin: 4px 0 0; background: var(--bg); }
+.mdf-run { font-size: 0.83rem; color: var(--fg-soft); margin: 8px 0 0; }
+.mdf-issues { list-style: none; padding: 0; margin: 10px 0 0; font-size: 0.85rem; line-height: 1.5; }
+.mdf-issues li { margin: 4px 0; padding: 4px 8px 4px 10px; border-left: 3px solid; border-radius: 0 6px 6px 0; overflow-wrap: anywhere; }
+.mdf-issues .mdf-error { border-color: #d14343; background: color-mix(in srgb, #d14343 10%, transparent); }
+.mdf-issues .mdf-warn { border-color: var(--warn-line); background: var(--warn-bg); }
+.mdf-issues .mdf-info { border-color: var(--note-line); background: var(--note-bg); }
+.mdf-issues .mdf-ok { border-color: #3a9a5b; background: color-mix(in srgb, #3a9a5b 10%, transparent); }
+
+/* STL facts */
+.mdf-stlinfo { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 14px; margin: 0 0 20px; background: var(--bg-soft); }
+.mdf-stlhead { display: flex; justify-content: space-between; align-items: center; }
+.mdf-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 16px; margin: 6px 0; font-size: 0.9rem; }
+.mdf-facts dt { color: var(--fg-soft); }
+.mdf-facts dd { margin: 0; overflow-wrap: anywhere; }
+.mdf-muted { color: var(--fg-faint); font-size: 0.85em; margin-left: 4px; }
+.mdf-sugg { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 0.88rem; color: var(--fg-soft); }
+
+@media (max-width: 1000px) {
+  .mdf { grid-template-columns: minmax(0, 1fr); }
+  .mdf-out { position: static; max-height: none; }
+}
+@media (max-width: 640px) {
+  .mdf-field, .mdf-subbody .mdf-field, .mdf-card .mdf-field { grid-template-columns: minmax(0, 1fr); }
+  .mdf-help { grid-column: 1; }
+  .mdf-maprow { grid-template-columns: minmax(0, 1fr) minmax(0, 90px) auto; }
+  .mdf-toolbar-sep { display: none; }
+}
