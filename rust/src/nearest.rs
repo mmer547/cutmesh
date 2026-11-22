@@ -174,3 +174,18 @@ pub fn nearest_kept<'py>(
     let u: Vec<bool> = res.iter().map(|r| r.2).collect();
     Ok((d.into_pyarray(py), j.into_pyarray(py), u.into_pyarray(py)))
 }
+
+/// unique_points(p[n, 3]) -> the distinct rows (bit for bit), sorted by their bits: the
+/// point set of mesher._unique_points (whose order differs; for nearest distances the
+/// order of the points does not matter)
+#[pyfunction]
+pub fn unique_points<'py>(py: Python<'py>, p: PyReadonlyArray2<'py, f64>) -> PyResult<Bound<'py, numpy::PyArray2<f64>>> {
+    let pts = crate::points(&p)?;
+    let u: Vec<V3> = py.detach(|| {
+        let mut b: Vec<[u64; 3]> = pts.par_iter().map(|x| [x[0].to_bits(), x[1].to_bits(), x[2].to_bits()]).collect();
+        b.par_sort_unstable();
+        b.dedup();
+        b.par_iter().map(|k| [f64::from_bits(k[0]), f64::from_bits(k[1]), f64::from_bits(k[2])]).collect()
+    });
+    crate::vec3_array(py, u)
+}

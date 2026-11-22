@@ -2,9 +2,9 @@
 //! Keep vertex IDs throughout: adjacent pieces within one input triangle share
 //! their midpoint, while coincident points from different triangles keep their IDs.
 
-use std::collections::HashMap;
-
 use rayon::prelude::*;
+
+use crate::cut::FxMap as HashMap;
 
 use crate::{V3, dist2};
 
@@ -43,24 +43,43 @@ pub(super) fn samples(tris: &[[V3; 3]], selected: &[i64], spacing: f64) -> (Vec<
     }
     let mut centroids = Vec::new();
     let mut centroid_ids = Vec::new();
-    let mut unpaired = HashMap::new();
+    let mut unpaired: HashMap<(usize, usize), usize> = HashMap::default();
     let limit = spacing * spacing;
     while !pieces.is_empty() {
-        let mut split = Vec::new();
-        let mut edges = Vec::new();
-        for piece in pieces.drain(..) {
-            let tri = piece.verts.map(|v| points[v]);
-            if let Some(k) = split_edge(tri, limit) {
-                let mut rotated = piece;
-                rotated.verts.rotate_left(k);
-                let [u, v, _] = rotated.verts;
-                edges.push((u.min(v), u.max(v), split.len()));
-                split.push(rotated);
-            } else {
-                centroids.push(centroid(tri));
-                centroid_ids.push(piece.parent);
+        // each piece: split along its longest edge (rotated to start there) or done (its
+        // centroid), in parallel; then taken in order
+        let outcome: Vec<Result<Piece, V3>> = pieces
+            .par_iter()
+            .map(|piece| {
+                let tri = piece.verts.map(|v| points[v]);
+                match split_edge(tri, limit) {
+                    Some(k) => {
+                        let mut rotated = *piece;
+                        rotated.verts.rotate_left(k);
+                        Ok(rotated)
+                    }
+                    None => Err(centroid(tri)),
+                }
+            })
+            .collect();
+        let mut split = Vec::with_capacity(outcome.len());
+        for (piece, o) in pieces.drain(..).zip(outcome) {
+            match o {
+                Ok(rotated) => split.push(rotated),
+                Err(c) => {
+                    centroids.push(c);
+                    centroid_ids.push(piece.parent);
+                }
             }
         }
+        let mut edges: Vec<(usize, usize, usize)> = split
+            .par_iter()
+            .enumerate()
+            .map(|(j, p)| {
+                let [u, v, _] = p.verts;
+                (u.min(v), u.max(v), j)
+            })
+            .collect();
         // NumPy numbers new midpoints in sorted edge order at each depth.
         edges.par_sort_unstable();
         let mut mids = vec![0; split.len()];

@@ -50,6 +50,40 @@ class RustMatchesPython(unittest.TestCase):
         s2 = self.dom.inside(self.X)
         self.assertEqual(int((s1 != s2).sum()), 0)
 
+    @unittest.skipUnless(hasattr(getattr(G._core, "TriMesh", None), "inside_bvh"), "Rust extension not built")
+    def test_inside_grid_matches_bvh(self):
+        # the (y, z) grid of BVH leaves tests the leaves the traversal tests: the same
+        # parity, also for probes on the triangles' vertices, edges and box borders
+        rng = np.random.default_rng(5)
+        T = self.dom.tris
+        V = T.reshape(-1, 3)
+        mids = 0.5 * (T[:, 0] + T[:, 1])
+        Y = np.concatenate([self.X, V, mids, V + rng.normal(0, 1e-12, V.shape),
+                            np.stack([V[:, 0] - 1.0, V[:, 1], V[:, 2]], 1)])
+        for k in range(3):
+            Z = Y.copy()
+            Z[:, k] += rng.choice([-1.0, 1.0], len(Z)) * rng.random(len(Z)) * 1e-9
+            np.testing.assert_array_equal(self.dom._rs.inside(Z), self.dom._rs.inside_bvh(Z))
+        far = np.array([[1e9, 0, 0], [0, 1e9, 0], [0, 0, -1e9], [np.nan, 0, 0]])
+        np.testing.assert_array_equal(self.dom._rs.inside(far), self.dom._rs.inside_bvh(far))
+
+    @unittest.skipUnless(hasattr(G._core, "unique_points"), "Rust extension not built")
+    def test_unique_points(self):
+        # the KD-tree points of the refinement sources: the distinct rows (any order)
+        from scipy.spatial import cKDTree
+        from cutmesh import mesher
+        rng = np.random.default_rng(6)
+        p = np.round(rng.random((20000, 3)), 3)
+        p = np.concatenate([p, p[:5000], -0.0 * p[:10]])
+        a = G._core.unique_points(p)
+        b = mesher._unique_points(p)
+        self.assertEqual(len(a), len(b))
+        np.testing.assert_array_equal(np.unique(a.view(np.uint64), axis=0), np.unique(b.view(np.uint64), axis=0))
+        q = rng.random((3000, 3))
+        k = mesher._points_kd(p)
+        np.testing.assert_array_equal(k.query(q, distance_upper_bound=0.01)[0],
+                                      cKDTree(b).query(q, distance_upper_bound=0.01)[0])
+
     def test_sdf(self):
         np.testing.assert_allclose(self.dom.sdf(self.X), self.python_surface().sdf(self.X), atol=1e-12)
 

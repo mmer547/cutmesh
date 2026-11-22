@@ -118,7 +118,7 @@ impl Bvh {
         if self.nodes.is_empty() {
             return best;
         }
-        let mut stack: Vec<(u32, f64)> = Vec::with_capacity(64);
+        let mut stack: Stk<(u32, f64)> = Stk::new();
         stack.push((0, box_d2(&self.nodes[0], p)));
         while let Some((ni, bd)) = stack.pop() {
             if bd >= best.0 {
@@ -149,6 +149,42 @@ impl Bvh {
     }
 }
 
+/// a LIFO stack for tree traversals: 64 entries inline (no allocation per query), the
+/// rest (deeper trees) in a vector
+pub(crate) struct Stk<T: Copy> {
+    a: [std::mem::MaybeUninit<T>; 64],
+    n: usize,
+    spill: Vec<T>,
+}
+
+impl<T: Copy> Stk<T> {
+    #[inline]
+    pub(crate) fn new() -> Self {
+        Stk { a: [std::mem::MaybeUninit::uninit(); 64], n: 0, spill: Vec::new() }
+    }
+    #[inline]
+    pub(crate) fn push(&mut self, x: T) {
+        if self.n < 64 {
+            self.a[self.n] = std::mem::MaybeUninit::new(x);
+            self.n += 1;
+        } else {
+            self.spill.push(x);
+        }
+    }
+    #[inline]
+    pub(crate) fn pop(&mut self) -> Option<T> {
+        if let Some(x) = self.spill.pop() {
+            return Some(x);
+        }
+        if self.n == 0 {
+            return None;
+        }
+        self.n -= 1;
+        // entries below n were written by push
+        Some(unsafe { self.a[self.n].assume_init() })
+    }
+}
+
 impl Bvh {
     /// primitives whose centre (given by `centre`) lies within r of p, ascending
     fn within<F: Fn(usize) -> V3>(&self, p: V3, r: f64, centre: F, out: &mut Vec<usize>) {
@@ -156,7 +192,8 @@ impl Bvh {
             return;
         }
         let r2 = r * r;
-        let mut stack: Vec<u32> = vec![0];
+        let mut stack: Stk<u32> = Stk::new();
+        stack.push(0);
         while let Some(ni) = stack.pop() {
             let n = &self.nodes[ni as usize];
             if box_d2(n, p) > r2 {
@@ -331,6 +368,84 @@ struct TriMesh {
     bvh: Bvh,
     pert: V3,
     tol: f64,
+    yz: YzGrid,
+}
+
+/// the BVH's leaves by their (y, z) boxes on a grid: the leaves a +x ray from q can
+/// reach are those of q's cell whose box passes the BVH's own test (an ancestor's box
+/// contains its leaves' boxes, so the BVH tests exactly those leaves)
+struct YzGrid {
+    o: [f64; 2],
+    cs: [f64; 2],
+    n: [usize; 2],
+    start: Vec<u32>,
+    leaves: Vec<u32>,
+}
+
+impl YzGrid {
+    fn build(nodes: &[Node]) -> YzGrid {
+        let leaf: Vec<u32> = (0..nodes.len() as u32).filter(|&i| nodes[i as usize].count > 0).collect();
+        let mut lo = [f64::INFINITY; 2];
+        let mut hi = [f64::NEG_INFINITY; 2];
+        for &l in &leaf {
+            let nd = &nodes[l as usize];
+            for k in 0..2 {
+                lo[k] = lo[k].min(nd.lo[k + 1]);
+                hi[k] = hi[k].max(nd.hi[k + 1]);
+            }
+        }
+        let m = ((leaf.len() as f64).sqrt() * 2.0).ceil().max(1.0) as usize;
+        let mut cs = [1.0f64; 2];
+        let mut n = [1usize; 2];
+        for k in 0..2 {
+            let e = hi[k] - lo[k];
+            if e.is_finite() && e > 0.0 {
+                n[k] = m.min(4096);
+                cs[k] = e / n[k] as f64;
+            } else {
+                lo[k] = if lo[k].is_finite() { lo[k] } else { 0.0 };
+            }
+        }
+        let g = YzGrid { o: lo, cs, n, start: Vec::new(), leaves: Vec::new() };
+        let mut cnt = vec![0u32; n[0] * n[1] + 1];
+        let range = |nd: &Node| {
+            let (a0, a1) = (g.idx(0, nd.lo[1]), g.idx(0, nd.hi[1]));
+            let (b0, b1) = (g.idx(1, nd.lo[2]), g.idx(1, nd.hi[2]));
+            (a0, a1, b0, b1)
+        };
+        for &l in &leaf {
+            let (a0, a1, b0, b1) = range(&nodes[l as usize]);
+            for a in a0..=a1 {
+                for b in b0..=b1 {
+                    cnt[a * n[1] + b + 1] += 1;
+                }
+            }
+        }
+        for c in 0..n[0] * n[1] {
+            cnt[c + 1] += cnt[c];
+        }
+        let mut fill = cnt.clone();
+        let mut leaves = vec![0u32; cnt[n[0] * n[1]] as usize];
+        for &l in &leaf {
+            let (a0, a1, b0, b1) = range(&nodes[l as usize]);
+            for a in a0..=a1 {
+                for b in b0..=b1 {
+                    let c = a * n[1] + b;
+                    leaves[fill[c] as usize] = l;
+                    fill[c] += 1;
+                }
+            }
+        }
+        YzGrid { start: cnt, leaves, ..g }
+    }
+
+    /// the cell along axis k (0: y, 1: z) of coordinate x, clamped (monotonic in x, so
+    /// a box holding x is registered in x's cell)
+    #[inline]
+    fn idx(&self, k: usize, x: f64) -> usize {
+        let f = ((x - self.o[k]) / self.cs[k]).floor();
+        if f.is_nan() || f < 0.0 { 0 } else { (f as usize).min(self.n[k] - 1) }
+    }
 }
 
 impl TriMesh {
@@ -341,7 +456,8 @@ impl TriMesh {
             return out;
         }
         let r2 = rad * rad;
-        let mut stack: Vec<u32> = vec![0];
+        let mut stack: Stk<u32> = Stk::new();
+        stack.push(0);
         while let Some(ni) = stack.pop() {
             let n = &self.bvh.nodes[ni as usize];
             if box_d2(n, q) > r2 {
@@ -396,7 +512,8 @@ impl TriMesh {
         if self.bvh.nodes.is_empty() {
             return;
         }
-        let mut stack: Vec<u32> = vec![0];
+        let mut stack: Stk<u32> = Stk::new();
+        stack.push(0);
         while let Some(ni) = stack.pop() {
             let n = &self.bvh.nodes[ni as usize];
             if !seg_box(p, d, n, self.tol) {
@@ -422,7 +539,40 @@ impl TriMesh {
         if self.bvh.nodes.is_empty() {
             return false;
         }
-        let mut stack: Vec<u32> = Vec::with_capacity(64);
+        let g = &self.yz;
+        let c = g.idx(0, q[1]) * g.n[1] + g.idx(1, q[2]);
+        for &ni in &g.leaves[g.start[c] as usize..g.start[c + 1] as usize] {
+            let n = &self.bvh.nodes[ni as usize];
+            if q[1] < n.lo[1] || q[1] > n.hi[1] || q[2] < n.lo[2] || q[2] > n.hi[2] || n.hi[0] < q[0] {
+                continue;
+            }
+            for &i in &self.bvh.prims[n.start as usize..(n.start + n.count) as usize] {
+                let [a, b, c] = self.t[i as usize];
+                let w0 = cr(a, b, q);
+                let w1 = cr(b, c, q);
+                let w2 = cr(c, a, q);
+                let hit = (w0 > 0.0 && w1 > 0.0 && w2 > 0.0) || (w0 < 0.0 && w1 < 0.0 && w2 < 0.0);
+                if hit {
+                    let sw = w0 + w1 + w2;
+                    let sw = if sw != 0.0 { sw } else { 1.0 };
+                    let x = (w1 * a[0] + w2 * b[0] + w0 * c[0]) / sw;
+                    if x > q[0] {
+                        parity = !parity;
+                    }
+                }
+            }
+        }
+        parity
+    }
+
+    /// inside_one by the BVH traversal (the reference for the grid)
+    fn inside_one_bvh(&self, p: V3) -> bool {
+        let q = [p[0] + self.pert[0], p[1] + self.pert[1], p[2] + self.pert[2]];
+        let mut parity = false;
+        if self.bvh.nodes.is_empty() {
+            return false;
+        }
+        let mut stack: Stk<u32> = Stk::new();
         stack.push(0);
         while let Some(ni) = stack.pop() {
             let n = &self.bvh.nodes[ni as usize];
@@ -491,7 +641,8 @@ impl TriMesh {
         let len = dot(d, d).sqrt();
         let pert = [len * 0.0, len * 3.14159265e-7, len * 2.71828183e-7];
         let bvh = Bvh::build(&lo, &hi);
-        Ok(TriMesh { t, bvh, pert, tol: 1e-9 * len })
+        let yz = YzGrid::build(&bvh.nodes);
+        Ok(TriMesh { t, bvh, pert, tol: 1e-9 * len, yz })
     }
 
     /// Index the centroids of Surface.build_search's longest-edge subdivision.
@@ -525,6 +676,13 @@ impl TriMesh {
         let id: Vec<i64> = res.iter().map(|r| r.2 as i64).collect();
         let cp: Vec<V3> = res.into_iter().map(|r| r.1).collect();
         Ok((vec3_array(py, cp)?, d.into_pyarray(py), id.into_pyarray(py)))
+    }
+
+    /// inside() by the BVH traversal instead of the (y, z) grid (for the tests)
+    fn inside_bvh<'py>(&self, py: Python<'py>, p: PyReadonlyArray2<'py, f64>) -> PyResult<Bound<'py, PyArray1<bool>>> {
+        let pts = points(&p)?;
+        let r: Vec<bool> = py.detach(|| pts.par_iter().map(|&q| self.inside_one_bvh(q)).collect());
+        Ok(r.into_pyarray(py))
     }
 
     /// parity of +x ray crossings: true inside the closed surface
@@ -1153,6 +1311,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(octree::octree_split, m)?)?;
     m.add_function(wrap_pyfunction!(octree::octree_centers, m)?)?;
     m.add_function(wrap_pyfunction!(nearest::nearest_kept, m)?)?;
+    m.add_function(wrap_pyfunction!(nearest::unique_points, m)?)?;
     m.add_function(wrap_pyfunction!(octree::leaf_bad, m)?)?;
     m.add_function(wrap_pyfunction!(octree::finer_face_neighbour, m)?)?;
     m.add_function(wrap_pyfunction!(wallmerge::merge_wall_faces, m)?)?;
