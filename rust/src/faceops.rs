@@ -84,17 +84,25 @@ pub fn leaf_any<'py>(
     fverts: PyReadonlyArray1<'py, i64>,
 ) -> PyResult<Bound<'py, PyArray1<bool>>> {
     let (m, vp, fv) = (mask.as_slice()?, vptr.as_slice()?, fverts.as_slice()?);
-    if vp.is_empty() || *vp.last().unwrap() as usize > fv.len() || vp.par_windows(2).any(|w| w[1] <= w[0])
-        || fv.par_iter().any(|&v| v < 0 || v as usize >= m.len())
-    {
-        return Err(pyo3::exceptions::PyValueError::new_err("inconsistent leaf arrays"));
+    let bad = || pyo3::exceptions::PyValueError::new_err("inconsistent leaf arrays");
+    if vp.is_empty() || vp[0] < 0 || *vp.last().unwrap() as usize > fv.len() || vp.par_windows(2).any(|w| w[1] <= w[0]) {
+        return Err(bad());
     }
-    let r: Vec<bool> = py.detach(|| {
+    // the vertex ids are checked as they are read (one pass over fverts): a leaf with
+    // an id out of range is None
+    let r: Vec<Option<bool>> = py.detach(|| {
         (0..vp.len() - 1)
             .into_par_iter()
-            .map(|c| fv[vp[c] as usize..vp[c + 1] as usize].iter().any(|&v| m[v as usize]))
+            .map(|c| {
+                let occ = &fv[vp[c] as usize..vp[c + 1] as usize];
+                if occ.iter().any(|&v| v < 0 || v as usize >= m.len()) {
+                    return None;
+                }
+                Some(occ.iter().any(|&v| m[v as usize]))
+            })
             .collect()
     });
+    let r: Vec<bool> = r.into_iter().collect::<Option<_>>().ok_or_else(bad)?;
     Ok(r.into_pyarray(py))
 }
 

@@ -882,28 +882,32 @@ def _nearest_in(pts, keep, q, cache=None):
     callers keep every vertex that can be near enough to matter (inf, 0 when none).
     cache (a list): the answer of an earlier call with the same masked points and
     queries is reused (the snapping attempts repeat most of these queries)."""
+    q = np.asarray(q, float)
+    if _core is not None and hasattr(_core, "nearest_kept") and len(q):
+        # a grid search in Rust (the KD-tree's distances; no cache needed); where several
+        # points are equally near, the KD-tree's choice among them
+        keep = np.ascontiguousarray(keep, bool)
+        if not keep.any():
+            return np.full(len(q), np.inf), np.zeros(len(q), np.int64)
+        d, gj, u = _core.nearest_kept(np.ascontiguousarray(pts, float), keep,
+                                      np.ascontiguousarray(q.reshape(-1, 3), float))
+        if not u.all():
+            idx = np.flatnonzero(keep)
+            dt, jt = cKDTree(pts[idx]).query(q[~u])
+            d[~u] = dt
+            gj[~u] = idx[jt]
+        return d, gj
     idx = np.flatnonzero(keep)
     if not len(idx):
         return np.full(len(q), np.inf), np.zeros(len(q), np.int64)
     P = pts[idx]
-    q = np.asarray(q, float)
     if cache is not None:
         for eidx, eP, eq, ed, ej in cache:
             if (len(eidx) == len(idx) and eq.shape == q.shape and np.array_equal(eidx, idx)
                     and np.array_equal(eq, q) and np.array_equal(eP, P)):
                 return ed.copy(), ej.copy()
-    if _core is not None and hasattr(_core, "nearest_kept") and len(q):
-        # a grid search in Rust (the KD-tree's distances); where several points are
-        # equally near, the KD-tree's choice among them
-        d, gj, u = _core.nearest_kept(np.ascontiguousarray(pts, float), np.ascontiguousarray(keep, bool),
-                                      np.ascontiguousarray(q.reshape(-1, 3), float))
-        if not u.all():
-            dt, jt = cKDTree(P).query(q[~u])
-            d[~u] = dt
-            gj[~u] = idx[jt]
-    else:
-        d, j = cKDTree(P).query(q)
-        gj = idx[j]
+    d, j = cKDTree(P).query(q)
+    gj = idx[j]
     if cache is not None:
         cache.append((idx, P, q.copy(), d.copy(), gj.copy()))
         del cache[:-6]
