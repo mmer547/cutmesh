@@ -559,7 +559,7 @@ pub fn cut_batch_csr<'py>(
 ) -> PyResult<(crate::csr::CsrOut<'py>, Bound<'py, PyArray2<f64>>, Vec<(i64, i64)>, i64)> {
     let cells = crate::csr::read_cells(&fptr, &key, &vptr, &verts)?;
     let (res, newp, parents, nid) = cut_cells_par(py, &points, &phi, next_face_id, cells, shared_cap, &zero_edge)?;
-    Ok((crate::csr::write_results(py, &res, false), vec3_array(py, newp)?, parents, nid))
+    Ok((crate::csr::write_results(py, res, false), vec3_array(py, newp)?, parents, nid))
 }
 
 #[allow(clippy::type_complexity)]
@@ -654,6 +654,12 @@ fn cut_cells_par(
             new_parents: Vec::new(),
             zero_edge,
         };
+        // room for every crossing and sub-face the cells ask for (no rehashing)
+        let (nv, ns) = sym.iter().fold((0usize, 0usize), |(a, b), (_, ev)| {
+            (a + ev.iter().filter(|e| matches!(e, Ev::Vertex(..))).count(), b + ev.iter().filter(|e| matches!(e, Ev::Sub(..))).count())
+        });
+        ct.cache.reserve(nv);
+        ct.subids.reserve(ns);
         let mut ids: Vec<(CellResult, Vec<i64>, Vec<i64>)> = Vec::with_capacity(sym.len());
         for ((negc, posc), events) in sym {
             let mut vmap: Vec<i64> = Vec::new();

@@ -49,7 +49,7 @@ pub(crate) type CsrOut<'py> = (
 /// components of a cell are listed negative first, then positive, cells in order
 pub(crate) fn write_results<'py>(
     py: Python<'py>,
-    res: &[(Vec<Vec<Face>>, Vec<Vec<Face>>)],
+    res: Vec<(Vec<Vec<Face>>, Vec<Vec<Face>>)>,
     neg_only: bool,
 ) -> CsrOut<'py> {
     // per cell: its components flattened (in parallel), then joined with offsets
@@ -60,11 +60,12 @@ pub(crate) fn write_results<'py>(
         vcnt: Vec<i64>,
         verts: Vec<i64>,
     }
+    // consumed in parallel: the many small vectors are freed by the workers too
     let blocks: Vec<Block> = py.detach(|| {
-        res.par_iter()
+        res.into_par_iter()
             .map(|(negc, posc)| {
                 let mut b = Block { side: Vec::new(), fcnt: Vec::new(), key: Vec::new(), vcnt: Vec::new(), verts: Vec::new() };
-                let sides: [(&Vec<Vec<Face>>, i64); 2] = [(negc, 0), (posc, 1)];
+                let sides: [(&Vec<Vec<Face>>, i64); 2] = [(&negc, 0), (&posc, 1)];
                 for (comps, s) in sides {
                     if s == 1 && neg_only {
                         continue;
