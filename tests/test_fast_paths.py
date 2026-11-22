@@ -352,7 +352,7 @@ class RustCutKernel(unittest.TestCase):
             def __getattr__(self, k):
                 if k in ("merge_wall_faces", "contact_candidates", "surface_contact_samples",
                          "split_samples", "cut_batch_csr", "face_sign_counts", "vertex_min",
-                         "leaf_any", "leaf_vertices", "finer_face_neighbour", "leaf_min", "leaf_mean", "feature_hook", "piece_geometry", "pair_faces",
+                         "leaf_any", "leaf_vertices", "finer_face_neighbour", "leaf_min", "leaf_mean", "feature_hook", "piece_geometry", "pair_faces", "first_two",
                          "PlaneClipRs"):
                     raise AttributeError(k)
                 return getattr(real, k)
@@ -593,6 +593,20 @@ class RustFaceOps(unittest.TestCase):
             for a, b in zip(ref, got[:5]):
                 np.testing.assert_array_equal(a, b)
             self.assertEqual(bool(logs), got[5] > 0)
+
+    def test_first_two(self):
+        rng = np.random.default_rng(23)
+        for n, m in ((5, 0), (50, 200), (3000, 9000)):
+            kk0 = rng.integers(0, n, m).astype(np.int64)
+            kc0 = rng.integers(0, 10 ** 6, m).astype(np.int64)
+            kb1 = np.full(n, -1, np.int64); kb2 = np.full(n, -1, np.int64)
+            o_ = np.argsort(kk0, kind="stable"); kk = kk0[o_]; kc = kc0[o_]
+            first = np.ones(len(kk), bool); first[1:] = kk[1:] != kk[:-1]
+            kb1[kk[first]] = kc[first]
+            kb2[kk[~first]] = kc[~first]
+            a, b = geometry._core.first_two(kk0, kc0, n)
+            np.testing.assert_array_equal(a, kb1)
+            np.testing.assert_array_equal(b, kb2)
 
     def test_leaf_any_and_vertices(self):
         for seed in range(5):

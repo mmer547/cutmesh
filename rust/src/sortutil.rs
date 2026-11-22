@@ -76,3 +76,32 @@ pub fn pair_faces<'py>(
     });
     Ok((io.into_pyarray(py), iown.into_pyarray(py), inei.into_pyarray(py), bo.into_pyarray(py), bown.into_pyarray(py), nm))
 }
+
+/// first_two(keys, vals, n) -> (first, second): per key in 0..n, the value of its first
+/// occurrence and of its last later one (-1 if none), as the stable sort by key with
+/// first[k[first_mask]] = v, second[k[~first_mask]] = v of mesher.generate does
+#[pyfunction]
+pub fn first_two<'py>(
+    py: Python<'py>,
+    keys: PyReadonlyArray1<'py, i64>,
+    vals: PyReadonlyArray1<'py, i64>,
+    n: usize,
+) -> PyResult<(Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<i64>>)> {
+    let (k, v) = (keys.as_slice()?, vals.as_slice()?);
+    if k.len() != v.len() || k.iter().any(|&x| x < 0 || x as usize >= n) {
+        return Err(pyo3::exceptions::PyValueError::new_err("keys out of range"));
+    }
+    let mut a = vec![-1i64; n];
+    let mut b = vec![-1i64; n];
+    let mut seen = vec![false; n];
+    for (&x, &y) in k.iter().zip(v) {
+        let x = x as usize;
+        if seen[x] {
+            b[x] = y;
+        } else {
+            seen[x] = true;
+            a[x] = y;
+        }
+    }
+    Ok((a.into_pyarray(py), b.into_pyarray(py)))
+}

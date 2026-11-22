@@ -2740,13 +2740,17 @@ def generate(cfg, log=print):
         return fl
 
     # bulk cells on either side of an original octree face key
-    kb1 = np.full(M_nkeys, -1, np.int64); kb2 = np.full(M_nkeys, -1, np.int64)
-    kk = f_key[bsel]; kc = f_cell[bsel]
-    o_ = _argsort_stable(kk); kk = kk[o_]; kc = kc[o_]
-    first = np.ones(len(kk), bool); first[1:] = kk[1:] != kk[:-1]
-    kb1[kk[first]] = kc[first]
-    kb2[kk[~first]] = kc[~first]
-    del kk, kc, o_, first
+    if _core is not None and hasattr(_core, "first_two"):
+        kb1, kb2 = _core.first_two(np.ascontiguousarray(f_key[bsel], np.int64),
+                                   np.ascontiguousarray(f_cell[bsel], np.int64), int(M_nkeys))
+    else:
+        kb1 = np.full(M_nkeys, -1, np.int64); kb2 = np.full(M_nkeys, -1, np.int64)
+        kk = f_key[bsel]; kc = f_cell[bsel]
+        o_ = _argsort_stable(kk); kk = kk[o_]; kc = kc[o_]
+        first = np.ones(len(kk), bool); first[1:] = kk[1:] != kk[:-1]
+        kb1[kk[first]] = kc[first]
+        kb2[kk[~first]] = kc[~first]
+        del kk, kc, o_, first
 
     def face_neighbour(fid, me_set):
         """node on the other side of face fid (or -1 for boundary)"""
@@ -2880,9 +2884,10 @@ def generate(cfg, log=print):
     # the STL (no dent in the wall).
     removed = np.zeros(nP, bool)
     tet_cand = []
-    for r in np.nonzero(proot == np.arange(nP))[0].tolist():
-        if gvol[r] >= beta * hexvol[r] and not bad_piece[r]:
-            continue
+    roots = np.nonzero(proot == np.arange(nP))[0]
+    # the large convex cells are fine: only the others are looked at
+    roots = roots[~((gvol[roots] >= beta * hexvol[roots]) & ~np.asarray(bad_piece, bool)[roots])]
+    for r in roots.tolist():
         keep_, cf_, sf_, V_, cc_ = poly_geom(node_faces(r))
         if V_ > 0 and _tets_ok(P, keep_, cf_, cc_, 1e-3 * V_):
             continue
