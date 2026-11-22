@@ -324,7 +324,7 @@ CUTMESH_NO_RUST=1 python -m cutmesh meshDict.json   # Python の処理を強制�
   <tr><td>同、境界層あり（<code>meshDict_layers.json</code>）</td><td class="num">148 秒</td><td class="num">2.8 秒</td></tr>
   <tr><td>同、隙間 1 mm（<code>meshDict_stator_1mm.json</code>、約 60 万セル）</td><td class="num">2080 秒（約 35 分）</td><td class="num">9.0 秒</td></tr>
 </table></div>
-<p>16 コアのマシン、v0.5.0、品質チェックを含む。約 850 万セルの実形状では約 100 秒（メモリ約 30 GB）です。</p>
+<p>16 コアのマシン、v0.5.0、品質チェックを含む。約 850 万セルの実形状では約 95 秒（メモリ約 13 GB、v0.5.1）です。</p>
 
 <h2 id="checks">設定と入力の検査</h2>
 <p>メッシュを作り始める前に <code>meshDict.json</code> を検査します。</p>
@@ -428,7 +428,7 @@ python benchmark/run_bench.py benchmark/suites/synthetic.json [オプション]<
   <li>セルより薄い形状（薄翼・バッフル板）は、その厚さ程度まで細分化が必要。</li>
   <li>壁と別の壁が交わる入隅や円筒の縁は、セル寸法程度で面取りされることがある。凸の鋭角エッジは厳密カットで捉えるが、凹のエッジや曲面と交わる所の近くでは面取りが残ることがある。</li>
   <li>歪度 &gt; 4 の境界面が少数残ることがある（checkMesh では 1 項目の失敗になる可能性がある）。</li>
-  <li>メモリは 100 万セルあたり約 4 GB 使う。狭い隙間の中に回転ゾーンの界面を置くと、セル数とメモリが急に増える。</li>
+  <li>メモリは 100 万セルあたり約 1.5〜2 GB 使う。狭い隙間の中に回転ゾーンの界面を置くと、セル数とメモリが急に増える。</li>
   <li>Rust 拡張がないと（Python/NumPy の処理）大幅に遅い（攪拌槽の例で約 100 倍）。</li>
 </ul>
 </article>
