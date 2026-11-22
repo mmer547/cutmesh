@@ -50,6 +50,63 @@ class RustMatchesPython(unittest.TestCase):
         s2 = self.dom.inside(self.X)
         self.assertEqual(int((s1 != s2).sum()), 0)
 
+    @unittest.skipUnless(hasattr(getattr(G._core, "TriMesh", None), "inside_bvh"), "Rust extension not built")
+    def test_inside_grid_matches_bvh(self):
+        # the (y, z) grid of BVH leaves tests the leaves the traversal tests: the same
+        # parity, also for probes on the triangles' vertices, edges and box borders
+        rng = np.random.default_rng(5)
+        T = self.dom.tris
+        V = T.reshape(-1, 3)
+        mids = 0.5 * (T[:, 0] + T[:, 1])
+        Y = np.concatenate([self.X, V, mids, V + rng.normal(0, 1e-12, V.shape),
+                            np.stack([V[:, 0] - 1.0, V[:, 1], V[:, 2]], 1)])
+        for k in range(3):
+            Z = Y.copy()
+            Z[:, k] += rng.choice([-1.0, 1.0], len(Z)) * rng.random(len(Z)) * 1e-9
+            np.testing.assert_array_equal(self.dom._rs.inside(Z), self.dom._rs.inside_bvh(Z))
+        far = np.array([[1e9, 0, 0], [0, 1e9, 0], [0, 0, -1e9], [np.nan, 0, 0]])
+        np.testing.assert_array_equal(self.dom._rs.inside(far), self.dom._rs.inside_bvh(far))
+        self.assertTrue(self.dom._rs.inside_grid())
+        # solids in a row along x overlap in (y, z): no grid (its registrations would
+        # grow with the square of the triangles), the BVH answers
+        V = np.array([[x, y, z] for z in (0, 1) for y in (0, 1) for x in (0, 1)], float)
+        F = np.array([(0, 2, 1), (1, 2, 3), (4, 5, 6), (5, 7, 6), (0, 1, 4), (1, 5, 4),
+                      (2, 6, 3), (3, 6, 7), (0, 4, 2), (2, 4, 6), (1, 3, 5), (3, 7, 5)])
+        T = np.concatenate([V[F] + [2.0 * i, 0, 0] for i in range(3000)])
+        m = G._core.TriMesh(np.ascontiguousarray(T))
+        self.assertFalse(m.inside_grid())
+        q = rng.random((5000, 3)) * [6000, 1, 1]
+        np.testing.assert_array_equal(m.inside(q), m.inside_bvh(q))
+        self.assertTrue(m.inside(np.array([[0.5, 0.5, 0.5], [3000.5, 0.5, 0.5]])).all())
+
+    @unittest.skipUnless(hasattr(G._core, "unique_points"), "Rust extension not built")
+    def test_unique_points(self):
+        # the KD-tree points of the refinement sources: the distinct rows (any order)
+        from scipy.spatial import cKDTree
+        from cutmesh import mesher
+        rng = np.random.default_rng(6)
+        p = np.round(rng.random((20000, 3)), 3)
+        p = np.concatenate([p, p[:5000], -0.0 * p[:10]])
+        a = G._core.unique_points(p)
+        b = mesher._unique_points(p)
+        self.assertEqual(len(a), len(b))
+        np.testing.assert_array_equal(np.unique(a.view(np.uint64), axis=0), np.unique(b.view(np.uint64), axis=0))
+        q = rng.random((3000, 3))
+        k = mesher._points_kd(p)
+        np.testing.assert_array_equal(k.query(q, distance_upper_bound=0.01)[0],
+                                      cKDTree(b).query(q, distance_upper_bound=0.01)[0])
+
+    @unittest.skipUnless(hasattr(getattr(G._core, "TriMesh", None), "samples_by_triangle"), "Rust extension not built")
+    def test_samples_by_triangle(self):
+        # samples(ordered=False): the points and triangle ids of samples(), as a multiset
+        for spacing, regions in ((0.004, None), (0.0015, [0]), (0.01, [1])):
+            a, ia = self.dom.samples(spacing, regions)
+            b, ib = self.dom.samples(spacing, regions, ordered=False)
+            ka = np.concatenate([a.view(np.int64), ia[:, None]], 1)
+            kb = np.concatenate([b.view(np.int64), ib[:, None]], 1)
+            self.assertGreater(len(ka), 1000)
+            np.testing.assert_array_equal(ka[np.lexsort(ka.T[::-1])], kb[np.lexsort(kb.T[::-1])])
+
     def test_sdf(self):
         np.testing.assert_allclose(self.dom.sdf(self.X), self.python_surface().sdf(self.X), atol=1e-12)
 

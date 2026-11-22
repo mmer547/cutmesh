@@ -914,11 +914,54 @@ def _nearest_in(pts, keep, q, cache=None):
     return d, gj
 
 
+def _samples_set(geom, spacing):
+    """geom.samples(spacing) for a point set only (the order does not matter)"""
+    if isinstance(geom, (Surface, SurfaceZone)):
+        return geom.samples(spacing, ordered=False)
+    return geom.samples(spacing)
+
+
 def _points_kd(p):
     """KD-tree for nearest-distance queries of the sample points p (distances only).
     Sliding-midpoint splits without shrinking the node boxes build ~2.5x faster than
-    the default median splits; the nearest distances are exact either way."""
-    return cKDTree(_unique_points(p), balanced_tree=False, compact_nodes=False)
+    the default median splits; the nearest distances are exact either way.  Built in a
+    worker thread (the build releases the GIL): the trees of the geometry stage are
+    built side by side, and the first query waits for its tree."""
+    return _KdFuture(_kd_pool().submit(_build_points_kd, np.ascontiguousarray(p, float)))
+
+
+def _build_points_kd(p):
+    if _core is not None and hasattr(_core, "unique_points"):
+        q = _core.unique_points(p)          # the same points, sorted by bits
+    else:
+        q = _unique_points(p)
+    return cKDTree(q, balanced_tree=False, compact_nodes=False)
+
+
+_KD_POOL = []
+
+
+def _kd_pool():
+    if not _KD_POOL:
+        from concurrent.futures import ThreadPoolExecutor
+        _KD_POOL.append(ThreadPoolExecutor(max_workers=8, thread_name_prefix="cutmesh-kd"))
+    return _KD_POOL[0]
+
+
+class _KdFuture:
+    """a cKDTree being built: query() and the rest wait for it"""
+
+    def __init__(self, fut):
+        self._fut = fut
+
+    def tree(self):
+        return self._fut.result()
+
+    def query(self, *a, **k):
+        return self.tree().query(*a, **k)
+
+    def __getattr__(self, name):
+        return getattr(self.tree(), name)
 
 
 class _PosList:
@@ -1833,7 +1876,7 @@ def generate(cfg, log=print):
     ssrc, vsrc = [], []
     for r, name in enumerate(dom.names):
         if region_level[r] > 0:
-            p, _ = dom.samples(h0 / 2 ** region_level[r] / 2, regions=[r])
+            p, _ = dom.samples(h0 / 2 ** region_level[r] / 2, regions=[r], ordered=False)
             ssrc.append((_points_kd(p), int(region_level[r]), nbuf))
     if cfg.get("autoGapRefinement"):
         nacross, lag = _auto_gap_spec(cfg, sref)
@@ -1849,10 +1892,13 @@ def generate(cfg, log=print):
         # fluid thinner than `thickness` (slot tips, narrow channels): refine its walls to `level`
         lg = int(gr["level"])
         tg = float(gr["thickness"])
-        p, ti = dom.samples(h0 / 2 ** lg)
-        T_ = dom.tris[ti]
+        p, ti = dom.samples(h0 / 2 ** lg, ordered=False)       # a point set (KD-tree below)
+        # unit normals per triangle, then per sample (the same rows as computing them for
+        # every sample, without a (samples, 3, 3) array)
+        T_ = dom.tris
         nrm = np.cross(T_[:, 1] - T_[:, 0], T_[:, 2] - T_[:, 0])
         nrm /= np.maximum(np.linalg.norm(nrm, axis=1), 1e-300)[:, None]
+        nrm = nrm[ti]
         eps = 0.02 * h0 / 2 ** lg
         into = np.where(dom.inside(p - eps * nrm)[:, None], -nrm, nrm)    # towards the fluid
         thin, nun = _thin_gap(dom, p, into, tg, eps)
@@ -1877,14 +1923,14 @@ def generate(cfg, log=print):
             log(f"feature edges: {len(seg)} segments -> level {flevel}")
     for z in zones:
         if z["surfaceLevel"] > 0:
-            p, _ = z["geom"].samples(h0 / 2 ** z["surfaceLevel"] / 2)
+            p, _ = _samples_set(z["geom"], h0 / 2 ** z["surfaceLevel"] / 2)
             ssrc.append((_points_kd(p), z["surfaceLevel"], nbuf))
         wp = z["wallProximity"]
         if wp:
             # the zone surface closer than `distance` to the STL: refine to `level` there only
             # (an interface a fraction of a cell off a wall needs cells finer than the gap)
             lw = int(wp["level"])
-            p, _ = z["geom"].samples(h0 / 2 ** lw / 2)
+            p, _ = _samples_set(z["geom"], h0 / 2 ** lw / 2)
             _, d, _ = dom.closest(p)
             p = p[d < float(wp["distance"])]
             if len(p):

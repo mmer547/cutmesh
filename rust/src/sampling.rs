@@ -2,9 +2,9 @@
 //! Keep vertex IDs throughout: adjacent pieces within one input triangle share
 //! their midpoint, while coincident points from different triangles keep their IDs.
 
-use std::collections::HashMap;
-
 use rayon::prelude::*;
+
+use crate::cut::FxMap as HashMap;
 
 use crate::{V3, dist2};
 
@@ -43,41 +43,90 @@ pub(super) fn samples(tris: &[[V3; 3]], selected: &[i64], spacing: f64) -> (Vec<
     }
     let mut centroids = Vec::new();
     let mut centroid_ids = Vec::new();
-    let mut unpaired = HashMap::new();
+    let mut unpaired: HashMap<(usize, usize), usize> = HashMap::default();
     let limit = spacing * spacing;
     while !pieces.is_empty() {
-        let mut split = Vec::new();
-        let mut edges = Vec::new();
-        for piece in pieces.drain(..) {
-            let tri = piece.verts.map(|v| points[v]);
-            if let Some(k) = split_edge(tri, limit) {
-                let mut rotated = piece;
-                rotated.verts.rotate_left(k);
-                let [u, v, _] = rotated.verts;
-                edges.push((u.min(v), u.max(v), split.len()));
-                split.push(rotated);
-            } else {
-                centroids.push(centroid(tri));
-                centroid_ids.push(piece.parent);
+        // each piece: split along its longest edge (rotated to start there) or done (its
+        // centroid), in parallel; then taken in order
+        let outcome: Vec<Result<Piece, V3>> = pieces
+            .par_iter()
+            .map(|piece| {
+                let tri = piece.verts.map(|v| points[v]);
+                match split_edge(tri, limit) {
+                    Some(k) => {
+                        let mut rotated = *piece;
+                        rotated.verts.rotate_left(k);
+                        Ok(rotated)
+                    }
+                    None => Err(centroid(tri)),
+                }
+            })
+            .collect();
+        let mut split = Vec::with_capacity(outcome.len());
+        for (piece, o) in pieces.drain(..).zip(outcome) {
+            match o {
+                Ok(rotated) => split.push(rotated),
+                Err(c) => {
+                    centroids.push(c);
+                    centroid_ids.push(piece.parent);
+                }
             }
         }
+        let mut edges: Vec<(usize, usize, usize)> = split
+            .par_iter()
+            .enumerate()
+            .map(|(j, p)| {
+                let [u, v, _] = p.verts;
+                (u.min(v), u.max(v), j)
+            })
+            .collect();
         // NumPy numbers new midpoints in sorted edge order at each depth.
         edges.par_sort_unstable();
-        let mut mids = vec![0; split.len()];
-        for group in edges.chunk_by(|x, y| (x.0, x.1) == (y.0, y.1)) {
-            let (u, v, first) = group[0];
-            let id = unpaired.remove(&(u, v)).unwrap_or_else(|| {
-                let id = points.len();
-                points.push(std::array::from_fn(|i| 0.5 * (points[u][i] + points[v][i])));
-                ids.push(split[first].parent);
-                // An edge has at most two incident pieces in this triangle's subdivision.
-                if group.len() == 1 {
-                    unpaired.insert((u, v), id);
+        // the edges by key: an edge met before (unpaired) keeps its midpoint, the others
+        // get new ones in key order (looked up and made in parallel, the table updated
+        // after)
+        let starts: Vec<usize> = (0..edges.len())
+            .into_par_iter()
+            .filter(|&k| k == 0 || (edges[k].0, edges[k].1) != (edges[k - 1].0, edges[k - 1].1))
+            .collect();
+        let ng = starts.len();
+        let end = |g: usize| if g + 1 < ng { starts[g + 1] } else { edges.len() };
+        let found: Vec<Option<usize>> = starts
+            .par_iter()
+            .map(|&k| unpaired.get(&(edges[k].0, edges[k].1)).copied())
+            .collect();
+        let base = points.len();
+        let mut gid = vec![0usize; ng];
+        let mut newg: Vec<usize> = Vec::new();
+        for g in 0..ng {
+            gid[g] = match found[g] {
+                Some(id) => id,
+                None => {
+                    newg.push(g);
+                    base + newg.len() - 1
                 }
-                id
-            });
-            for &(_, _, j) in group {
-                mids[j] = id;
+            };
+        }
+        let newp: Vec<V3> = newg
+            .par_iter()
+            .map(|&g| {
+                let (u, v, _) = edges[starts[g]];
+                std::array::from_fn(|i| 0.5 * (points[u][i] + points[v][i]))
+            })
+            .collect();
+        points.extend(newp);
+        ids.extend(newg.iter().map(|&g| split[edges[starts[g]].2].parent));
+        let mut mids = vec![0; split.len()];
+        for g in 0..ng {
+            let key = (edges[starts[g]].0, edges[starts[g]].1);
+            if found[g].is_some() {
+                unpaired.remove(&key);
+            } else if end(g) - starts[g] == 1 {
+                // an edge has at most two incident pieces in this triangle's subdivision
+                unpaired.insert(key, gid[g]);
+            }
+            for &(_, _, j) in &edges[starts[g]..end(g)] {
+                mids[j] = gid[g];
             }
         }
         // All first children precede all second children in the next breadth-first step.
@@ -98,4 +147,35 @@ pub(super) fn samples(tris: &[[V3; 3]], selected: &[i64], spacing: f64) -> (Vec<
     points.append(&mut centroids);
     ids.append(&mut centroid_ids);
     (points, ids)
+}
+
+/// samples() of each triangle on its own, in parallel, joined in triangle order: the
+/// same points with the same triangle ids (a triangle's subdivision does not depend on
+/// the others), in another order (by triangle, then breadth first)
+pub(super) fn samples_by_triangle(tris: &[[V3; 3]], selected: &[i64], spacing: f64) -> (Vec<V3>, Vec<i64>) {
+    let per: Vec<(Vec<V3>, Vec<i64>)> = selected.par_iter().map(|&t| samples(tris, &[t], spacing)).collect();
+    let mut off = Vec::with_capacity(per.len() + 1);
+    off.push(0usize);
+    for (p, _) in &per {
+        off.push(off.last().unwrap() + p.len());
+    }
+    let tot = *off.last().unwrap();
+    let mut pts = vec![[0.0f64; 3]; tot];
+    let mut ids = vec![0i64; tot];
+    let mut ps: Vec<&mut [V3]> = Vec::with_capacity(per.len());
+    let mut is: Vec<&mut [i64]> = Vec::with_capacity(per.len());
+    let (mut rp, mut ri) = (&mut pts[..], &mut ids[..]);
+    for (p, _) in &per {
+        let (a, b) = std::mem::take(&mut rp).split_at_mut(p.len());
+        ps.push(a);
+        rp = b;
+        let (a, b) = std::mem::take(&mut ri).split_at_mut(p.len());
+        is.push(a);
+        ri = b;
+    }
+    per.into_par_iter().zip(ps).zip(is).for_each(|(((p, i), dp), di)| {
+        dp.copy_from_slice(&p);
+        di.copy_from_slice(&i);
+    });
+    (pts, ids)
 }
