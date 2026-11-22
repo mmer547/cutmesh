@@ -356,7 +356,9 @@ pub(crate) fn points(p: &PyReadonlyArray2<f64>) -> PyResult<Vec<V3>> {
 
 pub(crate) fn vec3_array<'py>(py: Python<'py>, v: Vec<V3>) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let n = v.len();
-    let flat: Vec<f64> = v.into_iter().flatten().collect();
+    // [f64; 3] rows are laid out as 3n floats: reinterpret, no copy
+    let mut v = std::mem::ManuallyDrop::new(v);
+    let flat: Vec<f64> = unsafe { Vec::from_raw_parts(v.as_mut_ptr() as *mut f64, 3 * n, 3 * v.capacity()) };
     flat.into_pyarray(py).reshape([n, 3])
 }
 
@@ -661,6 +663,18 @@ impl TriMesh {
             return Err(pyo3::exceptions::PyValueError::new_err("triangle id out of range"));
         }
         let (p, ids) = py.detach(|| sampling::samples(&self.t, &selected, spacing));
+        Ok((vec3_array(py, p)?, ids.into_pyarray(py)))
+    }
+
+    /// samples() triangle by triangle, in parallel: the same points and triangle ids in
+    /// another order (for callers that use the point set only)
+    fn samples_by_triangle<'py>(&self, py: Python<'py>, selected: PyReadonlyArray1<'py, i64>, spacing: f64)
+        -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<i64>>)> {
+        let selected = selected.as_array().to_vec();
+        if selected.iter().any(|&i| i < 0 || i as usize >= self.t.len()) {
+            return Err(pyo3::exceptions::PyValueError::new_err("triangle id out of range"));
+        }
+        let (p, ids) = py.detach(|| sampling::samples_by_triangle(&self.t, &selected, spacing));
         Ok((vec3_array(py, p)?, ids.into_pyarray(py)))
     }
 

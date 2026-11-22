@@ -914,6 +914,13 @@ def _nearest_in(pts, keep, q, cache=None):
     return d, gj
 
 
+def _samples_set(geom, spacing):
+    """geom.samples(spacing) for a point set only (the order does not matter)"""
+    if isinstance(geom, (Surface, SurfaceZone)):
+        return geom.samples(spacing, ordered=False)
+    return geom.samples(spacing)
+
+
 def _points_kd(p):
     """KD-tree for nearest-distance queries of the sample points p (distances only).
     Sliding-midpoint splits without shrinking the node boxes build ~2.5x faster than
@@ -1869,7 +1876,7 @@ def generate(cfg, log=print):
     ssrc, vsrc = [], []
     for r, name in enumerate(dom.names):
         if region_level[r] > 0:
-            p, _ = dom.samples(h0 / 2 ** region_level[r] / 2, regions=[r])
+            p, _ = dom.samples(h0 / 2 ** region_level[r] / 2, regions=[r], ordered=False)
             ssrc.append((_points_kd(p), int(region_level[r]), nbuf))
     if cfg.get("autoGapRefinement"):
         nacross, lag = _auto_gap_spec(cfg, sref)
@@ -1885,7 +1892,7 @@ def generate(cfg, log=print):
         # fluid thinner than `thickness` (slot tips, narrow channels): refine its walls to `level`
         lg = int(gr["level"])
         tg = float(gr["thickness"])
-        p, ti = dom.samples(h0 / 2 ** lg)
+        p, ti = dom.samples(h0 / 2 ** lg, ordered=False)       # a point set (KD-tree below)
         # unit normals per triangle, then per sample (the same rows as computing them for
         # every sample, without a (samples, 3, 3) array)
         T_ = dom.tris
@@ -1916,14 +1923,14 @@ def generate(cfg, log=print):
             log(f"feature edges: {len(seg)} segments -> level {flevel}")
     for z in zones:
         if z["surfaceLevel"] > 0:
-            p, _ = z["geom"].samples(h0 / 2 ** z["surfaceLevel"] / 2)
+            p, _ = _samples_set(z["geom"], h0 / 2 ** z["surfaceLevel"] / 2)
             ssrc.append((_points_kd(p), z["surfaceLevel"], nbuf))
         wp = z["wallProximity"]
         if wp:
             # the zone surface closer than `distance` to the STL: refine to `level` there only
             # (an interface a fraction of a cell off a wall needs cells finer than the gap)
             lw = int(wp["level"])
-            p, _ = z["geom"].samples(h0 / 2 ** lw / 2)
+            p, _ = _samples_set(z["geom"], h0 / 2 ** lw / 2)
             _, d, _ = dom.closest(p)
             p = p[d < float(wp["distance"])]
             if len(p):

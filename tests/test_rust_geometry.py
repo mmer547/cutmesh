@@ -84,6 +84,17 @@ class RustMatchesPython(unittest.TestCase):
         np.testing.assert_array_equal(k.query(q, distance_upper_bound=0.01)[0],
                                       cKDTree(b).query(q, distance_upper_bound=0.01)[0])
 
+    @unittest.skipUnless(hasattr(getattr(G._core, "TriMesh", None), "samples_by_triangle"), "Rust extension not built")
+    def test_samples_by_triangle(self):
+        # samples(ordered=False): the points and triangle ids of samples(), as a multiset
+        for spacing, regions in ((0.004, None), (0.0015, [0]), (0.01, [1])):
+            a, ia = self.dom.samples(spacing, regions)
+            b, ib = self.dom.samples(spacing, regions, ordered=False)
+            ka = np.concatenate([a.view(np.int64), ia[:, None]], 1)
+            kb = np.concatenate([b.view(np.int64), ib[:, None]], 1)
+            self.assertGreater(len(ka), 1000)
+            np.testing.assert_array_equal(ka[np.lexsort(ka.T[::-1])], kb[np.lexsort(kb.T[::-1])])
+
     def test_sdf(self):
         np.testing.assert_allclose(self.dom.sdf(self.X), self.python_surface().sdf(self.X), atol=1e-12)
 
