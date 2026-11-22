@@ -2965,10 +2965,9 @@ def generate(cfg, log=print):
                                       directed=False)
     if ncomp > 1:
         ann, avv = gather(np.concatenate([i_occ, b_occ]))
-        ffa = quality.FlatFaces((ann, avv))
-        Cf_, Sf_ = quality.face_geometry(P, ffa)
+        Cf_, Sf_ = diagnose._face_geometry(P, (ann, avv))
         _, Vc = quality.cell_geometry(nC, np.concatenate([i_own, b_own]), i_nei, Cf_, Sf_)
-        del ann, avv, ffa, Cf_, Sf_
+        del ann, avv, Cf_, Sf_
         vol = np.bincount(lab, np.abs(Vc), ncomp)
         drop = vol < cfg["minRegionVolume"] * vol.sum()
         drop[np.argmax(vol)] = False            # never the main fluid region

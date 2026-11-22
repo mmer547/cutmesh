@@ -411,7 +411,7 @@ class RustLeakCheck(unittest.TestCase):
                 self.rs = rs
 
             def __getattr__(self, k):
-                if k == "through_wall":
+                if k in ("through_wall", "through_wall_cells"):
                     raise AttributeError(k)
                 return getattr(self.rs, k)
         dom._rs = NoKernel(dom._rs)
