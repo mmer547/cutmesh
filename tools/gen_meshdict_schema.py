@@ -48,7 +48,7 @@ def stale():
     for path, text in outputs().items():
         try:
             with open(path, encoding="utf-8", newline="") as f:
-                same = f.read() == text
+                same = f.read().replace("\r\n", "\n") == text   # a CRLF checkout (autocrlf) is the same
         except FileNotFoundError:
             same = False
         if not same:

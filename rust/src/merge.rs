@@ -148,10 +148,8 @@ struct Merger<'a> {
     members: FxMap<i64, Vec<i64>>,
     bulk_members: FxMap<i64, Vec<i64>>,
     gcache: FxMap<i64, V3>,
-    // centre and area vector of a face (face_cs depends on its vertices only): of the
-    // pieces' faces computed up front, of the leaves' faces when needed
+    // centre and area vector of the pieces' faces (face_cs depends on the vertices only)
     pcs: &'a [(V3, V3)],
-    cs_cache: FxMap<usize, (V3, V3)>,
 }
 
 impl Merger<'_> {
@@ -257,14 +255,11 @@ impl Merger<'_> {
         if h < self.n_pf {
             return self.pcs[h];
         }
-        if let Some(x) = self.cs_cache.get(&h) {
-            return *x;
-        }
+        // a leaf's face: computed where needed (a leaf face belongs to one node, whose
+        // centre is cached; a hash map over millions of them costs more than it saves)
         let loc: Vec<V3> = self.poly(h).iter().map(|&v| self.pos[v as usize]).collect();
         let idx: Vec<usize> = (0..loc.len()).collect();
-        let x = face_cs(&loc, &idx);
-        self.cs_cache.insert(h, x);
-        x
+        face_cs(&loc, &idx)
     }
 
     /// poly_geom: the faces of fl that occur once, and their geometry (_core.poly_cell)
@@ -502,7 +497,6 @@ fn merge_core(
         members: FxMap::default(),
         bulk_members: FxMap::default(),
         gcache: FxMap::default(),
-        cs_cache: FxMap::default(),
     };
     let mut gvol = gvol;
     let (mut merged, mut rejected) = (0usize, 0usize);

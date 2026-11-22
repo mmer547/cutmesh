@@ -246,7 +246,7 @@ impl CutKernel {
     /// negative components
     fn results_csr<'py>(&mut self, py: Python<'py>, neg_only: bool) -> PyResult<crate::csr::CsrOut<'py>> {
         let r = self.results()?;
-        Ok(crate::csr::write_results(py, &r, neg_only))
+        Ok(crate::csr::write_results(py, r, neg_only))
     }
 
     /// use the Rust cap hook (make_feature_hook's, with these feature corners and

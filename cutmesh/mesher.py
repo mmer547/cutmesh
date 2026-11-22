@@ -1034,6 +1034,31 @@ def _argsort_stable(a):
     return np.argsort(a, kind="stable")
 
 
+def _pair_faces_py(o_key, o_cell, log):
+    """internal faces (a key held by two different cells: the lower cell's occurrence,
+    sorted by owner and neighbour) and boundary faces (a key held once) of the face
+    occurrences with a cell: (i_occ, i_own, i_nei, b_occ, b_own)"""
+    srt = np.nonzero(o_cell >= 0)[0]
+    srt = srt[_argsort_stable(o_key[srt])]
+    # runs of equal keys in the sorted order (np.unique would sort them again)
+    ks_ = o_key[srt]
+    st = np.flatnonzero(np.concatenate([[True], ks_[1:] != ks_[:-1]])) if len(ks_) else np.zeros(0, np.int64)
+    cnt = np.diff(np.concatenate([st, [len(ks_)]]))
+    del ks_
+    if (cnt > 2).any():
+        log(f"WARNING: {int((cnt > 2).sum())} faces shared by more than two cells")
+    two = st[cnt == 2]
+    a1, a2 = srt[two], srt[two + 1]
+    c1, c2 = o_cell[a1], o_cell[a2]
+    keep = c1 != c2
+    a1, a2, c1, c2 = a1[keep], a2[keep], c1[keep], c2[keep]
+    i_occ = np.where(c1 < c2, a1, a2)
+    i_own = np.minimum(c1, c2); i_nei = np.maximum(c1, c2)
+    o = np.lexsort((i_nei, i_own))
+    b_occ = srt[st[cnt == 1]]
+    return i_occ[o], i_own[o], i_nei[o], b_occ, o_cell[b_occ]
+
+
 def _rust_merge_ok():
     return _core is not None and hasattr(_core, "merge_cells_csr")
 
@@ -2652,13 +2677,16 @@ def generate(cfg, log=print):
     py_cell = np.repeat(np.arange(nP, dtype=np.int64), np.diff(pieces.fptr))
     occ = _FaceOcc(py_key, py_cell)       # face id -> pieces holding it, in piece order
     vol = np.zeros(nP)
-    farea = {}
     p_n = np.zeros(0, np.int64); p_verts = np.zeros(0, np.int64)
-    if nP:
+    if nP and _core is not None and hasattr(_core, "piece_geometry"):
+        # the same arithmetic per piece, in parallel (faceops.rs)
+        p_n, p_verts = np.diff(pieces.vptr), pieces.verts
+        vol, bad_piece = _core.piece_geometry(np.ascontiguousarray(P, float), pieces.fptr, pieces.vptr, pieces.verts,
+                                              np.ascontiguousarray(csize[pieces.leaf], float))
+    elif nP:
         ffp = quality.FlatFaces((np.diff(pieces.vptr), pieces.verts))
         p_n, p_verts = ffp.n, ffp.v
         Cf, Sf = quality.face_geometry(P, ffp)
-        ref = np.zeros((nP, 3)); ref[py_cell] = Cf
         cnt_ = np.bincount(py_cell, minlength=nP)
         # np.add.at column by column (bincount adds in the same index order)
         est = np.stack([np.bincount(py_cell, Cf[:, k], nP) for k in range(3)], 1) if nP else np.zeros((0, 3))
@@ -2674,8 +2702,7 @@ def generate(cfg, log=print):
         selfpyr = np.einsum("ij,ij->i", Sf, Cf - cc[py_cell])
         badf = selfpyr < 0.05 * np.linalg.norm(Sf, axis=1) * hp[py_cell]
         bad_piece = np.bincount(py_cell, badf.astype(int), nP) > 0
-        farea = dict(zip(py_key.tolist(), np.linalg.norm(Sf, axis=1).tolist()))
-        del ffp, Cf, Sf, ref, est, pv, cc, selfpyr, badf
+        del ffp, Cf, Sf, est, pv, cc, selfpyr, badf
     else:
         bad_piece = np.zeros(0, bool)
     hexvol = cvol[pieces.leaf].astype(float)
@@ -2713,13 +2740,17 @@ def generate(cfg, log=print):
         return fl
 
     # bulk cells on either side of an original octree face key
-    kb1 = np.full(M_nkeys, -1, np.int64); kb2 = np.full(M_nkeys, -1, np.int64)
-    kk = f_key[bsel]; kc = f_cell[bsel]
-    o_ = _argsort_stable(kk); kk = kk[o_]; kc = kc[o_]
-    first = np.ones(len(kk), bool); first[1:] = kk[1:] != kk[:-1]
-    kb1[kk[first]] = kc[first]
-    kb2[kk[~first]] = kc[~first]
-    del kk, kc, o_, first
+    if _core is not None and hasattr(_core, "first_two"):
+        kb1, kb2 = _core.first_two(np.ascontiguousarray(f_key[bsel], np.int64),
+                                   np.ascontiguousarray(f_cell[bsel], np.int64), int(M_nkeys))
+    else:
+        kb1 = np.full(M_nkeys, -1, np.int64); kb2 = np.full(M_nkeys, -1, np.int64)
+        kk = f_key[bsel]; kc = f_cell[bsel]
+        o_ = _argsort_stable(kk); kk = kk[o_]; kc = kc[o_]
+        first = np.ones(len(kk), bool); first[1:] = kk[1:] != kk[:-1]
+        kb1[kk[first]] = kc[first]
+        kb2[kk[~first]] = kc[~first]
+        del kk, kc, o_, first
 
     def face_neighbour(fid, me_set):
         """node on the other side of face fid (or -1 for boundary)"""
@@ -2853,9 +2884,10 @@ def generate(cfg, log=print):
     # the STL (no dent in the wall).
     removed = np.zeros(nP, bool)
     tet_cand = []
-    for r in np.nonzero(proot == np.arange(nP))[0].tolist():
-        if gvol[r] >= beta * hexvol[r] and not bad_piece[r]:
-            continue
+    roots = np.nonzero(proot == np.arange(nP))[0]
+    # the large convex cells are fine: only the others are looked at
+    roots = roots[~((gvol[roots] >= beta * hexvol[roots]) & ~np.asarray(bad_piece, bool)[roots])]
+    for r in roots.tolist():
         keep_, cf_, sf_, V_, cc_ = poly_geom(node_faces(r))
         if V_ > 0 and _tets_ok(P, keep_, cf_, cc_, 1e-3 * V_):
             continue
@@ -2909,26 +2941,14 @@ def generate(cfg, log=print):
     o_cell = np.concatenate([leaf_cid[f_cell[bsel]], piece_cid[py_cell]])
     o_key = np.concatenate([f_key[bsel], py_key])
     del b_verts, p_verts
-    srt = np.nonzero(o_cell >= 0)[0]
-    srt = srt[_argsort_stable(o_key[srt])]
-    # runs of equal keys in the sorted order (np.unique would sort them again)
-    ks_ = o_key[srt]
-    st = np.flatnonzero(np.concatenate([[True], ks_[1:] != ks_[:-1]])) if len(ks_) else np.zeros(0, np.int64)
-    cnt = np.diff(np.concatenate([st, [len(ks_)]]))
-    del ks_
-    if (cnt > 2).any():
-        log(f"WARNING: {int((cnt > 2).sum())} faces shared by more than two cells")
-    two = st[cnt == 2]
-    a1, a2 = srt[two], srt[two + 1]
-    c1, c2 = o_cell[a1], o_cell[a2]
-    keep = c1 != c2
-    a1, a2, c1, c2 = a1[keep], a2[keep], c1[keep], c2[keep]
-    i_occ = np.where(c1 < c2, a1, a2)
-    i_own = np.minimum(c1, c2); i_nei = np.maximum(c1, c2)
-    o = np.lexsort((i_nei, i_own))
-    i_occ, i_own, i_nei = i_occ[o], i_own[o], i_nei[o]
-    b_occ = srt[st[cnt == 1]]
-    b_own = o_cell[b_occ]
+    if _core is not None and hasattr(_core, "pair_faces"):
+        # the same pairing and order in Rust (sortutil.rs)
+        i_occ, i_own, i_nei, b_occ, b_own, n_multi = _core.pair_faces(
+            np.ascontiguousarray(o_key, np.int64), np.ascontiguousarray(o_cell, np.int64))
+        if n_multi:
+            log(f"WARNING: {n_multi} faces shared by more than two cells")
+    else:
+        i_occ, i_own, i_nei, b_occ, b_own = _pair_faces_py(o_key, o_cell, log)
     T("assembly and small-cell merging")
 
     def gather(occs):
@@ -2945,10 +2965,9 @@ def generate(cfg, log=print):
                                       directed=False)
     if ncomp > 1:
         ann, avv = gather(np.concatenate([i_occ, b_occ]))
-        ffa = quality.FlatFaces((ann, avv))
-        Cf_, Sf_ = quality.face_geometry(P, ffa)
+        Cf_, Sf_ = diagnose._face_geometry(P, (ann, avv))
         _, Vc = quality.cell_geometry(nC, np.concatenate([i_own, b_own]), i_nei, Cf_, Sf_)
-        del ann, avv, ffa, Cf_, Sf_
+        del ann, avv, Cf_, Sf_
         vol = np.bincount(lab, np.abs(Vc), ncomp)
         drop = vol < cfg["minRegionVolume"] * vol.sum()
         drop[np.argmax(vol)] = False            # never the main fluid region

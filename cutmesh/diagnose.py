@@ -11,6 +11,17 @@ python -m cutmesh.diagnose meshDict.json [CASE]   (CASE default: the meshDict's 
 import numpy as np
 
 from . import quality
+from .geometry import _core
+
+
+def _face_geometry(points, faces):
+    """quality.face_geometry of faces given as FlatFaces or (sizes, vertices), without
+    building a FlatFaces (its per-vertex arrays) when the Rust extension is there"""
+    if _core is not None and isinstance(faces, tuple):
+        return _core.face_geometry(np.ascontiguousarray(points, float), np.ascontiguousarray(faces[0], np.int64),
+                                   np.ascontiguousarray(faces[1], np.int64))
+    ff = faces if isinstance(faces, quality.FlatFaces) else quality.FlatFaces(faces)
+    return quality.face_geometry(points, ff)
 
 
 def through_wall(dom, points, faces, owner, neighbour, samples=16, cos_opposite=-0.5):
@@ -18,13 +29,20 @@ def through_wall(dom, points, faces, owner, neighbour, samples=16, cos_opposite=
     nI = len(neighbour)
     if getattr(dom, "_rs", None) is None and dom._kd is None:
         dom.build_search(0.01 * dom.L)          # Python closest-point search (no Rust)
-    ff = faces if isinstance(faces, quality.FlatFaces) else quality.FlatFaces(faces)
-    Cf, Sf = quality.face_geometry(points, ff)
+    Cf, Sf = _face_geometry(points, faces)
     nC = int(max(owner.max(), neighbour.max() if nI else 0)) + 1
     C, _ = quality.cell_geometry(nC, owner, neighbour, Cf, Sf)
     T = dom.tris
     tn = np.cross(T[:, 1] - T[:, 0], T[:, 2] - T[:, 0])
     tn /= np.maximum(np.linalg.norm(tn, axis=1), 1e-300)[:, None]
+    if getattr(dom, "_rs", None) is not None and hasattr(dom._rs, "through_wall_cells"):
+        # the lines built, filtered and sampled in Rust (the same lines, in the same order)
+        _, dC, _ = dom.closest(C)
+        free = np.where(dom.inside(C), dC - dom.inside_shift - 1e-9 * dom.L, -np.inf)
+        return dom._rs.through_wall_cells(np.ascontiguousarray(C, float), np.ascontiguousarray(Cf, float),
+                                          np.ascontiguousarray(owner, np.int64), np.ascontiguousarray(neighbour, np.int64),
+                                          np.ascontiguousarray(free, float), np.ascontiguousarray(tn, float),
+                                          int(samples), float(cos_opposite))
     cells = np.concatenate([owner, neighbour])
     fcs = np.concatenate([np.arange(len(owner)), np.arange(nI)])
     A, B = C[cells], Cf[fcs]

@@ -352,7 +352,7 @@ class RustCutKernel(unittest.TestCase):
             def __getattr__(self, k):
                 if k in ("merge_wall_faces", "contact_candidates", "surface_contact_samples",
                          "split_samples", "cut_batch_csr", "face_sign_counts", "vertex_min",
-                         "leaf_any", "leaf_vertices", "finer_face_neighbour", "leaf_min", "leaf_mean", "feature_hook",
+                         "leaf_any", "leaf_vertices", "finer_face_neighbour", "leaf_min", "leaf_mean", "feature_hook", "piece_geometry", "pair_faces", "first_two",
                          "PlaneClipRs"):
                     raise AttributeError(k)
                 return getattr(real, k)
@@ -411,7 +411,7 @@ class RustLeakCheck(unittest.TestCase):
                 self.rs = rs
 
             def __getattr__(self, k):
-                if k == "through_wall":
+                if k in ("through_wall", "through_wall_cells"):
                     raise AttributeError(k)
                 return getattr(self.rs, k)
         dom._rs = NoKernel(dom._rs)
@@ -551,6 +551,62 @@ class RustFaceOps(unittest.TestCase):
             ref = np.full(nv + 3, np.inf)                  # vertices in no face stay inf
             np.minimum.at(ref, fverts, np.repeat(val, fn))
             np.testing.assert_array_equal(geometry._core.vertex_min(nv + 3, fptr, fverts, val), ref)
+
+    def test_piece_geometry(self):
+        # volumes and "bad" flags of pieces as the NumPy code of the merging stage
+        rng = np.random.default_rng(21)
+        P = rng.normal(size=(400, 3))
+        pieces = []
+        for _ in range(300):
+            nf = int(rng.integers(1, 8))
+            pieces.append([list(rng.choice(400, int(rng.integers(3, 7)), replace=False)) for _ in range(nf)])
+        fptr = np.concatenate([[0], np.cumsum([len(p) for p in pieces])]).astype(np.int64)
+        vn = np.array([len(f) for p in pieces for f in p], np.int64)
+        vptr = np.concatenate([[0], np.cumsum(vn)]).astype(np.int64)
+        verts = np.array([v for p in pieces for f in p for v in f], np.int64)
+        hp = rng.uniform(0.1, 2.0, len(pieces))
+        nP = len(pieces)
+        py_cell = np.repeat(np.arange(nP), np.diff(fptr))
+        Cf, Sf = quality.face_geometry(P, quality.FlatFaces((vn, verts)))
+        cnt = np.bincount(py_cell, minlength=nP)
+        est = np.stack([np.bincount(py_cell, Cf[:, k], nP) for k in range(3)], 1) / np.maximum(cnt, 1)[:, None]
+        pv = np.einsum("ij,ij->i", Sf, Cf - est[py_cell])
+        vol = np.bincount(py_cell, pv, nP) / 3.0
+        w = pv[:, None] * (0.75 * Cf + 0.25 * est[py_cell])
+        cc = np.stack([np.bincount(py_cell, w[:, k], nP) for k in range(3)], 1)
+        cc /= np.where(np.abs(vol) > 0, 3.0 * vol, 1.0)[:, None]
+        selfpyr = np.einsum("ij,ij->i", Sf, Cf - cc[py_cell])
+        bad = np.bincount(py_cell, (selfpyr < 0.05 * np.linalg.norm(Sf, axis=1) * hp[py_cell]).astype(int), nP) > 0
+        v2, b2 = geometry._core.piece_geometry(P, fptr, vptr, verts, hp)
+        np.testing.assert_array_equal(v2, vol)
+        np.testing.assert_array_equal(b2, bad)
+        self.assertTrue(bad.any() and not bad.all())
+
+    def test_pair_faces(self):
+        rng = np.random.default_rng(22)
+        for n, nkey in ((0, 1), (50, 30), (20000, 9000)):
+            key = rng.integers(0, nkey, n).astype(np.int64)
+            cell = rng.integers(-1, n // 3 + 2, n).astype(np.int64)
+            logs = []
+            ref = mesher._pair_faces_py(key, cell, logs.append)
+            got = geometry._core.pair_faces(key, cell)
+            for a, b in zip(ref, got[:5]):
+                np.testing.assert_array_equal(a, b)
+            self.assertEqual(bool(logs), got[5] > 0)
+
+    def test_first_two(self):
+        rng = np.random.default_rng(23)
+        for n, m in ((5, 0), (50, 200), (3000, 9000)):
+            kk0 = rng.integers(0, n, m).astype(np.int64)
+            kc0 = rng.integers(0, 10 ** 6, m).astype(np.int64)
+            kb1 = np.full(n, -1, np.int64); kb2 = np.full(n, -1, np.int64)
+            o_ = np.argsort(kk0, kind="stable"); kk = kk0[o_]; kc = kc0[o_]
+            first = np.ones(len(kk), bool); first[1:] = kk[1:] != kk[:-1]
+            kb1[kk[first]] = kc[first]
+            kb2[kk[~first]] = kc[~first]
+            a, b = geometry._core.first_two(kk0, kc0, n)
+            np.testing.assert_array_equal(a, kb1)
+            np.testing.assert_array_equal(b, kb2)
 
     def test_leaf_any_and_vertices(self):
         for seed in range(5):

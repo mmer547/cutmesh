@@ -267,8 +267,8 @@ fn zero_runs<A: Alloc>(al: &A, fid: i64, poly: &[i64], cls: &mut [bool]) {
 struct Cutter<'a> {
     pos: &'a mut Vec<V3>,
     phi: &'a mut Vec<f64>,
-    cache: HashMap<(i64, i64), i64>,
-    subids: HashMap<(i64, Vec<i64>), i64>,
+    cache: FxMap<(i64, i64), i64>,
+    subids: FxMap<(i64, Vec<i64>), i64>,
     next_id: i64,
     new_parents: Vec<(i64, i64)>,
     zero_edge: &'a HashMap<(i64, i64, i64), i64>,
@@ -559,7 +559,7 @@ pub fn cut_batch_csr<'py>(
 ) -> PyResult<(crate::csr::CsrOut<'py>, Bound<'py, PyArray2<f64>>, Vec<(i64, i64)>, i64)> {
     let cells = crate::csr::read_cells(&fptr, &key, &vptr, &verts)?;
     let (res, newp, parents, nid) = cut_cells_par(py, &points, &phi, next_face_id, cells, shared_cap, &zero_edge)?;
-    Ok((crate::csr::write_results(py, &res, false), vec3_array(py, newp)?, parents, nid))
+    Ok((crate::csr::write_results(py, res, false), vec3_array(py, newp)?, parents, nid))
 }
 
 #[allow(clippy::type_complexity)]
@@ -585,8 +585,8 @@ fn cut_cells(
         let mut ct = Cutter {
             pos: &mut pos,
             phi: &mut ph,
-            cache: HashMap::new(),
-            subids: HashMap::new(),
+            cache: FxMap::default(),
+            subids: FxMap::default(),
             next_id: next_face_id,
             new_parents: Vec::new(),
             zero_edge,
@@ -648,13 +648,19 @@ fn cut_cells_par(
         let mut ct = Cutter {
             pos: &mut pos,
             phi: &mut ph,
-            cache: HashMap::new(),
-            subids: HashMap::new(),
+            cache: FxMap::default(),
+            subids: FxMap::default(),
             next_id: next_face_id,
             new_parents: Vec::new(),
             zero_edge,
         };
-        let mut res: Vec<CellResult> = Vec::with_capacity(sym.len());
+        // room for every crossing and sub-face the cells ask for (no rehashing)
+        let (nv, ns) = sym.iter().fold((0usize, 0usize), |(a, b), (_, ev)| {
+            (a + ev.iter().filter(|e| matches!(e, Ev::Vertex(..))).count(), b + ev.iter().filter(|e| matches!(e, Ev::Sub(..))).count())
+        });
+        ct.cache.reserve(nv);
+        ct.subids.reserve(ns);
+        let mut ids: Vec<(CellResult, Vec<i64>, Vec<i64>)> = Vec::with_capacity(sym.len());
         for ((negc, posc), events) in sym {
             let mut vmap: Vec<i64> = Vec::new();
             let mut fmap: Vec<i64> = Vec::new();
@@ -680,21 +686,28 @@ fn cut_cells_par(
                     Ev::New => fmap.push(ct.new_face_id()),
                 }
             }
-            let map_comps = |comps: Vec<Vec<Face>>| -> Vec<Vec<Face>> {
-                comps
-                    .into_iter()
-                    .map(|comp| {
-                        comp.into_iter()
-                            .map(|(f, p)| {
-                                let f = if f < 0 { fmap[(-f - 1) as usize] } else { f };
-                                (f, p.into_iter().map(|v| real_v(v, &vmap)).collect())
-                            })
-                            .collect()
-                    })
-                    .collect()
-            };
-            res.push((map_comps(negc), map_comps(posc)));
+            ids.push(((negc, posc), vmap, fmap));
         }
+        let res: Vec<CellResult> = ids
+            .into_par_iter()
+            .map(|((negc, posc), vmap, fmap)| {
+                let real_v = |v: i64| if v < 0 { vmap[(-v - 1) as usize] } else { v };
+                let map_comps = |comps: Vec<Vec<Face>>| -> Vec<Vec<Face>> {
+                    comps
+                        .into_iter()
+                        .map(|comp| {
+                            comp.into_iter()
+                                .map(|(f, p)| {
+                                    let f = if f < 0 { fmap[(-f - 1) as usize] } else { f };
+                                    (f, p.into_iter().map(real_v).collect())
+                                })
+                                .collect()
+                        })
+                        .collect()
+                };
+                (map_comps(negc), map_comps(posc))
+            })
+            .collect();
         let parents = std::mem::take(&mut ct.new_parents);
         (res, parents, ct.next_id)
     });

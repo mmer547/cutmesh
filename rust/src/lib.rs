@@ -358,6 +358,21 @@ impl TriMesh {
         out
     }
 
+    /// diagnose.through_wall's test of one line a -> b: its samples outside, the closest
+    /// triangles at the first and the last of them, opposite normals -> the midpoint
+    fn wall_line(&self, a: V3, b: V3, ts: &[f64], nrm: &[V3], cos_opposite: f64) -> Option<V3> {
+        let samples = ts.len();
+        let d = sub(b, a);
+        let q = |t: f64| [a[0] + t * d[0], a[1] + t * d[1], a[2] + t * d[2]];
+        let first = ts.iter().position(|&t| !self.inside_one(q(t)))?;
+        let last = (first..samples).rev().find(|&k| !self.inside_one(q(ts[k]))).unwrap_or(first);
+        let t1 = self.closest_one(q(ts[first])).2;
+        let t2 = self.closest_one(q(ts[last])).2;
+        let (n1, n2) = (nrm[t1], nrm[t2]);
+        let c = (n1[0] * n2[0] + n1[2] * n2[2]) + n1[1] * n2[1]; // np.einsum order
+        if c < cos_opposite { Some([0.5 * (a[0] + b[0]), 0.5 * (a[1] + b[1]), 0.5 * (a[2] + b[2])]) } else { None }
+    }
+
     /// signed distance of one point (negative inside), as sdf()
     pub(crate) fn sdf_one(&self, q: V3) -> f64 {
         let d = self.closest_one(q).0.sqrt();
@@ -683,6 +698,47 @@ impl TriMesh {
     }
 
     /// through_wall(a[n, 3], b[n, 3], tn[ntri, 3], samples, cos_opposite) -> (hits, mids[k, 3]):
+    /// through_wall for the lines from each cell centre to its faces' centres (owner
+    /// faces first, then neighbour faces), without the lines whose length stays below
+    /// the cell's free distance (as diagnose.through_wall filters them)
+    #[allow(clippy::too_many_arguments)]
+    fn through_wall_cells<'py>(
+        &self,
+        py: Python<'py>,
+        c: PyReadonlyArray2<'py, f64>,
+        cf: PyReadonlyArray2<'py, f64>,
+        owner: PyReadonlyArray1<'py, i64>,
+        neighbour: PyReadonlyArray1<'py, i64>,
+        free: PyReadonlyArray1<'py, f64>,
+        tn: PyReadonlyArray2<'py, f64>,
+        samples: usize,
+        cos_opposite: f64,
+    ) -> PyResult<(usize, Bound<'py, PyArray2<f64>>)> {
+        let (cc, ff, nrm) = (points(&c)?, points(&cf)?, points(&tn)?);
+        let (ow, nb, fr) = (owner.as_slice()?, neighbour.as_slice()?, free.as_slice()?);
+        if nrm.len() != self.t.len() || samples == 0 || ow.len() != ff.len() || nb.len() > ow.len() || fr.len() != cc.len()
+            || ow.iter().chain(nb.iter()).any(|&x| x < 0 || x as usize >= cc.len())
+        {
+            return Err(pyo3::exceptions::PyValueError::new_err("inconsistent line data"));
+        }
+        let ts: Vec<f64> = (0..samples).map(|k| (k as f64 + 0.5) / samples as f64).collect();
+        let tl = ts[samples - 1];
+        let res: Vec<Option<V3>> = py.detach(|| {
+            (0..ow.len() + nb.len())
+                .into_par_iter()
+                .filter_map(|i| {
+                    let (cell, f) = if i < ow.len() { (ow[i] as usize, i) } else { (nb[i - ow.len()] as usize, i - ow.len()) };
+                    let (a, b) = (cc[cell], ff[f]);
+                    let d = sub(b, a);
+                    let ln = ((d[0] * d[0] + d[1] * d[1]) + d[2] * d[2]).sqrt() * tl;
+                    if ln >= fr[cell] { Some(self.wall_line(a, b, &ts, &nrm, cos_opposite)) } else { None }
+                })
+                .collect()
+        });
+        let mids: Vec<V3> = res.into_iter().flatten().collect();
+        Ok((mids.len(), vec3_array(py, mids)?))
+    }
+
     /// the sampling of diagnose.through_wall for each line a -> b on its own: the samples
     /// outside, the closest triangles at the first and the last of them, and whether
     /// their normals are opposite
@@ -703,24 +759,7 @@ impl TriMesh {
         }
         let ts: Vec<f64> = (0..samples).map(|k| (k as f64 + 0.5) / samples as f64).collect();
         let res: Vec<Option<V3>> = py.detach(|| {
-            pa.par_iter()
-                .zip(pb.par_iter())
-                .map(|(&a, &b)| {
-                    let d = sub(b, a);
-                    let q = |t: f64| [a[0] + t * d[0], a[1] + t * d[1], a[2] + t * d[2]];
-                    let first = ts.iter().position(|&t| !self.inside_one(q(t)))?;
-                    let last = (first..samples).rev().find(|&k| !self.inside_one(q(ts[k]))).unwrap_or(first);
-                    let t1 = self.closest_one(q(ts[first])).2;
-                    let t2 = self.closest_one(q(ts[last])).2;
-                    let (n1, n2) = (nrm[t1], nrm[t2]);
-                    let c = (n1[0] * n2[0] + n1[2] * n2[2]) + n1[1] * n2[1];     // np.einsum order
-                    if c < cos_opposite {
-                        Some([0.5 * (a[0] + b[0]), 0.5 * (a[1] + b[1]), 0.5 * (a[2] + b[2])])
-                    } else {
-                        None
-                    }
-                })
-                .collect()
+            pa.par_iter().zip(pb.par_iter()).map(|(&a, &b)| self.wall_line(a, b, &ts, &nrm, cos_opposite)).collect()
         });
         let mids: Vec<V3> = res.into_iter().flatten().collect();
         Ok((mids.len(), vec3_array(py, mids)?))
@@ -1113,12 +1152,15 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(contact::surface_contact_samples, m)?)?;
     m.add_function(wrap_pyfunction!(contact::split_samples, m)?)?;
     m.add_function(wrap_pyfunction!(sortutil::argsort_stable, m)?)?;
+    m.add_function(wrap_pyfunction!(sortutil::pair_faces, m)?)?;
+    m.add_function(wrap_pyfunction!(sortutil::first_two, m)?)?;
     m.add_function(wrap_pyfunction!(faceops::face_sign_counts, m)?)?;
     m.add_function(wrap_pyfunction!(faceops::vertex_min, m)?)?;
     m.add_function(wrap_pyfunction!(faceops::leaf_any, m)?)?;
     m.add_function(wrap_pyfunction!(faceops::leaf_vertices, m)?)?;
     m.add_function(wrap_pyfunction!(faceops::leaf_min, m)?)?;
     m.add_function(wrap_pyfunction!(faceops::leaf_mean, m)?)?;
+    m.add_function(wrap_pyfunction!(faceops::piece_geometry, m)?)?;
     m.add_function(wrap_pyfunction!(fhook::feature_hook_py, m)?)?;
     Ok(())
 }

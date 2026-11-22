@@ -49,28 +49,54 @@ pub(crate) type CsrOut<'py> = (
 /// components of a cell are listed negative first, then positive, cells in order
 pub(crate) fn write_results<'py>(
     py: Python<'py>,
-    res: &[(Vec<Vec<Face>>, Vec<Vec<Face>>)],
+    res: Vec<(Vec<Vec<Face>>, Vec<Vec<Face>>)>,
     neg_only: bool,
 ) -> CsrOut<'py> {
+    // per cell: its components flattened (in parallel), then joined with offsets
+    struct Block {
+        side: Vec<i64>,
+        fcnt: Vec<i64>,
+        key: Vec<i64>,
+        vcnt: Vec<i64>,
+        verts: Vec<i64>,
+    }
+    // consumed in parallel: the many small vectors are freed by the workers too
+    let blocks: Vec<Block> = py.detach(|| {
+        res.into_par_iter()
+            .map(|(negc, posc)| {
+                let mut b = Block { side: Vec::new(), fcnt: Vec::new(), key: Vec::new(), vcnt: Vec::new(), verts: Vec::new() };
+                let sides: [(&Vec<Vec<Face>>, i64); 2] = [(&negc, 0), (&posc, 1)];
+                for (comps, s) in sides {
+                    if s == 1 && neg_only {
+                        continue;
+                    }
+                    for comp in comps {
+                        b.side.push(s);
+                        b.fcnt.push(comp.len() as i64);
+                        for (fid, p) in comp {
+                            b.key.push(*fid);
+                            b.vcnt.push(p.len() as i64);
+                            b.verts.extend_from_slice(p);
+                        }
+                    }
+                }
+                b
+            })
+            .collect()
+    });
     let (mut item, mut side, mut fptr, mut key, mut vptr, mut verts) =
         (Vec::new(), Vec::new(), vec![0i64], Vec::new(), vec![0i64], Vec::new());
-    for (k, (negc, posc)) in res.iter().enumerate() {
-        let sides: [(&Vec<Vec<Face>>, i64); 2] = [(negc, 0), (posc, 1)];
-        for (comps, s) in sides {
-            if s == 1 && neg_only {
-                continue;
-            }
-            for comp in comps {
-                item.push(k as i64);
-                side.push(s);
-                for (fid, p) in comp {
-                    key.push(*fid);
-                    verts.extend_from_slice(p);
-                    vptr.push(verts.len() as i64);
-                }
-                fptr.push(key.len() as i64);
-            }
+    for (k, b) in blocks.into_iter().enumerate() {
+        for (s, fc) in b.side.into_iter().zip(b.fcnt) {
+            item.push(k as i64);
+            side.push(s);
+            fptr.push(fptr.last().unwrap() + fc);
         }
+        for vc in b.vcnt {
+            vptr.push(vptr.last().unwrap() + vc);
+        }
+        key.extend(b.key);
+        verts.extend(b.verts);
     }
     (
         item.into_pyarray(py),
