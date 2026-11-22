@@ -643,6 +643,22 @@ class RustFaceOps(unittest.TestCase):
             np.minimum.at(ref, fverts, np.repeat(val, fn))
             np.testing.assert_array_equal(geometry._core.vertex_min(nv + 3, fptr, fverts, val), ref)
 
+    @unittest.skipUnless(hasattr(geometry._core, "take_ranges"), "Rust extension not built")
+    def test_take_ranges(self):
+        # the assembly's face vertices: src[ranges] one after the other, then a tail
+        rng = np.random.default_rng(9)
+        for _ in range(20):
+            src = rng.integers(0, 10 ** 6, int(rng.integers(1, 5000)))
+            n = int(rng.integers(0, 3000))
+            lo = rng.integers(0, len(src), n)
+            hi = np.minimum(lo + rng.integers(0, 9, n), len(src))
+            tail = rng.integers(0, 99, int(rng.integers(0, 50)))
+            ref = np.concatenate([src[mesher._cat_ranges(lo, hi)], tail])
+            np.testing.assert_array_equal(geometry._core.take_ranges(src, lo, hi, tail), ref)
+            np.testing.assert_array_equal(geometry._core.take_ranges(src, lo, hi), src[mesher._cat_ranges(lo, hi)])
+        with self.assertRaises(ValueError):
+            geometry._core.take_ranges(src, np.array([0]), np.array([len(src) + 1]))
+
     @unittest.skipUnless(hasattr(geometry._core, "nearest_kept"), "Rust extension not built")
     def test_nearest_kept(self):
         # mesher._nearest_in through the grid search: the KD-tree's distances bit for bit

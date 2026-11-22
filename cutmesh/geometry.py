@@ -610,6 +610,13 @@ class Surface:
         o = np.lexsort((I, Tt, S))
         return S[o].astype(np.int64), Tt[o], I[o].astype(np.int64)
 
+    def release_search(self):
+        """Let the Rust centroid index (approx_below) go to save memory; approx_below
+        builds it again if it is asked afterwards (the same index)."""
+        if self._centroid_search is not None:
+            self._centroid_search = None
+            self._search_released = True
+
     def approx_distance(self, p, upper=np.inf):
         d, _ = self._kd.query(p, distance_upper_bound=upper, workers=-1)
         return d
@@ -619,6 +626,8 @@ class Surface:
         The Rust index can stop at the first such centroid."""
         p = np.atleast_2d(p)
         thr = np.broadcast_to(np.asarray(thr, float), (len(p),))
+        if self._centroid_search is None and getattr(self, "_search_released", False):
+            self.build_search(self._kd_spacing)         # released: build it again
         if self._centroid_search is not None and self._rs is not None:
             return self._centroid_search.below(np.ascontiguousarray(p, float), thr)
         if self._rs is None or len(p) == 0:

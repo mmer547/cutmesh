@@ -111,6 +111,19 @@ class RustMatchesPython(unittest.TestCase):
         np.testing.assert_allclose(self.dom.sdf(self.X), self.python_surface().sdf(self.X), atol=1e-12)
 
     @unittest.skipUnless(hasattr(getattr(G._core, "TriMesh", None), "centroid_search"), "Rust centroid index not built")
+    def test_release_search(self):
+        # the centroid index let go after the snapping (memory) is built again if asked
+        d = G.Surface(G.read_stl(STL))
+        d.build_search(0.002)
+        pts = self.X[::7]
+        thr = np.full(len(pts), 0.004)
+        before = d.approx_below(pts, thr)
+        d.release_search()
+        self.assertIsNone(d._centroid_search)
+        np.testing.assert_array_equal(d.approx_below(pts, thr), before)
+        self.assertIsNotNone(d._centroid_search)
+
+    @unittest.skipUnless(hasattr(getattr(G._core, "TriMesh", None), "centroid_search"), "Rust centroid index not built")
     def test_centroid_thresholds(self):
         ref = self.python_surface()
         pts = self.X[::11]

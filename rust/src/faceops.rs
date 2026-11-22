@@ -284,3 +284,56 @@ pub fn piece_geometry<'py>(
     let (vol, bad): (Vec<f64>, Vec<bool>) = r.into_iter().unzip();
     Ok((vol.into_pyarray(py), bad.into_pyarray(py)))
 }
+
+/// take_ranges(src, lo, hi, tail=None) -> concatenate([src[lo[i]:hi[i]] for i] + [tail]):
+/// the ranges of src one after the other (written in parallel), then tail, without the
+/// index arrays of np.repeat / np.arange
+#[pyfunction]
+#[pyo3(signature = (src, lo, hi, tail=None))]
+pub fn take_ranges<'py>(
+    py: Python<'py>,
+    src: PyReadonlyArray1<'py, i64>,
+    lo: PyReadonlyArray1<'py, i64>,
+    hi: PyReadonlyArray1<'py, i64>,
+    tail: Option<PyReadonlyArray1<'py, i64>>,
+) -> PyResult<Bound<'py, PyArray1<i64>>> {
+    let (s, a, b) = (src.as_slice()?, lo.as_slice()?, hi.as_slice()?);
+    let t: &[i64] = match &tail {
+        Some(x) => x.as_slice()?,
+        None => &[],
+    };
+    if a.len() != b.len() || a.par_iter().zip(b.par_iter()).any(|(&l, &h)| l < 0 || h < l || h as usize > s.len()) {
+        return Err(pyo3::exceptions::PyValueError::new_err("ranges out of src"));
+    }
+    let mut off = Vec::with_capacity(a.len() + 1);
+    off.push(0usize);
+    for (&l, &h) in a.iter().zip(b) {
+        off.push(off.last().unwrap() + (h - l) as usize);
+    }
+    let n = *off.last().unwrap();
+    let mut out = vec![0i64; n + t.len()];
+    py.detach(|| {
+        let (head, rest) = out.split_at_mut(n);
+        rest.copy_from_slice(t);
+        // chunks of ranges, each written to its own part of head
+        const CH: usize = 4096;
+        let nch = a.len().div_ceil(CH);
+        let mut parts: Vec<&mut [i64]> = Vec::with_capacity(nch);
+        let mut r: &mut [i64] = head;
+        for c in 0..nch {
+            let len = off[((c + 1) * CH).min(a.len())] - off[c * CH];
+            let (x, y) = std::mem::take(&mut r).split_at_mut(len);
+            parts.push(x);
+            r = y;
+        }
+        parts.into_par_iter().enumerate().for_each(|(c, part)| {
+            let mut k = 0;
+            for i in c * CH..((c + 1) * CH).min(a.len()) {
+                let m = (b[i] - a[i]) as usize;
+                part[k..k + m].copy_from_slice(&s[a[i] as usize..b[i] as usize]);
+                k += m;
+            }
+        });
+    });
+    Ok(out.into_pyarray(py))
+}

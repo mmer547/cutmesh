@@ -175,11 +175,11 @@ python -m cutmesh.layers case meshDict_layers.json -out case_layers_later
 <p class="cmd-label">実行コマンド</p>
 <pre><code>cd examples/stirred_tank
 python make_geometry.py --stator 1          # tank_stator_1mm.stl を生成（--stator の後は隙間の幅 [mm]）
-cutmesh meshDict_stator_1mm.json            # → case_stator_1mm/（約 60 万セル、約 10 秒、メモリ 約 2.5 GB）
+cutmesh meshDict_stator_1mm.json            # → case_stator_1mm/（約 60 万セル、約 10 秒、メモリ 約 1.1 GB）
 python -m cutmesh.diagnose meshDict_stator_1mm.json case_stator_1mm   # 隙間で壁越しにつながっていないか</code></pre>
 <p class="cmd-label">隙間 0.5 mm の場合</p>
 <pre><code>python make_geometry.py --stator 0.5        # tank_stator_0.5mm.stl
-cutmesh meshDict_stator.json                # 約 200 万セル（約 30 秒、メモリ 約 8 GB）</code></pre>
+cutmesh meshDict_stator.json                # 約 200 万セル（約 30 秒、メモリ 約 3.5 GB）</code></pre>
 <figure class="vfig">
   <a class="img only-plain" href="images/stator_gap.png"><img src="images/stator_gap.png" alt="翼と固定リングの水平断面、翼の先端の 2 mm 角の拡大、翼の上端の角の鉛直断面" loading="lazy"></a>
     <a class="img only-layers" href="images/stator_gap_layers.png"><img src="images/stator_gap_layers.png" alt="翼と固定リングの水平断面、翼の先端の 2 mm 角の拡大、翼の上端の角の鉛直断面（境界層あり）" loading="lazy"></a>
@@ -187,7 +187,7 @@ cutmesh meshDict_stator.json                # 約 200 万セル（約 30 秒、�
 </figure>
 <div class="note">
   <p><strong>隙間が狭いほどセル数が急に増えます。</strong>界面と壁の間（隙間の半分）に 1 セル以上入れるため、隙間の半分程度のセルが界面の全周に並びます。
-  この形状では、隙間 1 mm で約 60 万セル、隙間 0.5 mm で約 200 万セル（メモリ約 8 GB）になります。
+  この形状では、隙間 1 mm で約 60 万セル、隙間 0.5 mm で約 200 万セル（メモリ約 3.5 GB）になります。
   MRF で計算するなら、<code>"conforming": false</code>（セル中心で回転ゾーンを選ぶ）にすれば界面のための細分化が要りません（AMI には使えません）。</p>
 </div>
 <details>

@@ -73,7 +73,7 @@ python run.py                         # 断面図も欲しい場合 → slice_z.
 | `meshDict_cylindrical.json` | 円筒ベースメッシュ |
 | `meshDict_layers.json` | 境界層（3層、全壁） |
 | `meshDict_stator_1mm.json` | ローター・ステーター: 翼の外側 1 mm に固定リング（`python make_geometry.py --stator 1` で `tank_stator_1mm.stl` を生成）、回転ゾーンの界面は隙間の中央。約 60 万セル・約 10 秒 |
-| `meshDict_stator.json` | 同、隙間 0.5 mm（`--stator 0.5`）。最小セル 0.195 mm が界面の全周に並ぶので約 200 万セル（約 30 秒、メモリ約 8 GB） |
+| `meshDict_stator.json` | 同、隙間 0.5 mm（`--stator 0.5`）。最小セル 0.195 mm が界面の全周に並ぶので約 200 万セル（約 30 秒、メモリ約 3.5 GB） |
 
 `rotatingZones` を消せば、同じ形状で回転ゾーンのないメッシュになります。
 
@@ -335,7 +335,7 @@ python -m unittest discover -s tests  # Rust と Python の結果の一致を確
 | 同、境界層あり（`meshDict_layers.json`） | 148 s | 2.8 s |
 | 同、隙間 1 mm（`meshDict_stator_1mm.json`、約 60 万セル） | 2080 s（約 35 分） | 9.0 s |
 
-16 コアのマシン、v0.5.0（2026-11-22）、品質チェックを含む。約 850 万セルの実形状では約 100 秒（メモリ約 30 GB）。
+16 コアのマシン、v0.5.0（2026-11-22）、品質チェックを含む。約 850 万セルの実形状では約 95 秒（メモリ約 13 GB、v0.5.1）。
 
 ### 書き出し形式（`writeFormat`）
 
@@ -500,7 +500,7 @@ REPAIR: domain STL: removed 20 zero-area triangles, 50 duplicated triangles (one
   八分木セルが壊れる所は取り消され、そこだけ最大0.3×最小セル程度のくぼみが残る
 - 統合相手が見つからない小セルはそのまま残る（最小体積が小さくなる）
 - Rust 拡張がないと（Python/NumPy の処理）大幅に遅い（攪拌槽の例で約 100 倍）
-- メモリは 100 万セルあたり約 4 GB 使う。狭い隙間の中に回転ゾーンの界面を置くと、セル数とメモリが急に増える（`meshDict_stator.json` は約 200 万セル・約 8 GB）
+- メモリは 100 万セルあたり約 1.5〜2 GB 使う。狭い隙間の中に回転ゾーンの界面を置くと、セル数とメモリが急に増える（`meshDict_stator.json` は約 200 万セル・約 3.5 GB）
 
 ## ロードマップ
 

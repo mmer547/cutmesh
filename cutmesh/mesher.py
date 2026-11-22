@@ -2035,6 +2035,7 @@ def generate(cfg, log=print):
         if n_tc:
             log(f"thin cut cells at level transitions: split {nsplit}")
     T(f"octree ({len(oc.lev)} leaves)")
+    ssrc = vsrc = None                  # done with them (memory: the samples' KD-trees)
     M = oc.build_cells()
     nleaf = len(M["cell_size"])
     leaves_total = nleaf
@@ -2059,6 +2060,7 @@ def generate(cfg, log=print):
         np.maximum.at(vh_max, fverts[m_], fc_[m_])
     del cvid, M
     T(f"polyhedral cells ({len(pts)} points)")
+    oc = M = cvid = None                # the octree's leaves and the cell build: done
 
     def leaf_faces(ci):
         a, b = int(cptr[ci]), int(cptr[ci + 1])
@@ -2440,6 +2442,10 @@ def generate(cfg, log=print):
     del pts0, phi_d0
     del vh_min, vh_max, near, movable, tol_v, tol_f, tol_f2, tol_cc
     T("level sets and vertex snapping")
+    # done with the hanging-node data and the snap limits; the STL's centroid index
+    # (approx_below) is not needed after the snapping (rebuilt if it ever is)
+    hp2 = hang_par = hang_size = hanging = hp_ = lim = snapped = None
+    dom.release_search()
 
     # ------------------------------------------------------------ pass 1: domain cut
     # Uncut leaves stay in flat arrays ("bulk"); only cut cells become python pieces.
@@ -2739,6 +2745,11 @@ def generate(cfg, log=print):
     on_dom[len(phi_d):] = True
     n_orig = len(phi_d)
     T("domain cut")
+    k12 = zc = vh_ = phi_d = pts = None   # done with them (memory)
+    # the closures that hold the cut context (its Rust caches) and the plane clip's faces
+    alloc = pre = take_clipped = hook = st = hk = ccv = feat_closest = cells_of_face = None
+    kpieces = items = cl = splits = split_keep = split_ids = clip = mixed = special = None
+    cnd = mphi = signs_d = cls = cut_leaves = cb = c_sc = c_cs = f_sc = on_feat_d = zone_feats = None
 
     # ------------------------------------------------------------ pass 2..: zone cuts
     for zi, z in enumerate(zones):
@@ -2820,6 +2831,8 @@ def generate(cfg, log=print):
         log(f"zone '{z['name']}': {nc} cut cells, total {int(bulk_alive.sum()) + len(pieces)}"
             + (f", {zsh} cells follow the rims ({zfb} fell back to chamfers)" if zh else ""))
         T(f"zone cut '{z['name']}'")
+
+    phi_z = pz = pc = par = phi = None   # the zone cuts are done (memory)
 
     # ------------------------------------------------------------ distorted uncut cells
     # uncut leaves whose corners were snapped can become non-convex: hand them to the
@@ -3098,17 +3111,32 @@ def generate(cfg, log=print):
     cell_zone[leaf_cid[alive]] = bulk_zone[alive]
     cell_zone[piece_cid[rp]] = pieces.zone[rp]
 
+    # the merging's tables are done with (memory: the assembly below is the peak)
+    occ = key2bulk = kb1 = kb2 = csize = cvol = leaf_vptr = leaf_vptr_full = moved_any = None
+    on_dom = bulk_alive = bulk_zone = node_leaf = rp = proot = gvol = hexvol = ratio = None
+    small = removed = ids = order = alive = bad_piece = zone_of = parent = members = None
+    bulk_members = cptr = p = None
+
     # ------------------------------------------------------------ assembly (all numpy)
     bn = fn[bsel]
-    b_off = np.repeat(fptr[bsel] - np.concatenate([[0], np.cumsum(bn)[:-1]]), bn)
-    b_verts = fverts[np.arange(int(bn.sum())) + b_off]
     pn = p_n                                  # the pieces' faces, flattened above
     o_n = np.concatenate([bn, pn])
     o_ptr = np.concatenate([[0], np.cumsum(o_n)])
-    o_verts = np.concatenate([b_verts, p_verts])
+    if _core is not None and hasattr(_core, "take_ranges"):
+        # the bulk faces' vertices, then the pieces': one array (no index arrays)
+        o_verts = _core.take_ranges(np.ascontiguousarray(fverts, np.int64), np.ascontiguousarray(fptr[bsel], np.int64),
+                                    np.ascontiguousarray(fptr[bsel + 1], np.int64), np.ascontiguousarray(p_verts, np.int64))
+    else:
+        b_off = np.repeat(fptr[bsel] - np.concatenate([[0], np.cumsum(bn)[:-1]]), bn)
+        b_verts = fverts[np.arange(int(bn.sum())) + b_off]
+        o_verts = np.concatenate([b_verts, p_verts])
+        del b_off, b_verts
     o_cell = np.concatenate([leaf_cid[f_cell[bsel]], piece_cid[py_cell]])
     o_key = np.concatenate([f_key[bsel], py_key])
-    del b_verts, p_verts
+    del p_verts
+    # the octree's faces and the cut pieces are in o_* now
+    fverts = fptr = fn = f_key = f_cell = pieces = bsel = bn = pn = p_n = None
+    leaf_cid = piece_cid = py_key = py_cell = None
     if _core is not None and hasattr(_core, "pair_faces"):
         # the same pairing and order in Rust (sortutil.rs)
         i_occ, i_own, i_nei, b_occ, b_own, n_multi = _core.pair_faces(
@@ -3117,6 +3145,7 @@ def generate(cfg, log=print):
             log(f"WARNING: {n_multi} faces shared by more than two cells")
     else:
         i_occ, i_own, i_nei, b_occ, b_own = _pair_faces_py(o_key, o_cell, log)
+    o_key = o_cell = None
     T("assembly and small-cell merging")
 
     def gather(occs):
@@ -3193,6 +3222,7 @@ def generate(cfg, log=print):
     neighbour = i_nei
     nn_, vv = gather(all_occ)
     del o_verts
+    o_ptr = o_n = all_occ = i_occ = b_occ = b_own = b_order = reg = vol = bC = tid = dd = None
     if cfg["mergeWallFaces"]:
         nn_, vv, owner, patches, nj = merge_coplanar_wall_faces(P, nn_, vv, owner, len(neighbour), patches)
         log(f"wall faces: {nj} coplanar pieces joined to their neighbour in the same cell")
@@ -3224,6 +3254,7 @@ def generate(cfg, log=print):
     remap = np.cumsum(used) - 1
     Pout = P[used]
     faces = (nn_, remap[vv])
+    P = used = remap = vv = None        # the uncompacted points: done (memory)
     T("patches, zones, renumbering")
     if cfg["checkLeaks"]:
         # fluid joined through a solid wall (thinner than the cells there) breaks the
