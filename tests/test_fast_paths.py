@@ -368,6 +368,54 @@ class RustCutKernel(unittest.TestCase):
         self.assertEqual(len(fa), len(fb))
         self.assertTrue(all(list(x) == list(y) for x, y in zip(fa, fb)))
 
+    def test_context_after_kernel(self):
+        # the cut context after the Rust kernel holds what the Python cut leaves there:
+        # caches (looked up in Rust), points, level set, parents, face ids
+        from test_exact_cut import turned_cube
+        got = {"rs": [], "py": []}
+        orig = mesher.cut_with_fallback
+
+        def capture(tag):
+            def f(ctx, *a, **k):
+                r = orig(ctx, *a, **k)
+                got[tag].append(ctx)
+                return r
+            return f
+        with tempfile.TemporaryDirectory() as d:
+            turned_cube(os.path.join(d, "cube.stl"))
+            p = os.path.join(d, "m.json")
+            with open(p, "w") as f:
+                json.dump({"domain": "cube.stl", "baseCellSize": 0.15, "featureLevel": 1,
+                           "surfaceRefinement": {"default": 1}}, f)
+            with mock.patch.object(mesher, "cut_with_fallback", capture("rs")):
+                mesher.generate(mesher.load_config(p), log=lambda s: None)
+            with mock.patch.object(mesher, "cut_with_fallback", capture("py")), \
+                    mock.patch.object(mesher, "_rust_cut_ok", lambda ctx, hk: False):
+                mesher.generate(mesher.load_config(p), log=lambda s: None)
+        self.assertTrue(got["rs"] and len(got["rs"]) == len(got["py"]))
+        for cr, cp in zip(got["rs"], got["py"]):
+            self.assertIsInstance(cr.chord_cache, mesher._LazyMap)
+            for name in ("cache", "subids", "chord_cache", "pinch_cache"):
+                dp, dr = getattr(cp, name), getattr(cr, name)
+                if name != "pinch_cache":
+                    self.assertGreater(len(dp), 0, name)
+                for k, v in dp.items():
+                    self.assertIn(k, dr)
+                    self.assertEqual(dr[k], v, (name, k))
+                missing = {"cache": (-5, -4), "subids": (-5, (-4, -3))}.get(name, (-5, -4, -3))
+                self.assertNotIn(missing, dr)
+            self.assertIsNone(cr.chord_cache.get((-5, -4, -3)))
+            self.assertEqual(cr.next_id, cp.next_id)
+            self.assertEqual(len(cr.pos), len(cp.pos))
+            np.testing.assert_array_equal(cr.pos.array(), cp.pos.array())
+            np.testing.assert_array_equal(cr.phi.array(), np.asarray(cp.phi[:len(cp.phi)], float))
+            np.testing.assert_array_equal(mesher._parents_array(cr.new_parents), mesher._parents_array(cp.new_parents))
+            self.assertEqual(list(cr.new_vertices), list(cp.new_vertices))
+            self.assertEqual(set(cr.onfeat), set(cp.onfeat))
+            v = len(cr.pos) - 1
+            self.assertEqual((cr.pos[v], cr.phi[v], cr.new_parents[len(cr.new_parents) - 1]),
+                             (cp.pos[v], cp.phi[v], cp.new_parents[len(cp.new_parents) - 1]))
+
     def test_turned_cube(self):
         # convex feature edges: chord points, split caps, the exact feature cut
         from test_exact_cut import turned_cube

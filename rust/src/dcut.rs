@@ -197,10 +197,17 @@ impl CutKernel {
         self.set_items(items)
     }
 
-    /// the crossing cache and the sub-face ids, moved out of the kernel (instead of
-    /// export()ing them into Python dicts): looked up when Python asks
+    /// the crossing cache, the sub-face ids and the chord / pinch caches, moved out of
+    /// the kernel (instead of export()ing them into Python dicts): looked up when Python
+    /// asks.  The chord / pinch cache changes are not exported after this.
     fn take_caches(&mut self) -> CutCaches {
-        CutCaches { cache: std::mem::take(&mut self.cache), subids: std::mem::take(&mut self.subids) }
+        self.cache_log.clear();
+        CutCaches {
+            cache: std::mem::take(&mut self.cache),
+            subids: std::mem::take(&mut self.subids),
+            chord: std::mem::take(&mut self.chord_cache),
+            pinch: std::mem::take(&mut self.pinch_cache),
+        }
     }
 
     /// export() without the new cache entries and sub-face ids (take_caches() has them)
@@ -1608,6 +1615,8 @@ impl CutKernel {
 pub struct CutCaches {
     cache: HashMap<(i64, i64), i64>,
     subids: HashMap<(i64, Vec<i64>), i64>,
+    chord: HashMap<Key3, Option<i64>>,
+    pinch: HashMap<Key3, Option<i64>>,
 }
 
 #[pymethods]
@@ -1618,5 +1627,14 @@ impl CutCaches {
 
     fn subid_get(&self, key: (i64, Vec<i64>)) -> Option<i64> {
         self.subids.get(&key).copied()
+    }
+
+    /// (key cached, its point or None)
+    fn chord_get(&self, key: Key3) -> (bool, Option<i64>) {
+        self.chord.get(&key).map_or((false, None), |&v| (true, v))
+    }
+
+    fn pinch_get(&self, key: Key3) -> (bool, Option<i64>) {
+        self.pinch.get(&key).map_or((false, None), |&v| (true, v))
     }
 }

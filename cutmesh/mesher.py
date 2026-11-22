@@ -1056,6 +1056,17 @@ class _LazyMap:
         self.d.update(other)
 
 
+class _LazyOptMap(_LazyMap):
+    """_LazyMap whose values may be None (the chord / pinch caches): the lookup says
+    whether it has the key, (found, value)"""
+
+    def get(self, k, default=None):
+        if k in self.d:
+            return self.d[k]
+        found, v = self.lookup(k)
+        return v if found else default
+
+
 class _FaceOcc:
     """{face id: [pieces holding it]} (pieces in order, a piece once per face it has)
     looked up in the sorted face ids instead of a dict built over every face"""
@@ -1183,11 +1194,16 @@ def _cut_with_fallback_rs(ctx, items, shared_cap, hk, csize, P0, max_iter=4, lea
     nsharp = sum(1 for ch_, did in used if ch_ or did)
     res = K.results_csr(not shared_cap) if leaf_csr is not None else K.results()
     if hasattr(K, "take_caches"):
-        # the crossing cache and sub-face ids stay in Rust, looked up when asked for
-        newp, newv, newpar, nid, clog, nf = K.export_lazy()
+        # the crossing cache, sub-face ids and chord / pinch caches stay in Rust, looked
+        # up when asked for (taken first: no log of the chord / pinch changes then)
         caches = K.take_caches()
+        newp, newv, newpar, nid, clog, nf = K.export_lazy()
         ctx.cache = _LazyMap(ctx.cache, caches.cache_get)
         ctx.subids = _LazyMap(ctx.subids, lambda k: caches.subid_get((k[0], list(k[1]))))
+        if hasattr(caches, "chord_get"):
+            # the kernel's maps started from these dicts and have every entry since
+            ctx.chord_cache = _LazyOptMap({}, caches.chord_get)
+            ctx.pinch_cache = _LazyOptMap({}, caches.pinch_get)
     else:
         newp, newv, newpar, nid, cd, sd, clog, nf = K.export()
         ctx.cache.update(cd)
