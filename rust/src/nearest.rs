@@ -102,42 +102,64 @@ pub fn nearest_kept<'py>(
         let members: Vec<usize> = cp.into_iter().map(|e| e.1).collect();
         q.par_iter()
             .map(|&x| {
-                let qc = cell_of(x);
-                // rings beyond this one hold no cell of the grid
+                // the query's cell (clamped far outside, so that ring numbers stay small)
+                let mut qc = cell_of(x);
+                for k in 0..3 {
+                    qc[k] = qc[k].clamp(-1 - 2 * g[k], 3 * g[k]);
+                }
+                // rings before rmin meet no cell of the grid, rings after rmax neither
+                let rmin = (0..3).map(|k| (-qc[k]).max(qc[k] - (g[k] - 1)).max(0)).max().unwrap();
                 let rmax = (0..3).map(|k| (qc[k]).max(g[k] - 1 - qc[k]).max(0)).max().unwrap();
+                // a point in a cell of ring r is at least (r - 1) s away, and at least as
+                // far as the query from the grid's box
+                let dbox: f64 = (0..3)
+                    .map(|k| {
+                        let e = (lo[k] - x[k]).max(x[k] - (lo[k] + g[k] as f64 * s)).max(0.0);
+                        e * e
+                    })
+                    .sum::<f64>()
+                    .sqrt();
                 let (mut b1, mut j1, mut b2) = (f64::INFINITY, usize::MAX, f64::INFINITY);
-                let mut r = 0i64;
+                let mut r = rmin;
                 loop {
                     let rng = |k: usize| ((qc[k] - r).max(0), (qc[k] + r).min(g[k] - 1));
                     let (r0, r1, r2) = (rng(0), rng(1), rng(2));
+                    let mut visit = |a: i64, b: i64, c: i64| {
+                        let ci = lin([a, b, c]);
+                        for &i in &members[start[ci]..start[ci + 1]] {
+                            let d = sqdist(x, p[i]);
+                            if d < b1 || (d == b1 && i < j1) {
+                                if d < b1 {
+                                    b2 = b1;
+                                } else {
+                                    b2 = d;
+                                }
+                                b1 = d;
+                                j1 = i;
+                            } else if d < b2 {
+                                b2 = d;
+                            }
+                        }
+                    };
+                    // the cells at Chebyshev distance r only (the shell of the ring)
                     for a in r0.0..=r0.1 {
                         for b in r1.0..=r1.1 {
-                            for c in r2.0..=r2.1 {
-                                let cheb = (a - qc[0]).abs().max((b - qc[1]).abs()).max((c - qc[2]).abs());
-                                if cheb != r {
-                                    continue; // inner rings are done
+                            if (a - qc[0]).abs() == r || (b - qc[1]).abs() == r {
+                                for c in r2.0..=r2.1 {
+                                    visit(a, b, c);
                                 }
-                                let ci = lin([a, b, c]);
-                                for &i in &members[start[ci]..start[ci + 1]] {
-                                    let d = sqdist(x, p[i]);
-                                    if d < b1 || (d == b1 && i < j1) {
-                                        if d < b1 {
-                                            b2 = b1;
-                                        } else {
-                                            b2 = d;
-                                        }
-                                        b1 = d;
-                                        j1 = i;
-                                    } else if d < b2 {
-                                        b2 = d;
+                            } else {
+                                for c in [qc[2] - r, qc[2] + r] {
+                                    if c >= r2.0 && c <= r2.1 && (r > 0 || c == qc[2] - r) {
+                                        visit(a, b, c);
                                     }
                                 }
                             }
                         }
                     }
-                    // a point in a ring after r is at least r * s away (with a margin
-                    // for the rounding of the computed distances)
-                    let lb = (r as f64 * s) * (1.0 - 1e-9);
+                    // a point in a ring after r is at least max(r s, distance to the box)
+                    // away (with a margin for the rounding of the computed distances)
+                    let lb = (r as f64 * s).max(dbox) * (1.0 - 1e-9);
                     if (lb > 0.0 && lb * lb > b2) || r >= rmax {
                         break;
                     }

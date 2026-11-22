@@ -209,6 +209,8 @@ class RustOctree(unittest.TestCase):
             ref_lev = np.concatenate([oc.lev[~mask], np.repeat(oc.lev[mask] + 1, 8)])
             ijk, lev = geometry._core.octree_split(oc.ijk, oc.lev, mask)
             np.testing.assert_array_equal(ijk, ref_ijk)
+            np.testing.assert_array_equal(geometry._core.octree_split(np.asfortranarray(oc.ijk), oc.lev, mask)[0],
+                                          ref_ijk)
             np.testing.assert_array_equal(lev, ref_lev)
             self.assertEqual((ijk.dtype, lev.dtype), (np.int64, np.int64))
             oc.split(mask)
@@ -230,6 +232,9 @@ class RustOctree(unittest.TestCase):
             np.testing.assert_array_equal(oc.centers(idx), ref[idx])
             m = rng.random(len(oc.lev)) < 0.3
             np.testing.assert_array_equal(oc.centers(m), ref[m])
+            # a Fortran-ordered ijk is read by rows too
+            np.testing.assert_array_equal(geometry._core.octree_centers(np.asfortranarray(oc.ijk), oc.lev, None,
+                                                                        [float(v) for v in oc.x0], oc.h0), ref)
         with self.assertRaises(ValueError):
             geometry._core.octree_centers(oc.ijk, oc.lev, np.array([len(oc.lev)]), [0.0, 0.0, 0.0], 1.0)
 
@@ -664,9 +669,20 @@ class RustFaceOps(unittest.TestCase):
             _, _, u = geometry._core.nearest_kept(P, keep, q)
             ties += int((~u).sum())
         self.assertGreater(ties, 0)
-        P = rng.random((10, 3))
+        # queries far from a tiny cluster (the search starts at the grid), Fortran order
+        P = np.array([[0.0, 0.0, 0.0], [1e-9, 0.0, 0.0]])
+        q = np.array([[1.0, 0.0, 0.0], [-5e3, 2e3, 7.0]])
+        d, j = mesher._nearest_in(P, np.ones(2, bool), q)
+        dr, jr = cKDTree(P).query(q)
+        np.testing.assert_array_equal(d, dr)
+        np.testing.assert_array_equal(j, jr)
+        P, q = rng.random((500, 3)), rng.normal(size=(40, 3)) * 20
+        a = geometry._core.nearest_kept(P, np.ones(500, bool), q)
+        b = geometry._core.nearest_kept(np.asfortranarray(P), np.ones(500, bool), np.asfortranarray(q))
+        for x, y in zip(a, b):
+            np.testing.assert_array_equal(x, y)
         with self.assertRaises(ValueError):
-            geometry._core.nearest_kept(P, np.zeros(10, bool), P)
+            geometry._core.nearest_kept(P, np.zeros(500, bool), P)
 
     @unittest.skipUnless(hasattr(geometry._core, "pieces_volume_bad"), "Rust extension not built")
     def test_pieces_volume_bad(self):

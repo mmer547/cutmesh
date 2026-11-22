@@ -310,8 +310,9 @@ pub(crate) fn points(p: &PyReadonlyArray2<f64>) -> PyResult<Vec<V3>> {
     if a.ncols() != 3 {
         return Err(pyo3::exceptions::PyValueError::new_err("points must have shape (n, 3)"));
     }
-    if let Ok(flat) = p.as_slice() {
-        return Ok(flat.as_chunks::<3>().0.to_vec()); // C-contiguous: one copy
+    if numpy::PyUntypedArrayMethods::is_c_contiguous(&**p) {
+        // rows of three in memory order: one copy (a Fortran-ordered array is not)
+        return Ok(p.as_slice()?.as_chunks::<3>().0.to_vec());
     }
     Ok(a.outer_iter().map(|r| [r[0], r[1], r[2]]).collect())
 }

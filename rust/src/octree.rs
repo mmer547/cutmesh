@@ -429,6 +429,18 @@ fn tree_of(ijk: &[I3], lev: &[u32], n: I3, lmax: u32, periodic: [bool; 3]) -> Tr
     Tree { keys, idx, start, ..t0 }
 }
 
+/// the rows of an (n, 3) array: borrowed when C-contiguous, else copied row by row
+fn rows_i3<'a>(a: &'a PyReadonlyArray2<i64>) -> PyResult<std::borrow::Cow<'a, [I3]>> {
+    let v = a.as_array();
+    if v.ncols() != 3 {
+        return Err(pyo3::exceptions::PyValueError::new_err("ijk must be (n, 3)"));
+    }
+    if numpy::PyUntypedArrayMethods::is_c_contiguous(&**a) {
+        return Ok(std::borrow::Cow::Borrowed(a.as_slice()?.as_chunks::<3>().0));
+    }
+    Ok(std::borrow::Cow::Owned(v.outer_iter().map(|r| [r[0], r[1], r[2]]).collect()))
+}
+
 /// the leaves' (ijk, level) of the (n, 3) and (n,) arrays (validated)
 fn leaves_in(ijk: &PyReadonlyArray2<i64>, lev: &PyReadonlyArray1<i64>, lmax: u32) -> PyResult<(Vec<I3>, Vec<u32>)> {
     let a = ijk.as_array();
@@ -436,10 +448,7 @@ fn leaves_in(ijk: &PyReadonlyArray2<i64>, lev: &PyReadonlyArray1<i64>, lmax: u32
     if a.nrows() != lv.len() || a.ncols() != 3 {
         return Err(pyo3::exceptions::PyValueError::new_err("ijk must be (n, 3) like lev"));
     }
-    let q: Vec<I3> = match ijk.as_slice() {
-        Ok(flat) => flat.as_chunks::<3>().0.to_vec(),
-        Err(_) => (0..lv.len()).map(|i| [a[[i, 0]], a[[i, 1]], a[[i, 2]]]).collect(),
-    };
+    let q: Vec<I3> = rows_i3(ijk)?.into_owned();
     let l: Vec<u32> = match lev.as_slice() {
         Ok(v) => v.par_iter().map(|&x| x as u32).collect(),
         Err(_) => lv.iter().map(|&x| x as u32).collect(),
@@ -511,11 +520,11 @@ pub fn octree_centers<'py>(
     x0: [f64; 3],
     h0: f64,
 ) -> PyResult<Bound<'py, numpy::PyArray2<f64>>> {
-    let (q, lv) = (ijk.as_slice()?, lev.as_slice()?);
-    if q.len() != 3 * lv.len() {
+    let (q, lv) = (rows_i3(&ijk)?, lev.as_slice()?);
+    if q.len() != lv.len() {
         return Err(pyo3::exceptions::PyValueError::new_err("ijk must be (n, 3) like lev"));
     }
-    let q: &[I3] = q.as_chunks::<3>().0;
+    let q: &[I3] = &q;
     let ids: Option<&[i64]> = match &idx {
         Some(a) => Some(a.as_slice()?),
         None => None,
@@ -549,11 +558,11 @@ pub fn octree_split<'py>(
     lev: PyReadonlyArray1<'py, i64>,
     mask: PyReadonlyArray1<'py, bool>,
 ) -> PyResult<(Bound<'py, PyArray2<i64>>, Bound<'py, PyArray1<i64>>)> {
-    let (q, lv, m) = (ijk.as_slice()?, lev.as_slice()?, mask.as_slice()?);
-    if q.len() != 3 * lv.len() || m.len() != lv.len() {
+    let (q, lv, m) = (rows_i3(&ijk)?, lev.as_slice()?, mask.as_slice()?);
+    if q.len() != lv.len() || m.len() != lv.len() {
         return Err(pyo3::exceptions::PyValueError::new_err("ijk must be (n, 3) like lev and mask"));
     }
-    let q: &[I3] = q.as_chunks::<3>().0;
+    let q: &[I3] = &q;
     let (flat, l) = py.detach(|| {
         let n = lv.len();
         let (mut flat, mut l) = compact(n, &|i| !m[i], &|i| q[i], &|i| lv[i]);
