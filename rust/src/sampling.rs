@@ -14,6 +14,20 @@ struct Piece {
     parent: i64,
 }
 
+/// NumPy argmax takes the first longest edge. A NaN makes the size test false.
+pub(super) fn split_edge([a, b, c]: [V3; 3], limit: f64) -> Option<usize> {
+    let lengths = [dist2(a, b), dist2(b, c), dist2(c, a)];
+    let mut k = usize::from(lengths[1] > lengths[0]);
+    if lengths[2] > lengths[k] {
+        k = 2;
+    }
+    (lengths[k] > limit && !lengths.iter().any(|d| d.is_nan())).then_some(k)
+}
+
+pub(super) fn centroid([a, b, c]: [V3; 3]) -> V3 {
+    std::array::from_fn(|i| ((a[i] + b[i]) + c[i]) / 3.0)
+}
+
 pub(super) fn samples(tris: &[[V3; 3]], selected: &[i64], spacing: f64) -> (Vec<V3>, Vec<i64>) {
     let mut points = Vec::with_capacity(3 * selected.len());
     let mut ids = Vec::with_capacity(3 * selected.len());
@@ -35,23 +49,15 @@ pub(super) fn samples(tris: &[[V3; 3]], selected: &[i64], spacing: f64) -> (Vec<
         let mut split = Vec::new();
         let mut edges = Vec::new();
         for piece in pieces.drain(..) {
-            let [a, b, c] = piece.verts.map(|v| points[v]);
-            let lengths = [dist2(a, b), dist2(b, c), dist2(c, a)];
-            // argmax picks the first longest edge. A NaN makes NumPy's size test false.
-            let mut k = usize::from(lengths[1] > lengths[0]);
-            if lengths[2] > lengths[k] {
-                k = 2;
-            }
-            if lengths[k] > limit && !lengths.iter().any(|d| d.is_nan()) {
+            let tri = piece.verts.map(|v| points[v]);
+            if let Some(k) = split_edge(tri, limit) {
                 let mut rotated = piece;
                 rotated.verts.rotate_left(k);
                 let [u, v, _] = rotated.verts;
                 edges.push((u.min(v), u.max(v), split.len()));
                 split.push(rotated);
             } else {
-                centroids.push(std::array::from_fn::<_, 3, _>(|i| {
-                    ((a[i] + b[i]) + c[i]) / 3.0
-                }));
+                centroids.push(centroid(tri));
                 centroid_ids.push(piece.parent);
             }
         }
