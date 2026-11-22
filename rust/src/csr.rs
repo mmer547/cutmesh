@@ -84,20 +84,31 @@ pub(crate) fn write_results<'py>(
             })
             .collect()
     });
-    let (mut item, mut side, mut fptr, mut key, mut vptr, mut verts) =
-        (Vec::new(), Vec::new(), vec![0i64], Vec::new(), vec![0i64], Vec::new());
-    for (k, b) in blocks.into_iter().enumerate() {
-        for (s, fc) in b.side.into_iter().zip(b.fcnt) {
-            item.push(k as i64);
-            side.push(s);
-            fptr.push(fptr.last().unwrap() + fc);
+    // joined in parallel (ordered collects), the offsets as running sums
+    let ptr = |cnt: Vec<i64>| -> Vec<i64> {
+        let mut p = Vec::with_capacity(cnt.len() + 1);
+        p.push(0i64);
+        let mut t = 0i64;
+        for c in cnt {
+            t += c;
+            p.push(t);
         }
-        for vc in b.vcnt {
-            vptr.push(vptr.last().unwrap() + vc);
-        }
-        key.extend(b.key);
-        verts.extend(b.verts);
-    }
+        p
+    };
+    let (item, side, fptr, key, vptr, verts) = py.detach(|| {
+        let item: Vec<i64> = blocks
+            .par_iter()
+            .enumerate()
+            .flat_map_iter(|(k, b)| std::iter::repeat_n(k as i64, b.side.len()))
+            .collect();
+        let side: Vec<i64> = blocks.par_iter().flat_map_iter(|b| b.side.iter().copied()).collect();
+        let fptr = ptr(blocks.par_iter().flat_map_iter(|b| b.fcnt.iter().copied()).collect());
+        let key: Vec<i64> = blocks.par_iter().flat_map_iter(|b| b.key.iter().copied()).collect();
+        let vptr = ptr(blocks.par_iter().flat_map_iter(|b| b.vcnt.iter().copied()).collect());
+        let verts: Vec<i64> = blocks.par_iter().flat_map_iter(|b| b.verts.iter().copied()).collect();
+        blocks.into_par_iter().for_each(drop);
+        (item, side, fptr, key, vptr, verts)
+    });
     (
         item.into_pyarray(py),
         side.into_pyarray(py),

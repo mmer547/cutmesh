@@ -31,7 +31,7 @@ pub struct CutKernel {
     cache: HashMap<(i64, i64), i64>,
     new_cache: Vec<((i64, i64), i64)>,
     subids: HashMap<(i64, Vec<i64>), i64>,
-    new_subids: Vec<((i64, Vec<i64>), i64)>,
+    sub_mark: i64, // sub-face ids from here on are new since the last export
     next_id: i64,
     new_vertices: Vec<i64>,
     new_parents: Vec<(i64, i64)>,
@@ -51,7 +51,6 @@ pub struct CutKernel {
     pinch_min_area: f64,
     shared_cap: bool,
     items: Vec<(Vec<Face>, i64)>,
-    face_items: Option<HashMap<i64, Vec<usize>>>,
     res: Vec<Option<CellRes>>,
     // state of the current cut
     used_chords: Vec<Key3>,
@@ -111,7 +110,7 @@ impl CutKernel {
             cache,
             new_cache: Vec::new(),
             subids,
-            new_subids: Vec::new(),
+            sub_mark: next_id,
             next_id,
             new_vertices: Vec::new(),
             new_parents: Vec::new(),
@@ -131,7 +130,6 @@ impl CutKernel {
             pinch_min_area,
             shared_cap,
             items: Vec::new(),
-            face_items: None,
             res: Vec::new(),
             used_chords: Vec::new(),
             pinch_now: HashSet::default(),
@@ -154,7 +152,6 @@ impl CutKernel {
             }
         }
         self.res = vec![None; items.len()];
-        self.face_items = None;
         self.items = items;
         Ok(())
     }
@@ -211,14 +208,20 @@ impl CutKernel {
     fn export_lazy<'py>(
         &mut self,
         py: Python<'py>,
-    ) -> PyResult<(Bound<'py, PyArray2<f64>>, Vec<i64>, Vec<(i64, i64)>, i64, Vec<(u8, Key3, Option<i64>)>, Vec<i64>)> {
+    ) -> PyResult<(Bound<'py, PyArray2<f64>>, Vec<i64>, Bound<'py, PyArray2<i64>>, i64, Vec<(u8, Key3, Option<i64>)>, Vec<i64>)> {
         let newp: Vec<V3> = self.pos[self.n0..].to_vec();
         self.new_cache.clear();
-        self.new_subids.clear();
+        self.sub_mark = self.next_id;
+        let par: Vec<i64> = std::mem::take(&mut self.new_parents).into_iter().flat_map(|(a, b)| [a, b]).collect();
+        let n = par.len() / 2;
+        let par = {
+            use numpy::PyArrayMethods;
+            numpy::PyArray1::from_vec(py, par).reshape([n, 2])?
+        };
         Ok((
             vec3_array(py, newp)?,
             std::mem::take(&mut self.new_vertices),
-            std::mem::take(&mut self.new_parents),
+            par,
             self.next_id,
             std::mem::take(&mut self.cache_log),
             std::mem::take(&mut self.new_onfeat),
@@ -244,8 +247,12 @@ impl CutKernel {
 
     /// results() as flat arrays (csr.rs), moved out of the kernel; neg_only: only the
     /// negative components
+    /// (the items are released: nothing can be cut after this)
     fn results_csr<'py>(&mut self, py: Python<'py>, neg_only: bool) -> PyResult<crate::csr::CsrOut<'py>> {
+        use rayon::prelude::*;
         let r = self.results()?;
+        let items = std::mem::take(&mut self.items);
+        py.detach(|| items.into_par_iter().for_each(drop));
         Ok(crate::csr::write_results(py, r, neg_only))
     }
 
@@ -260,17 +267,16 @@ impl CutKernel {
     }
 
     /// the items holding face fid (in item order, an item once per face it has)
-    fn items_of_face(&mut self, fid: i64) -> Vec<usize> {
-        if self.face_items.is_none() {
-            let mut fi: HashMap<i64, Vec<usize>> = HashMap::default();
-            for (k, (fl, _)) in self.items.iter().enumerate() {
-                for (f, _) in fl {
-                    fi.entry(*f).or_default().push(k);
-                }
-            }
-            self.face_items = Some(fi);
-        }
-        self.face_items.as_ref().unwrap().get(&fid).cloned().unwrap_or_default()
+    fn items_of_face(&self, py: Python<'_>, fid: i64) -> Vec<usize> {
+        use rayon::prelude::*;
+        // a scan of the items (asked for a few faces only: no map of all of them)
+        py.detach(|| {
+            self.items
+                .par_iter()
+                .enumerate()
+                .flat_map_iter(|(k, (fl, _))| fl.iter().filter(move |(f, _)| *f == fid).map(move |_| k))
+                .collect()
+        })
     }
 
     /// of the items ks (cut), those with a piece some face of which does not clearly see
@@ -351,6 +357,29 @@ impl CutKernel {
             })
         };
         // ids in item order (sequential), then the results renumbered in parallel
+        let (mut nv, mut np_, mut nch, mut npi, mut nsub) = (0usize, 0usize, 0usize, 0usize, 0usize);
+        for (_, _, ev, newpos, _) in sym.iter().flatten() {
+            for e in ev {
+                match e {
+                    Ev::Vertex(..) | Ev::Zero(..) => nv += 1,
+                    Ev::Chord(..) => nch += 1,
+                    Ev::Pinch(..) => npi += 1,
+                    Ev::Sub(..) => nsub += 1,
+                    _ => {}
+                }
+            }
+            np_ += newpos.len();
+        }
+        self.cache.reserve(nv);
+        self.new_cache.reserve(nv);
+        self.chord_cache.reserve(nch);
+        self.pinch_cache.reserve(npi);
+        self.cache_log.reserve(nch + npi);
+        self.subids.reserve(nsub);
+        self.pos.reserve(np_);
+        self.phi.reserve(np_);
+        self.new_vertices.reserve(np_);
+        self.new_parents.reserve(np_);
         let mut out: Vec<Option<(Vec<Key3>, bool)>> = vec![None; n];
         let mut pending: Vec<(usize, CellRes, Vec<Key3>, Vec<i64>, Vec<i64>, bool)> = Vec::new();
         for (k, s) in sym.into_iter().enumerate() {
@@ -432,9 +461,13 @@ impl CutKernel {
             cd.set_item(k, v)?;
         }
         let sd = PyDict::new(py);
-        for ((fid, key), v) in self.new_subids.drain(..) {
-            sd.set_item((fid, pyo3::types::PyTuple::new(py, key)?), v)?;
+        let mut new_sub: Vec<(&(i64, Vec<i64>), i64)> =
+            self.subids.iter().filter(|e| *e.1 >= self.sub_mark).map(|(k, &v)| (k, v)).collect();
+        new_sub.sort_unstable_by_key(|e| e.1); // in the order they were given out
+        for ((fid, key), v) in new_sub {
+            sd.set_item((*fid, pyo3::types::PyTuple::new(py, key)?), v)?;
         }
+        self.sub_mark = self.next_id;
         Ok((
             vec3_array(py, newp)?,
             std::mem::take(&mut self.new_vertices),
@@ -480,63 +513,132 @@ pub(crate) fn np_sum(a: &[f64]) -> f64 {
     }
 }
 
+/// a face's centre (np.mean of its points) and area vector halved (0.5 * the sum of
+/// np.cross(Q - c, np.roll(Q, -1, 0) - c)), the points by pos
+fn face_centre_area2(pos: &dyn Fn(i64) -> V3, p: &[i64]) -> (V3, V3) {
+    let m = p.len();
+    let mut c = [0.0f64; 3];
+    for &v in p {
+        let q = pos(v);
+        for k in 0..3 {
+            c[k] += q[k];
+        }
+    }
+    for k in 0..3 {
+        c[k] /= m as f64;
+    }
+    let mut s = [0.0f64; 3];
+    for i in 0..m {
+        let a = crate::sub(pos(p[i]), c);
+        let b = crate::sub(pos(p[(i + 1) % m]), c);
+        let x = [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+        for k in 0..3 {
+            s[k] += x[k];
+        }
+    }
+    (c, s)
+}
+
+/// mesher._piece_volume: sum over the faces of np.dot(c, sum of the crosses) / 6
+pub(crate) fn piece_volume_at(pos: &dyn Fn(i64) -> V3, comp: &[Face]) -> f64 {
+    let mut v = 0.0;
+    for (_, p) in comp {
+        let (c, s) = face_centre_area2(pos, p);
+        v += crate::wallmerge::dot1(c, s) / 6.0;
+    }
+    v
+}
+
+/// mesher._piece_bad, the points by pos
+pub(crate) fn piece_bad_at(pos: &dyn Fn(i64) -> V3, comp: &[Face], h: f64) -> bool {
+    let nf = comp.len();
+    let mut cf: Vec<V3> = Vec::with_capacity(nf);
+    let mut sf: Vec<V3> = Vec::with_capacity(nf);
+    for (_, p) in comp {
+        let (c, s) = face_centre_area2(pos, p);
+        cf.push(c);
+        sf.push([0.5 * s[0], 0.5 * s[1], 0.5 * s[2]]);
+    }
+    let mut est = [0.0f64; 3];
+    for c in &cf {
+        for k in 0..3 {
+            est[k] += c[k];
+        }
+    }
+    for k in 0..3 {
+        est[k] /= nf as f64;
+    }
+    let pv: Vec<f64> = (0..nf).map(|i| crate::octree::einsum3(sf[i], crate::sub(cf[i], est))).collect();
+    let spv = np_sum(&pv);
+    if spv <= 0.0 {
+        return true;
+    }
+    let mut cc = [0.0f64; 3];
+    for i in 0..nf {
+        for k in 0..3 {
+            cc[k] += pv[i] * (0.75 * cf[i][k] + 0.25 * est[k]);
+        }
+    }
+    for k in 0..3 {
+        cc[k] /= spv;
+    }
+    (0..nf).any(|i| {
+        let n = crate::dot(sf[i], sf[i]).sqrt();
+        crate::octree::einsum3(sf[i], crate::sub(cf[i], cc)) < 0.05 * n * h
+    })
+}
+
+/// [(mesher._piece_volume, mesher._piece_bad)] of the components of a cut, the points
+/// as a CutContext's _PosList holds them: rows of the array a, then of the array b,
+/// then the list added (only the rows the components use are read)
+#[pyfunction]
+pub fn pieces_volume_bad(
+    a: PyReadonlyArray2<f64>,
+    b: PyReadonlyArray2<f64>,
+    added: &Bound<'_, pyo3::types::PyList>,
+    comps: Vec<Vec<Face>>,
+    h: f64,
+) -> PyResult<Vec<(f64, bool)>> {
+    let (a, b) = (a.as_array(), b.as_array());
+    if (a.nrows() > 0 && a.ncols() != 3) || (b.nrows() > 0 && b.ncols() != 3) {
+        return Err(pyo3::exceptions::PyValueError::new_err("points must be (n, 3)"));
+    }
+    let (na, nb) = (a.nrows(), b.nrows());
+    let ntot = na + nb + added.len();
+    let mut at: HashMap<i64, V3> = HashMap::default();
+    for comp in &comps {
+        for (_, p) in comp {
+            for &v in p {
+                if at.contains_key(&v) {
+                    continue;
+                }
+                if v < 0 || v as usize >= ntot {
+                    return Err(pyo3::exceptions::PyValueError::new_err("vertex id out of range"));
+                }
+                let u = v as usize;
+                let x: V3 = if u < na {
+                    [a[[u, 0]], a[[u, 1]], a[[u, 2]]]
+                } else if u < na + nb {
+                    [b[[u - na, 0]], b[[u - na, 1]], b[[u - na, 2]]]
+                } else {
+                    let r: Vec<f64> = added.get_item(u - na - nb)?.extract()?;
+                    if r.len() != 3 {
+                        return Err(pyo3::exceptions::PyValueError::new_err("points must have 3 coordinates"));
+                    }
+                    [r[0], r[1], r[2]]
+                };
+                at.insert(v, x);
+            }
+        }
+    }
+    let pos = |v: i64| at[&v];
+    Ok(comps.iter().map(|c| (piece_volume_at(&pos, c), piece_bad_at(&pos, c, h))).collect())
+}
+
 impl CutKernel {
     /// mesher._piece_bad
     fn piece_bad(&self, comp: &[Face], h: f64) -> bool {
-        let nf = comp.len();
-        let mut cf: Vec<V3> = Vec::with_capacity(nf);
-        let mut sf: Vec<V3> = Vec::with_capacity(nf);
-        for (_, p) in comp {
-            let m = p.len();
-            let mut c = [0.0f64; 3];
-            for &v in p {
-                let q = self.pos[v as usize];
-                for k in 0..3 {
-                    c[k] += q[k];
-                }
-            }
-            for k in 0..3 {
-                c[k] /= m as f64;
-            }
-            let mut s = [0.0f64; 3];
-            for i in 0..m {
-                let a = crate::sub(self.pos[p[i] as usize], c);
-                let b = crate::sub(self.pos[p[(i + 1) % m] as usize], c);
-                let x = [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-                for k in 0..3 {
-                    s[k] += x[k];
-                }
-            }
-            cf.push(c);
-            sf.push([0.5 * s[0], 0.5 * s[1], 0.5 * s[2]]);
-        }
-        let mut est = [0.0f64; 3];
-        for c in &cf {
-            for k in 0..3 {
-                est[k] += c[k];
-            }
-        }
-        for k in 0..3 {
-            est[k] /= nf as f64;
-        }
-        let pv: Vec<f64> = (0..nf).map(|i| crate::octree::einsum3(sf[i], crate::sub(cf[i], est))).collect();
-        let spv = np_sum(&pv);
-        if spv <= 0.0 {
-            return true;
-        }
-        let mut cc = [0.0f64; 3];
-        for i in 0..nf {
-            for k in 0..3 {
-                cc[k] += pv[i] * (0.75 * cf[i][k] + 0.25 * est[k]);
-            }
-        }
-        for k in 0..3 {
-            cc[k] /= spv;
-        }
-        (0..nf).any(|i| {
-            let n = crate::dot(sf[i], sf[i]).sqrt();
-            crate::octree::einsum3(sf[i], crate::sub(cf[i], cc)) < 0.05 * n * h
-        })
+        piece_bad_at(&|v| self.pos[v as usize], comp, h)
     }
 
     fn new_face_id(&mut self) -> i64 {
@@ -548,14 +650,21 @@ impl CutKernel {
     fn sub_id(&mut self, fid: i64, pp: &[i64]) -> i64 {
         let mut k = pp.to_vec();
         k.sort_unstable();
-        let key = (fid, k);
-        if let Some(&i) = self.subids.get(&key) {
-            return i;
+        self.sub_id_sorted(fid, k)
+    }
+
+    /// sub_id with the vertex ids sorted already (one hash lookup)
+    fn sub_id_sorted(&mut self, fid: i64, k: Vec<i64>) -> i64 {
+        use std::collections::hash_map::Entry;
+        match self.subids.entry((fid, k)) {
+            Entry::Occupied(e) => *e.get(),
+            Entry::Vacant(e) => {
+                let i = self.next_id;
+                self.next_id += 1;
+                e.insert(i);
+                i
+            }
         }
-        let i = self.new_face_id();
-        self.subids.insert(key.clone(), i);
-        self.new_subids.push((key, i));
-        i
     }
 
     fn add_point(&mut self, x: V3, parents: (i64, i64)) -> i64 {
@@ -1343,6 +1452,9 @@ impl CutKernel {
     /// Some(id) if it exists already, None if it will be new (no cache can hold a key
     /// with it then); and whether the item's chord / pinch results agree with the caches
     fn check_sym(&self, events: &[Ev], newpos: &[V3]) -> bool {
+        if !events.iter().any(|e| matches!(e, Ev::Chord(..) | Ev::Pinch(..))) {
+            return true;
+        }
         let mut tv: Vec<Option<i64>> = Vec::with_capacity(newpos.len());
         let res = |v: i64, tv: &[Option<i64>]| if v < 0 { tv[(-v - 1) as usize] } else { Some(v) };
         for ev in events {
@@ -1401,15 +1513,16 @@ impl CutKernel {
         for ev in events {
             match ev {
                 Ev::Vertex(lo, hi) => {
-                    let c = match self.cache.get(&(lo, hi)) {
-                        Some(&c) => c,
-                        None => {
-                            let c = self.add_point(newpos[vmap.len()], (lo, hi));
-                            self.cache.insert((lo, hi), c);
-                            self.new_cache.push(((lo, hi), c));
-                            c
-                        }
-                    };
+                    let fresh_id = self.pos.len() as i64;
+                    let mut fresh = false;
+                    let c = *self.cache.entry((lo, hi)).or_insert_with(|| {
+                        fresh = true;
+                        fresh_id
+                    });
+                    if fresh {
+                        self.add_point(newpos[vmap.len()], (lo, hi));
+                        self.new_cache.push(((lo, hi), c));
+                    }
                     vmap.push(c);
                 }
                 Ev::Zero(lo, hi, c) => {
@@ -1448,9 +1561,12 @@ impl CutKernel {
                         self.cache_log.push((1, key, None));
                     }
                 }
-                Ev::Sub(fid, pp) => {
-                    let pp: Vec<i64> = pp.iter().map(|&v| Self::real_v(v, &vmap)).collect();
-                    fmap.push(self.sub_id(fid, &pp));
+                Ev::Sub(fid, mut pp) => {
+                    for v in pp.iter_mut() {
+                        *v = Self::real_v(*v, &vmap);
+                    }
+                    pp.sort_unstable();
+                    fmap.push(self.sub_id_sorted(fid, pp));
                 }
                 Ev::New => fmap.push(self.new_face_id()),
                 Ev::HookPoint(feat) => {
