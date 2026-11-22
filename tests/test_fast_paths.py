@@ -216,6 +216,23 @@ class RustOctree(unittest.TestCase):
         with self.assertRaises(ValueError):
             geometry._core.octree_split(oc.ijk, oc.lev, np.zeros(3, bool))
 
+    @unittest.skipUnless(hasattr(geometry._core, "octree_centers"), "Rust extension not built")
+    def test_centers(self):
+        # Octree.centers in Rust: x0 + (ijk + 0.5) * h0 / 2^lev bit for bit
+        rng = np.random.default_rng(4)
+        for args in CASES:
+            oc = random_octree(*args)
+            oc.x0 = rng.normal(size=3)
+            oc.h0 = float(rng.uniform(0.001, 3.0))
+            ref = oc.x0 + (oc.ijk + 0.5) * (oc.h0 / 2.0 ** oc.lev)[:, None]
+            np.testing.assert_array_equal(oc.centers(), ref)
+            idx = rng.choice(len(oc.lev), 50)
+            np.testing.assert_array_equal(oc.centers(idx), ref[idx])
+            m = rng.random(len(oc.lev)) < 0.3
+            np.testing.assert_array_equal(oc.centers(m), ref[m])
+        with self.assertRaises(ValueError):
+            geometry._core.octree_centers(oc.ijk, oc.lev, np.array([len(oc.lev)]), [0.0, 0.0, 0.0], 1.0)
+
     @unittest.skipUnless(hasattr(geometry._core, "finer_face_neighbour"), "Rust extension not built")
     def test_finer_nearby(self):
         # the face-neighbour lookup answers "a finer leaf centre within 0.95 h" as the

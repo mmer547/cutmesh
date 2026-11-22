@@ -451,6 +451,95 @@ fn leaves_in(ijk: &PyReadonlyArray2<i64>, lev: &PyReadonlyArray1<i64>, lmax: u32
     Ok((q, l))
 }
 
+const CHUNK: usize = 1 << 15;
+
+/// the slice cut into consecutive pieces of the given lengths
+fn split_by<T>(mut s: &mut [T], sizes: impl Iterator<Item = usize>) -> Vec<&mut [T]> {
+    let mut out = Vec::new();
+    for k in sizes {
+        let (a, b) = std::mem::take(&mut s).split_at_mut(k);
+        out.push(a);
+        s = b;
+    }
+    out
+}
+
+/// running sums [0, c0, c0 + c1, ...]
+fn offsets(c: &[usize]) -> Vec<usize> {
+    let mut o = Vec::with_capacity(c.len() + 1);
+    o.push(0);
+    for &x in c {
+        o.push(o.last().unwrap() + x);
+    }
+    o
+}
+
+/// the leaves i with keep(i), in order, as (flat ijk, level) arrays: written in
+/// parallel at offsets counted per chunk (no unordered collect to join)
+fn compact(n: usize, keep: &(dyn Fn(usize) -> bool + Sync), q: &(dyn Fn(usize) -> I3 + Sync),
+           l: &(dyn Fn(usize) -> i64 + Sync)) -> (Vec<i64>, Vec<i64>) {
+    let nch = n.div_ceil(CHUNK);
+    let cnt: Vec<usize> = (0..nch).into_par_iter().map(|c| (c * CHUNK..((c + 1) * CHUNK).min(n)).filter(|&i| keep(i)).count()).collect();
+    let off = offsets(&cnt);
+    let tot = off[nch];
+    let mut flat = vec![0i64; 3 * tot];
+    let mut lv = vec![0i64; tot];
+    let fs = split_by(&mut flat, cnt.iter().map(|&k| 3 * k));
+    let ls = split_by(&mut lv, cnt.iter().copied());
+    fs.into_par_iter().zip(ls).enumerate().for_each(|(c, (f, lo))| {
+        let mut k = 0;
+        for i in c * CHUNK..((c + 1) * CHUNK).min(n) {
+            if keep(i) {
+                f[3 * k..3 * k + 3].copy_from_slice(&q(i));
+                lo[k] = l(i);
+                k += 1;
+            }
+        }
+    });
+    (flat, lv)
+}
+
+/// octree_centers(ijk[n, 3], lev[n], idx or None, x0[3], h0) -> centres[k, 3] of the
+/// leaves idx (all if None): x0 + (ijk + 0.5) * (h0 / 2^lev), as Octree.centers
+#[pyfunction]
+#[pyo3(signature = (ijk, lev, idx, x0, h0))]
+pub fn octree_centers<'py>(
+    py: Python<'py>,
+    ijk: PyReadonlyArray2<'py, i64>,
+    lev: PyReadonlyArray1<'py, i64>,
+    idx: Option<PyReadonlyArray1<'py, i64>>,
+    x0: [f64; 3],
+    h0: f64,
+) -> PyResult<Bound<'py, numpy::PyArray2<f64>>> {
+    let (q, lv) = (ijk.as_slice()?, lev.as_slice()?);
+    if q.len() != 3 * lv.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("ijk must be (n, 3) like lev"));
+    }
+    let q: &[I3] = q.as_chunks::<3>().0;
+    let ids: Option<&[i64]> = match &idx {
+        Some(a) => Some(a.as_slice()?),
+        None => None,
+    };
+    if let Some(ids) = ids {
+        if ids.par_iter().any(|&i| i < 0 || i as usize >= lv.len()) {
+            return Err(pyo3::exceptions::PyValueError::new_err("leaf index out of range"));
+        }
+    }
+    let k = ids.map_or(lv.len(), |v| v.len());
+    let mut out = vec![0.0f64; 3 * k];
+    py.detach(|| {
+        out.par_chunks_mut(3).enumerate().for_each(|(r, o)| {
+            let i = ids.map_or(r, |v| v[r] as usize);
+            // h0 / 2.0 ** lev (a power of two: exact), then x0 + (ijk + 0.5) * hh
+            let hh = h0 / 2f64.powi(lv[i] as i32);
+            for a in 0..3 {
+                o[a] = x0[a] + (q[i][a] as f64 + 0.5) * hh;
+            }
+        })
+    });
+    Ok(numpy::ndarray::Array2::from_shape_vec((k, 3), out).unwrap().into_pyarray(py))
+}
+
 /// octree_split(ijk[n, 3], lev[n], mask[n]) -> (ijk, lev): Octree.split's arrays, the
 /// unsplit leaves in order, then the eight children of each split leaf (CHILD order)
 #[pyfunction]
@@ -466,20 +555,16 @@ pub fn octree_split<'py>(
     }
     let q: &[I3] = q.as_chunks::<3>().0;
     let (flat, l) = py.detach(|| {
-        let keep: Vec<usize> = (0..lv.len()).into_par_iter().filter(|&i| !m[i]).collect();
-        let split: Vec<usize> = (0..lv.len()).into_par_iter().filter(|&i| m[i]).collect();
-        let mut flat: Vec<i64> = keep.par_iter().flat_map_iter(|&i| q[i]).collect();
-        let kids: Vec<i64> = split
-            .par_iter()
-            .flat_map_iter(|&i| {
-                let p = q[i];
-                CHILD.iter().flat_map(move |c| [2 * p[0] + c[0], 2 * p[1] + c[1], 2 * p[2] + c[2]])
-            })
-            .collect();
-        flat.extend_from_slice(&kids);
-        let mut l: Vec<i64> = keep.par_iter().map(|&i| lv[i]).collect();
-        let kl: Vec<i64> = split.par_iter().flat_map_iter(|&i| std::iter::repeat_n(lv[i] + 1, 8)).collect();
-        l.extend_from_slice(&kl);
+        let n = lv.len();
+        let (mut flat, mut l) = compact(n, &|i| !m[i], &|i| q[i], &|i| lv[i]);
+        // the children, eight per split leaf in leaf order (few: sequential)
+        for i in (0..n).filter(|&i| m[i]) {
+            let p = q[i];
+            for c in CHILD.iter() {
+                flat.extend_from_slice(&[2 * p[0] + c[0], 2 * p[1] + c[1], 2 * p[2] + c[2]]);
+                l.push(lv[i] + 1);
+            }
+        }
         (flat, l)
     });
     let nl = l.len();
@@ -553,12 +638,17 @@ pub fn balance<'py>(
                     }
                     -1
                 };
-                (from.min(lev.len())..lev.len())
+                // the test depends on the level and the parent only: once per parent
+                // (siblings ask the same)
+                let mut par: Vec<(u32, I3)> = (from.min(lev.len())..lev.len())
                     .into_par_iter()
                     .filter(|&i| alive[i] && lev[i] >= 2)
-                    .flat_map_iter(|i| {
-                        let m = lev[i];
-                        let p = [ijk[i][0] >> 1, ijk[i][1] >> 1, ijk[i][2] >> 1];
+                    .map(|i| (lev[i], [ijk[i][0] >> 1, ijk[i][1] >> 1, ijk[i][2] >> 1]))
+                    .collect();
+                par.par_sort_unstable();
+                par.dedup();
+                par.par_iter()
+                    .flat_map_iter(|&(m, p)| {
                         let covering = &covering;
                         off.iter().filter_map(move |d| {
                             let r = covering(m - 1, [p[0] + d[0], p[1] + d[1], p[2] + d[2]]);
@@ -593,11 +683,9 @@ pub fn balance<'py>(
     });
     // the leaves still alive, in order (in parallel)
     let (survivors, flat, lv) = py.detach(|| {
-        let survivors: Vec<i64> =
-            (0..prefix.min(n0)).into_par_iter().filter(|&i| alive[i]).map(|i| i as i64).collect();
-        let keep: Vec<usize> = (0..ijk.len()).into_par_iter().filter(|&i| alive[i]).collect();
-        let flat: Vec<i64> = keep.par_iter().flat_map_iter(|&i| ijk[i]).collect();
-        let lv: Vec<i64> = keep.par_iter().map(|&i| lev[i] as i64).collect();
+        let (sv, _) = compact(prefix.min(n0), &|i| alive[i], &|i| [i as i64, 0, 0], &|_| 0);
+        let survivors: Vec<i64> = sv.par_chunks(3).map(|c| c[0]).collect();
+        let (flat, lv) = compact(ijk.len(), &|i| alive[i], &|i| ijk[i], &|i| lev[i] as i64);
         (survivors, flat, lv)
     });
     let nl = lv.len();

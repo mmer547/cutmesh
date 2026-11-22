@@ -40,6 +40,13 @@ class Octree:
         return self.h0 / 2.0 ** l
 
     def centers(self, idx=None):
+        if idx is not None and np.asarray(idx).dtype == bool:
+            idx = np.flatnonzero(idx)
+        if _core is not None and hasattr(_core, "octree_centers") and type(self).centers is Octree.centers:
+            # the same arithmetic in parallel
+            return _core.octree_centers(np.ascontiguousarray(self.ijk, np.int64), np.ascontiguousarray(self.lev, np.int64),
+                                        None if idx is None else np.ascontiguousarray(idx, np.int64),
+                                        [float(v) for v in self.x0], float(self.h0))
         lev = self.lev if idx is None else self.lev[idx]
         ijk = self.ijk if idx is None else self.ijk[idx]
         hh = self.h0 / 2.0 ** lev

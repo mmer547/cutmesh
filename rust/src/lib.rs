@@ -1150,6 +1150,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(octree::build_cells, m)?)?;
     m.add_function(wrap_pyfunction!(octree::balance, m)?)?;
     m.add_function(wrap_pyfunction!(octree::octree_split, m)?)?;
+    m.add_function(wrap_pyfunction!(octree::octree_centers, m)?)?;
     m.add_function(wrap_pyfunction!(nearest::nearest_kept, m)?)?;
     m.add_function(wrap_pyfunction!(octree::leaf_bad, m)?)?;
     m.add_function(wrap_pyfunction!(octree::finer_face_neighbour, m)?)?;
