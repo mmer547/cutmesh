@@ -116,6 +116,20 @@ class SchemaRanges(unittest.TestCase):
                 self.assertEqual(problems(**{k: True}), [], k)
                 self.assertTrue(problems(**{k: 1}), k)
 
+    def test_null(self):
+        """keys whose schema allows null are accepted as null (= off) by validate_config"""
+        p = meshdict_schema()["properties"]
+        nullable = [k for k, v in p.items() if "null" in v["type"] and k != "domain"]
+        self.assertTrue({"addLayers", "baseMesh", "gapRefinement", "autoGapRefinement",
+                         "featureLevel"} <= set(nullable))
+        for k in nullable:
+            self.assertEqual(problems(**{k: None}), [], k)
+        zp = p["rotatingZones"]["items"]["properties"]
+        cyl = {"point1": [0, 0, 0.06], "point2": [0, 0, 0.14], "radius": 0.07}
+        for k, v in zp.items():
+            if "null" in v["type"]:
+                self.assertEqual(problems(rotatingZones=[{"name": "r", "cylinder": cyl, k: None}]), [], k)
+
     def test_zone_levels(self):
         zp = meshdict_schema()["properties"]["rotatingZones"]["items"]["properties"]
         cyl = {"point1": [0, 0, 0.06], "point2": [0, 0, 0.14], "radius": 0.07}

@@ -373,16 +373,18 @@
     return box;
   }
 
-  // an object that may be left out: a switch, then its fields
+  // an object that may be left out: a switch, then its fields.  null (allowed for addLayers,
+  // baseMesh, ...) means off as well, and stays null until the switch is used: {} would turn
+  // the setting on with its defaults
   function optionalObject(key, p, path, required) {
     var v = getAt(path);
-    var on = v !== undefined;
+    var on = isObj(v);
     var t = types(p);
     var wrap = el("div", { class: "mdf-field mdf-sub", "data-path": pathName(path) });
     var head = el("div", { class: "mdf-subhead" }, label(key, p, required));
     if (t.indexOf("boolean") >= 0) {        // autoGapRefinement: off / true / settings
       var modes = [[undefined, "使わない"], [true, "true（既定値で使う）"], [{}, "値を指定する"]];
-      var cur = v === undefined ? 0 : v === true ? 1 : isObj(v) ? 2 : -1;
+      var cur = v === undefined || v === null ? 0 : v === true ? 1 : isObj(v) ? 2 : -1;
       var sel = el("select", { "aria-label": pathName(path), onchange: function (e) {
         var i = e.target.selectedIndex;
         if (i < modes.length) { setAt(path, clone(modes[i][0])); rerender(); }
@@ -400,7 +402,7 @@
     wrap.appendChild(head);
     wrap.appendChild(help(p));
     if (on || required) {
-      if (!isObj(getAt(path))) setAt(path, {});
+      if (!isObj(getAt(path))) setAt(path, {});      // required: always an object
       wrap.appendChild(fields(p.properties, path, p.required || [], el("div", { class: "mdf-subbody" })));
     }
     return wrap;
@@ -470,12 +472,13 @@
 
   function field(key, p, path, required) {
     var t = types(p);
+    if (p["x-widget"] === "json") return scalarField(key, p, path, required);
     if (t[0] === "array" && p.items && p.items.type === "object" && p.items.properties) {
       return objectList(key, p, path, key === "rotatingZones" ?
         function (z, i) { return "ゾーン " + (i + 1) + (isObj(z) && z.name ? "（" + z.name + "）" : ""); } :
         function (r, i) { return "領域 " + (i + 1); });
     }
-    if (t.indexOf("object") >= 0 && p.properties && p["x-widget"] !== "json") {
+    if (t.indexOf("object") >= 0 && p.properties) {
       return optionalObject(key, p, path, required);
     }
     return scalarField(key, p, path, required);
@@ -713,6 +716,9 @@
   }
 
   // ---------------------------------------------------------------- STL
+  // bytes -> text as cutmesh/geometry.py reads STL files: bytes.decode(errors="ignore")
+  function utf8(bytes) { return new TextDecoder("utf-8").decode(bytes).replace(/\uFFFD/g, ""); }
+
   function parseSTL(buf, fileName) {
     var bytes = new Uint8Array(buf);
     var head = String.fromCharCode.apply(null, bytes.subarray(0, 5)).toLowerCase();
@@ -737,13 +743,13 @@
       }
       ntri = n;
       var h80 = bytes.subarray(0, 80), end = h80.indexOf(0);
-      var name = new TextDecoder("latin1").decode(end >= 0 ? h80.subarray(0, end) : h80).replace(/solid/g, "").trim();
+      var name = utf8(end >= 0 ? h80.subarray(0, end) : h80).replace(/solid/g, "").trim();
       solids = [name || "walls"];
     } else {
-      var text = new TextDecoder().decode(bytes);
-      var re = /^[ \t]*(solid|vertex)[ \t]*([^\r\n]*)/gm, m, nv = 0;
+      var text = utf8(bytes);
+      var re = /^[ \t]*(solid|vertex)(?![^ \t\r\n])[ \t]*([^\r\n]*)/gim, m, nv = 0;
       while ((m = re.exec(text))) {
-        if (m[1] === "solid") {
+        if (m[1].toLowerCase() === "solid") {
           var nm = m[2].trim().split(/\s+/)[0] || "walls";
           if (solids.indexOf(nm) < 0) solids.push(nm);
         } else {

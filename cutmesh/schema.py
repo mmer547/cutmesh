@@ -116,7 +116,7 @@ def _top(D):
                                                        minimum=0)}}))
     add("bufferLayers", _p("integer", "レベルの遷移ごとのバッファセルの数。1 にするとセル数が減る",
                            D["bufferLayers"], group="refine", minimum=0, doc="md-refine"))
-    add("gapRefinement", _p("object", "流体の厚みが thickness 未満の所（スロットの先端、狭い流路）の壁を"
+    add("gapRefinement", _p(["object", "null"], "流体の厚みが thickness 未満の所（スロットの先端、狭い流路）の壁を"
                             " level まで細分化する", has_default=False, group="refine",
                             advanced=True, doc="md-refine",
                             required=["thickness", "level"], additionalProperties=False,
@@ -124,7 +124,7 @@ def _top(D):
                                 "thickness": _p("number", "流体の厚み", has_default=False,
                                                 exclusiveMinimum=0, unit="m"),
                                 "level": _p("integer", "細分化レベル", has_default=False, minimum=0)}))
-    add("autoGapRefinement", _p(["boolean", "object"],
+    add("autoGapRefinement", _p(["boolean", "object", "null"],
                                 "壁から向かいの壁までの隙間に cellsAcross 個のセルが入るレベル"
                                 "（上限 maxLevel）まで壁を細分化する。true で既定値",
                                 has_default=False, group="refine", doc="md-refine",
@@ -153,7 +153,7 @@ def _top(D):
                         unit="rad/s"),
             "nonRotatingPatches": _p("array", "ゾーン内でも回転させないパッチ", [],
                                      widget="solidList", items={"type": "string"}),
-            "wallProximity": _p("object", "ゾーンの面のうち STL から distance 以内の部分だけを level まで"
+            "wallProximity": _p(["object", "null"], "ゾーンの面のうち STL から distance 以内の部分だけを level まで"
                                 "細分化する（界面を狭い隙間に置くとき）", has_default=False,
                                 advanced=True, required=["distance", "level"],
                                 additionalProperties=False,
@@ -241,7 +241,7 @@ def _top(D):
                            D["amiExactRims"], group="check", advanced=True, doc="ami"))
 
     # ---- base mesh
-    add("baseMesh", _p("object", "ベースメッシュ。省略時は直交格子。cylindrical で回転軸まわりの"
+    add("baseMesh", _p(["object", "null"], "ベースメッシュ。省略時は直交格子。cylindrical で回転軸まわりの"
                        "同心ブロック", has_default=False, group="baseMesh", doc="cylbase",
                        additionalProperties=False, properties={
                            "type": _p("string", "cartesian（直交格子）または cylindrical（円筒）",
@@ -327,7 +327,7 @@ def meshdict_schema():
     from .mesher import DEFAULTS
     from .layers import DEFAULTS as LD
     props = _top(DEFAULTS)
-    props["addLayers"] = _p("object", "境界層（壁パッチにプリズム層を追加）。{} で既定値",
+    props["addLayers"] = _p(["object", "null"], "境界層（壁パッチにプリズム層を追加）。{} で既定値、null で付けない",
                             has_default=False, group="layers", doc="layers",
                             additionalProperties=False, properties=_layers(LD))
     order = [g for g, _, _ in GROUPS]
