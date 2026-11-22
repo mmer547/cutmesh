@@ -1034,6 +1034,31 @@ def _argsort_stable(a):
     return np.argsort(a, kind="stable")
 
 
+def _pair_faces_py(o_key, o_cell, log):
+    """internal faces (a key held by two different cells: the lower cell's occurrence,
+    sorted by owner and neighbour) and boundary faces (a key held once) of the face
+    occurrences with a cell: (i_occ, i_own, i_nei, b_occ, b_own)"""
+    srt = np.nonzero(o_cell >= 0)[0]
+    srt = srt[_argsort_stable(o_key[srt])]
+    # runs of equal keys in the sorted order (np.unique would sort them again)
+    ks_ = o_key[srt]
+    st = np.flatnonzero(np.concatenate([[True], ks_[1:] != ks_[:-1]])) if len(ks_) else np.zeros(0, np.int64)
+    cnt = np.diff(np.concatenate([st, [len(ks_)]]))
+    del ks_
+    if (cnt > 2).any():
+        log(f"WARNING: {int((cnt > 2).sum())} faces shared by more than two cells")
+    two = st[cnt == 2]
+    a1, a2 = srt[two], srt[two + 1]
+    c1, c2 = o_cell[a1], o_cell[a2]
+    keep = c1 != c2
+    a1, a2, c1, c2 = a1[keep], a2[keep], c1[keep], c2[keep]
+    i_occ = np.where(c1 < c2, a1, a2)
+    i_own = np.minimum(c1, c2); i_nei = np.maximum(c1, c2)
+    o = np.lexsort((i_nei, i_own))
+    b_occ = srt[st[cnt == 1]]
+    return i_occ[o], i_own[o], i_nei[o], b_occ, o_cell[b_occ]
+
+
 def _rust_merge_ok():
     return _core is not None and hasattr(_core, "merge_cells_csr")
 
@@ -2911,26 +2936,14 @@ def generate(cfg, log=print):
     o_cell = np.concatenate([leaf_cid[f_cell[bsel]], piece_cid[py_cell]])
     o_key = np.concatenate([f_key[bsel], py_key])
     del b_verts, p_verts
-    srt = np.nonzero(o_cell >= 0)[0]
-    srt = srt[_argsort_stable(o_key[srt])]
-    # runs of equal keys in the sorted order (np.unique would sort them again)
-    ks_ = o_key[srt]
-    st = np.flatnonzero(np.concatenate([[True], ks_[1:] != ks_[:-1]])) if len(ks_) else np.zeros(0, np.int64)
-    cnt = np.diff(np.concatenate([st, [len(ks_)]]))
-    del ks_
-    if (cnt > 2).any():
-        log(f"WARNING: {int((cnt > 2).sum())} faces shared by more than two cells")
-    two = st[cnt == 2]
-    a1, a2 = srt[two], srt[two + 1]
-    c1, c2 = o_cell[a1], o_cell[a2]
-    keep = c1 != c2
-    a1, a2, c1, c2 = a1[keep], a2[keep], c1[keep], c2[keep]
-    i_occ = np.where(c1 < c2, a1, a2)
-    i_own = np.minimum(c1, c2); i_nei = np.maximum(c1, c2)
-    o = np.lexsort((i_nei, i_own))
-    i_occ, i_own, i_nei = i_occ[o], i_own[o], i_nei[o]
-    b_occ = srt[st[cnt == 1]]
-    b_own = o_cell[b_occ]
+    if _core is not None and hasattr(_core, "pair_faces"):
+        # the same pairing and order in Rust (sortutil.rs)
+        i_occ, i_own, i_nei, b_occ, b_own, n_multi = _core.pair_faces(
+            np.ascontiguousarray(o_key, np.int64), np.ascontiguousarray(o_cell, np.int64))
+        if n_multi:
+            log(f"WARNING: {n_multi} faces shared by more than two cells")
+    else:
+        i_occ, i_own, i_nei, b_occ, b_own = _pair_faces_py(o_key, o_cell, log)
     T("assembly and small-cell merging")
 
     def gather(occs):

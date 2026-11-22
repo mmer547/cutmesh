@@ -352,7 +352,7 @@ class RustCutKernel(unittest.TestCase):
             def __getattr__(self, k):
                 if k in ("merge_wall_faces", "contact_candidates", "surface_contact_samples",
                          "split_samples", "cut_batch_csr", "face_sign_counts", "vertex_min",
-                         "leaf_any", "leaf_vertices", "finer_face_neighbour", "leaf_min", "leaf_mean", "feature_hook", "piece_geometry",
+                         "leaf_any", "leaf_vertices", "finer_face_neighbour", "leaf_min", "leaf_mean", "feature_hook", "piece_geometry", "pair_faces",
                          "PlaneClipRs"):
                     raise AttributeError(k)
                 return getattr(real, k)
@@ -581,6 +581,18 @@ class RustFaceOps(unittest.TestCase):
         np.testing.assert_array_equal(v2, vol)
         np.testing.assert_array_equal(b2, bad)
         self.assertTrue(bad.any() and not bad.all())
+
+    def test_pair_faces(self):
+        rng = np.random.default_rng(22)
+        for n, nkey in ((0, 1), (50, 30), (20000, 9000)):
+            key = rng.integers(0, nkey, n).astype(np.int64)
+            cell = rng.integers(-1, n // 3 + 2, n).astype(np.int64)
+            logs = []
+            ref = mesher._pair_faces_py(key, cell, logs.append)
+            got = geometry._core.pair_faces(key, cell)
+            for a, b in zip(ref, got[:5]):
+                np.testing.assert_array_equal(a, b)
+            self.assertEqual(bool(logs), got[5] > 0)
 
     def test_leaf_any_and_vertices(self):
         for seed in range(5):

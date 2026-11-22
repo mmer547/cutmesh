@@ -1113,6 +1113,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(contact::surface_contact_samples, m)?)?;
     m.add_function(wrap_pyfunction!(contact::split_samples, m)?)?;
     m.add_function(wrap_pyfunction!(sortutil::argsort_stable, m)?)?;
+    m.add_function(wrap_pyfunction!(sortutil::pair_faces, m)?)?;
     m.add_function(wrap_pyfunction!(faceops::face_sign_counts, m)?)?;
     m.add_function(wrap_pyfunction!(faceops::vertex_min, m)?)?;
     m.add_function(wrap_pyfunction!(faceops::leaf_any, m)?)?;
