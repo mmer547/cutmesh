@@ -29,8 +29,10 @@ struct Tree {
     n: I3,
     lmax: u32,
     periodic: [bool; 3],
-    /// per level: (sorted keys, leaf index)
-    lk: Vec<(Vec<i64>, Vec<i64>)>,
+    /// keys sorted by (level, key), the leaf of each, and where each level starts
+    keys: Vec<i64>,
+    idx: Vec<i64>,
+    start: Vec<usize>,
 }
 
 impl Tree {
@@ -51,10 +53,10 @@ impl Tree {
         (q[0].wrapping_mul(nn[1]).wrapping_add(q[1])).wrapping_mul(nn[2]).wrapping_add(q[2])
     }
     fn find_exact(&self, l: u32, q: I3) -> i64 {
-        let (keys, idx) = &self.lk[l as usize];
+        let (a, b) = (self.start[l as usize], self.start[l as usize + 1]);
         let k = self.key(l, q);
-        match keys.binary_search(&k) {
-            Ok(p) => idx[p],
+        match self.keys[a..b].binary_search(&k) {
+            Ok(p) => self.idx[a + p],
             Err(_) => -1,
         }
     }
@@ -138,17 +140,8 @@ pub fn build_cells<'py>(
     lmax: u32,
     periodic: [bool; 3],
 ) -> PyResult<Out<'py>> {
-    let a = ijk.as_array();
-    let lv = lev.as_array();
-    let nl = lv.len();
-    if a.nrows() != nl || a.ncols() != 3 {
-        return Err(pyo3::exceptions::PyValueError::new_err("ijk must be (n, 3) like lev"));
-    }
-    let ijk: Vec<I3> = (0..nl).map(|i| [a[[i, 0]], a[[i, 1]], a[[i, 2]]]).collect();
-    let lev: Vec<u32> = lv.iter().map(|&l| l as u32).collect();
-    if lev.iter().any(|&l| l > lmax) {
-        return Err(pyo3::exceptions::PyValueError::new_err("leaf level above max level"));
-    }
+    let (ijk, lev) = leaves_in(&ijk, &lev, lmax)?;
+    let nl = lev.len();
     let r = py.detach(|| build(&ijk, &lev, n, lmax, periodic));
     let nv = r.ukeys.len();
     let hp = numpy::ndarray::Array2::from_shape_vec((nv, 4), r.hang_par.into_iter().flatten().collect()).unwrap();
@@ -185,19 +178,7 @@ struct Res {
 fn build(ijk: &[I3], lev: &[u32], n: I3, lmax: u32, periodic: [bool; 3]) -> Res {
     let nl = lev.len();
     // ---------------- leaf lookup per level
-    let mut lk = Vec::with_capacity(lmax as usize + 1);
-    let tree0 = Tree { n, lmax, periodic, lk: Vec::new() };
-    for l in 0..=lmax {
-        let mut kv: Vec<(i64, i64)> = (0..nl)
-            .into_par_iter()
-            .filter(|&i| lev[i] == l)
-            .map(|i| (tree0.key(l, ijk[i]), i as i64))
-            .collect();
-        kv.par_sort_unstable();
-        let (k, i): (Vec<i64>, Vec<i64>) = kv.into_iter().unzip();
-        lk.push((k, i));
-    }
-    let tree = Tree { lk, ..tree0 };
+    let tree = tree_of(ijk, lev, n, lmax, periodic);
     let _ = tree.lmax;
 
     // ---------------- vertices: sorted distinct corner keys
@@ -437,18 +418,167 @@ fn off26() -> Vec<I3> {
 }
 
 fn tree_of(ijk: &[I3], lev: &[u32], n: I3, lmax: u32, periodic: [bool; 3]) -> Tree {
-    let t0 = Tree { n, lmax, periodic, lk: Vec::new() };
-    let mut lk = Vec::with_capacity(lmax as usize + 1);
-    for l in 0..=lmax {
-        let mut kv: Vec<(i64, i64)> = (0..lev.len())
-            .into_par_iter()
-            .filter(|&i| lev[i] == l)
-            .map(|i| (t0.key(l, ijk[i]), i as i64))
-            .collect();
-        kv.par_sort_unstable();
-        lk.push(kv.into_iter().unzip());
+    let t0 = Tree { n, lmax, periodic, keys: Vec::new(), idx: Vec::new(), start: Vec::new() };
+    // one parallel sort by (level, key) (keys are unique within a level)
+    let mut kv: Vec<(u32, i64, i64)> =
+        (0..lev.len()).into_par_iter().map(|i| (lev[i], t0.key(lev[i], ijk[i]), i as i64)).collect();
+    kv.par_sort_unstable();
+    let start: Vec<usize> = (0..=lmax + 1).map(|l| kv.partition_point(|e| e.0 < l)).collect();
+    let keys: Vec<i64> = kv.par_iter().map(|e| e.1).collect();
+    let idx: Vec<i64> = kv.par_iter().map(|e| e.2).collect();
+    Tree { keys, idx, start, ..t0 }
+}
+
+/// the rows of an (n, 3) array: borrowed when C-contiguous, else copied row by row
+fn rows_i3<'a>(a: &'a PyReadonlyArray2<i64>) -> PyResult<std::borrow::Cow<'a, [I3]>> {
+    let v = a.as_array();
+    if v.ncols() != 3 {
+        return Err(pyo3::exceptions::PyValueError::new_err("ijk must be (n, 3)"));
     }
-    Tree { lk, ..t0 }
+    if numpy::PyUntypedArrayMethods::is_c_contiguous(&**a) {
+        return Ok(std::borrow::Cow::Borrowed(a.as_slice()?.as_chunks::<3>().0));
+    }
+    Ok(std::borrow::Cow::Owned(v.outer_iter().map(|r| [r[0], r[1], r[2]]).collect()))
+}
+
+/// the leaves' (ijk, level) of the (n, 3) and (n,) arrays (validated)
+fn leaves_in(ijk: &PyReadonlyArray2<i64>, lev: &PyReadonlyArray1<i64>, lmax: u32) -> PyResult<(Vec<I3>, Vec<u32>)> {
+    let a = ijk.as_array();
+    let lv = lev.as_array();
+    if a.nrows() != lv.len() || a.ncols() != 3 {
+        return Err(pyo3::exceptions::PyValueError::new_err("ijk must be (n, 3) like lev"));
+    }
+    let q: Vec<I3> = rows_i3(ijk)?.into_owned();
+    let l: Vec<u32> = match lev.as_slice() {
+        Ok(v) => v.par_iter().map(|&x| x as u32).collect(),
+        Err(_) => lv.iter().map(|&x| x as u32).collect(),
+    };
+    if l.par_iter().any(|&x| x > lmax) {
+        // (a negative level wraps to a large one)
+        return Err(pyo3::exceptions::PyValueError::new_err("leaf level above max level"));
+    }
+    Ok((q, l))
+}
+
+const CHUNK: usize = 1 << 15;
+
+/// the slice cut into consecutive pieces of the given lengths
+fn split_by<T>(mut s: &mut [T], sizes: impl Iterator<Item = usize>) -> Vec<&mut [T]> {
+    let mut out = Vec::new();
+    for k in sizes {
+        let (a, b) = std::mem::take(&mut s).split_at_mut(k);
+        out.push(a);
+        s = b;
+    }
+    out
+}
+
+/// running sums [0, c0, c0 + c1, ...]
+fn offsets(c: &[usize]) -> Vec<usize> {
+    let mut o = Vec::with_capacity(c.len() + 1);
+    o.push(0);
+    for &x in c {
+        o.push(o.last().unwrap() + x);
+    }
+    o
+}
+
+/// the leaves i with keep(i), in order, as (flat ijk, level) arrays: written in
+/// parallel at offsets counted per chunk (no unordered collect to join)
+fn compact(n: usize, keep: &(dyn Fn(usize) -> bool + Sync), q: &(dyn Fn(usize) -> I3 + Sync),
+           l: &(dyn Fn(usize) -> i64 + Sync)) -> (Vec<i64>, Vec<i64>) {
+    let nch = n.div_ceil(CHUNK);
+    let cnt: Vec<usize> = (0..nch).into_par_iter().map(|c| (c * CHUNK..((c + 1) * CHUNK).min(n)).filter(|&i| keep(i)).count()).collect();
+    let off = offsets(&cnt);
+    let tot = off[nch];
+    let mut flat = vec![0i64; 3 * tot];
+    let mut lv = vec![0i64; tot];
+    let fs = split_by(&mut flat, cnt.iter().map(|&k| 3 * k));
+    let ls = split_by(&mut lv, cnt.iter().copied());
+    fs.into_par_iter().zip(ls).enumerate().for_each(|(c, (f, lo))| {
+        let mut k = 0;
+        for i in c * CHUNK..((c + 1) * CHUNK).min(n) {
+            if keep(i) {
+                f[3 * k..3 * k + 3].copy_from_slice(&q(i));
+                lo[k] = l(i);
+                k += 1;
+            }
+        }
+    });
+    (flat, lv)
+}
+
+/// octree_centers(ijk[n, 3], lev[n], idx or None, x0[3], h0) -> centres[k, 3] of the
+/// leaves idx (all if None): x0 + (ijk + 0.5) * (h0 / 2^lev), as Octree.centers
+#[pyfunction]
+#[pyo3(signature = (ijk, lev, idx, x0, h0))]
+pub fn octree_centers<'py>(
+    py: Python<'py>,
+    ijk: PyReadonlyArray2<'py, i64>,
+    lev: PyReadonlyArray1<'py, i64>,
+    idx: Option<PyReadonlyArray1<'py, i64>>,
+    x0: [f64; 3],
+    h0: f64,
+) -> PyResult<Bound<'py, numpy::PyArray2<f64>>> {
+    let (q, lv) = (rows_i3(&ijk)?, lev.as_slice()?);
+    if q.len() != lv.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("ijk must be (n, 3) like lev"));
+    }
+    let q: &[I3] = &q;
+    let ids: Option<&[i64]> = match &idx {
+        Some(a) => Some(a.as_slice()?),
+        None => None,
+    };
+    if let Some(ids) = ids {
+        if ids.par_iter().any(|&i| i < 0 || i as usize >= lv.len()) {
+            return Err(pyo3::exceptions::PyValueError::new_err("leaf index out of range"));
+        }
+    }
+    let k = ids.map_or(lv.len(), |v| v.len());
+    let mut out = vec![0.0f64; 3 * k];
+    py.detach(|| {
+        out.par_chunks_mut(3).enumerate().for_each(|(r, o)| {
+            let i = ids.map_or(r, |v| v[r] as usize);
+            // h0 / 2.0 ** lev (a power of two: exact), then x0 + (ijk + 0.5) * hh
+            let hh = h0 / 2f64.powi(lv[i] as i32);
+            for a in 0..3 {
+                o[a] = x0[a] + (q[i][a] as f64 + 0.5) * hh;
+            }
+        })
+    });
+    Ok(numpy::ndarray::Array2::from_shape_vec((k, 3), out).unwrap().into_pyarray(py))
+}
+
+/// octree_split(ijk[n, 3], lev[n], mask[n]) -> (ijk, lev): Octree.split's arrays, the
+/// unsplit leaves in order, then the eight children of each split leaf (CHILD order)
+#[pyfunction]
+pub fn octree_split<'py>(
+    py: Python<'py>,
+    ijk: PyReadonlyArray2<'py, i64>,
+    lev: PyReadonlyArray1<'py, i64>,
+    mask: PyReadonlyArray1<'py, bool>,
+) -> PyResult<(Bound<'py, PyArray2<i64>>, Bound<'py, PyArray1<i64>>)> {
+    let (q, lv, m) = (rows_i3(&ijk)?, lev.as_slice()?, mask.as_slice()?);
+    if q.len() != lv.len() || m.len() != lv.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("ijk must be (n, 3) like lev and mask"));
+    }
+    let q: &[I3] = &q;
+    let (flat, l) = py.detach(|| {
+        let n = lv.len();
+        let (mut flat, mut l) = compact(n, &|i| !m[i], &|i| q[i], &|i| lv[i]);
+        // the children, eight per split leaf in leaf order (few: sequential)
+        for i in (0..n).filter(|&i| m[i]) {
+            let p = q[i];
+            for c in CHILD.iter() {
+                flat.extend_from_slice(&[2 * p[0] + c[0], 2 * p[1] + c[1], 2 * p[2] + c[2]]);
+                l.push(lv[i] + 1);
+            }
+        }
+        (flat, l)
+    });
+    let nl = l.len();
+    let arr = numpy::ndarray::Array2::from_shape_vec((nl, 3), flat).unwrap();
+    Ok((arr.into_pyarray(py), l.into_pyarray(py)))
 }
 
 /// balance(ijk[n, 3], lev[n], n[3], lmax, periodic[3], new_from, prefix)
@@ -478,17 +608,8 @@ pub fn balance<'py>(
     periodic: [bool; 3],
     new_from: Option<usize>,
     prefix: usize,
-) -> PyResult<(Bound<'py, PyArray2<i64>>, Bound<'py, PyArray1<i64>>, Vec<usize>, Vec<i64>)> {
-    let a = ijk.as_array();
-    let lv = lev.as_array();
-    if a.nrows() != lv.len() || a.ncols() != 3 {
-        return Err(pyo3::exceptions::PyValueError::new_err("ijk must be (n, 3) like lev"));
-    }
-    let mut ijk: Vec<I3> = (0..lv.len()).map(|i| [a[[i, 0]], a[[i, 1]], a[[i, 2]]]).collect();
-    let mut lev: Vec<u32> = lv.iter().map(|&l| l as u32).collect();
-    if lev.iter().any(|&l| l > lmax) {
-        return Err(pyo3::exceptions::PyValueError::new_err("leaf level above max level"));
-    }
+) -> PyResult<(Bound<'py, PyArray2<i64>>, Bound<'py, PyArray1<i64>>, Vec<usize>, Bound<'py, PyArray1<i64>>)> {
+    let (mut ijk, mut lev) = leaves_in(&ijk, &lev, lmax)?;
     let n0 = lev.len();
     let (passes, alive) = py.detach(|| {
         let tree = tree_of(&ijk, &lev, n, lmax, periodic);
@@ -526,12 +647,17 @@ pub fn balance<'py>(
                     }
                     -1
                 };
-                (from.min(lev.len())..lev.len())
+                // the test depends on the level and the parent only: once per parent
+                // (siblings ask the same)
+                let mut par: Vec<(u32, I3)> = (from.min(lev.len())..lev.len())
                     .into_par_iter()
                     .filter(|&i| alive[i] && lev[i] >= 2)
-                    .flat_map_iter(|i| {
-                        let m = lev[i];
-                        let p = [ijk[i][0] >> 1, ijk[i][1] >> 1, ijk[i][2] >> 1];
+                    .map(|i| (lev[i], [ijk[i][0] >> 1, ijk[i][1] >> 1, ijk[i][2] >> 1]))
+                    .collect();
+                par.par_sort_unstable();
+                par.dedup();
+                par.par_iter()
+                    .flat_map_iter(|&(m, p)| {
                         let covering = &covering;
                         off.iter().filter_map(move |d| {
                             let r = covering(m - 1, [p[0] + d[0], p[1] + d[1], p[2] + d[2]]);
@@ -564,12 +690,16 @@ pub fn balance<'py>(
         }
         (passes, alive)
     });
-    let survivors: Vec<i64> = if prefix > 0 { (0..prefix.min(n0) as i64).filter(|&i| alive[i as usize]).collect() } else { Vec::new() };
-    let flat: Vec<i64> = ijk.iter().zip(alive.iter()).filter(|p| *p.1).flat_map(|p| p.0.iter().copied()).collect();
-    let lv: Vec<i64> = lev.iter().zip(alive.iter()).filter(|p| *p.1).map(|p| *p.0 as i64).collect();
+    // the leaves still alive, in order (in parallel)
+    let (survivors, flat, lv) = py.detach(|| {
+        let (sv, _) = compact(prefix.min(n0), &|i| alive[i], &|i| [i as i64, 0, 0], &|_| 0);
+        let survivors: Vec<i64> = sv.par_chunks(3).map(|c| c[0]).collect();
+        let (flat, lv) = compact(ijk.len(), &|i| alive[i], &|i| ijk[i], &|i| lev[i] as i64);
+        (survivors, flat, lv)
+    });
     let nl = lv.len();
     let arr = numpy::ndarray::Array2::from_shape_vec((nl, 3), flat).unwrap();
-    Ok((arr.into_pyarray(py), lv.into_pyarray(py), passes, survivors))
+    Ok((arr.into_pyarray(py), lv.into_pyarray(py), passes, survivors.into_pyarray(py)))
 }
 
 // ------------------------------------------------------------------ leaf validity
@@ -604,7 +734,7 @@ pub fn leaf_bad<'py>(
         || cs.len() < nc
         || *cp.last().unwrap_or(&0) as usize >= fp.len()
         || *fp.last().unwrap_or(&0) as usize > fv.len()
-        || fv.iter().any(|&v| v < 0 || v as usize >= pts.len())
+        || fv.par_iter().any(|&v| v < 0 || v as usize >= pts.len())
         || fa.map_or(false, |a| a.len() < pts.len())
     {
         return Err(pyo3::exceptions::PyValueError::new_err("inconsistent leaf data"));
@@ -705,16 +835,10 @@ pub fn finer_face_neighbour<'py>(
     lmax: u32,
     cand: PyReadonlyArray1<'py, i64>,
 ) -> PyResult<Bound<'py, PyArray1<bool>>> {
-    let a = ijk.as_array();
-    let lv = lev.as_array();
     let cand = cand.as_slice()?;
-    if a.nrows() != lv.len() || a.ncols() != 3 || cand.iter().any(|&c| c < 0 || c as usize >= lv.len()) {
+    let (ijk, lev) = leaves_in(&ijk, &lev, lmax)?;
+    if cand.iter().any(|&c| c < 0 || c as usize >= lev.len()) {
         return Err(pyo3::exceptions::PyValueError::new_err("inconsistent leaf arrays"));
-    }
-    let ijk: Vec<I3> = (0..lv.len()).map(|i| [a[[i, 0]], a[[i, 1]], a[[i, 2]]]).collect();
-    let lev: Vec<u32> = lv.iter().map(|&l| l as u32).collect();
-    if lev.iter().any(|&l| l > lmax) {
-        return Err(pyo3::exceptions::PyValueError::new_err("leaf level above max level"));
     }
     let r: Vec<bool> = py.detach(|| {
         let tree = tree_of(&ijk, &lev, n, lmax, [false; 3]);

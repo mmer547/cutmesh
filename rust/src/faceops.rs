@@ -15,7 +15,7 @@ pub fn face_sign_counts<'py>(
     fverts: PyReadonlyArray1<'py, i64>,
 ) -> PyResult<(Bound<'py, PyArray1<i32>>, Bound<'py, PyArray1<i32>>, Bound<'py, PyArray1<i32>>)> {
     let (phi, fp, fv) = (phi.as_slice()?, fptr.as_slice()?, fverts.as_slice()?);
-    if fp.is_empty() || *fp.last().unwrap() as usize > fv.len() || fv.iter().any(|&v| v < 0 || v as usize >= phi.len()) {
+    if fp.is_empty() || *fp.last().unwrap() as usize > fv.len() || fv.par_iter().any(|&v| v < 0 || v as usize >= phi.len()) {
         return Err(pyo3::exceptions::PyValueError::new_err("inconsistent face arrays"));
     }
     let r: Vec<(i32, i32, i32)> = py.detach(|| {
@@ -56,7 +56,7 @@ pub fn vertex_min<'py>(
     val: PyReadonlyArray1<'py, f64>,
 ) -> PyResult<Bound<'py, PyArray1<f64>>> {
     let (fp, fv, val) = (fptr.as_slice()?, fverts.as_slice()?, val.as_slice()?);
-    if fp.len() != val.len() + 1 || *fp.last().unwrap_or(&0) as usize > fv.len() || fv.iter().any(|&v| v < 0 || v as usize >= n) {
+    if fp.len() != val.len() + 1 || *fp.last().unwrap_or(&0) as usize > fv.len() || fv.par_iter().any(|&v| v < 0 || v as usize >= n) {
         return Err(pyo3::exceptions::PyValueError::new_err("inconsistent face arrays"));
     }
     let mut out = vec![f64::INFINITY; n];
@@ -84,17 +84,25 @@ pub fn leaf_any<'py>(
     fverts: PyReadonlyArray1<'py, i64>,
 ) -> PyResult<Bound<'py, PyArray1<bool>>> {
     let (m, vp, fv) = (mask.as_slice()?, vptr.as_slice()?, fverts.as_slice()?);
-    if vp.is_empty() || *vp.last().unwrap() as usize > fv.len() || vp.windows(2).any(|w| w[1] <= w[0])
-        || fv.iter().any(|&v| v < 0 || v as usize >= m.len())
-    {
-        return Err(pyo3::exceptions::PyValueError::new_err("inconsistent leaf arrays"));
+    let bad = || pyo3::exceptions::PyValueError::new_err("inconsistent leaf arrays");
+    if vp.is_empty() || vp[0] < 0 || *vp.last().unwrap() as usize > fv.len() || vp.par_windows(2).any(|w| w[1] <= w[0]) {
+        return Err(bad());
     }
-    let r: Vec<bool> = py.detach(|| {
+    // the vertex ids are checked as they are read (one pass over fverts): a leaf with
+    // an id out of range is None
+    let r: Vec<Option<bool>> = py.detach(|| {
         (0..vp.len() - 1)
             .into_par_iter()
-            .map(|c| fv[vp[c] as usize..vp[c + 1] as usize].iter().any(|&v| m[v as usize]))
+            .map(|c| {
+                let occ = &fv[vp[c] as usize..vp[c + 1] as usize];
+                if occ.iter().any(|&v| v < 0 || v as usize >= m.len()) {
+                    return None;
+                }
+                Some(occ.iter().any(|&v| m[v as usize]))
+            })
             .collect()
     });
+    let r: Vec<bool> = r.into_iter().collect::<Option<_>>().ok_or_else(bad)?;
     Ok(r.into_pyarray(py))
 }
 
@@ -116,8 +124,8 @@ pub fn leaf_vertices<'py>(
         None => None,
     };
     if vp.len() != lm.len() + 1 || *vp.last().unwrap_or(&0) as usize > fv.len()
-        || vp.windows(2).any(|w| w[1] < w[0])
-        || vm.is_some_and(|m| fv.iter().any(|&v| v < 0 || v as usize >= m.len()))
+        || vp.par_windows(2).any(|w| w[1] < w[0])
+        || vm.is_some_and(|m| fv.par_iter().any(|&v| v < 0 || v as usize >= m.len()))
     {
         return Err(pyo3::exceptions::PyValueError::new_err("inconsistent leaf arrays"));
     }
@@ -147,8 +155,8 @@ pub fn leaf_min<'py>(
     fverts: PyReadonlyArray1<'py, i64>,
 ) -> PyResult<Bound<'py, PyArray1<f64>>> {
     let (x, vp, fv) = (vals.as_slice()?, vptr.as_slice()?, fverts.as_slice()?);
-    if vp.is_empty() || *vp.last().unwrap() as usize > fv.len() || vp.windows(2).any(|w| w[1] <= w[0])
-        || fv.iter().any(|&v| v < 0 || v as usize >= x.len())
+    if vp.is_empty() || *vp.last().unwrap() as usize > fv.len() || vp.par_windows(2).any(|w| w[1] <= w[0])
+        || fv.par_iter().any(|&v| v < 0 || v as usize >= x.len())
     {
         return Err(pyo3::exceptions::PyValueError::new_err("inconsistent leaf arrays"));
     }
@@ -186,7 +194,7 @@ pub fn leaf_mean<'py>(
     let p = crate::points(&points)?;
     let (lv, vp, fv) = (leaves.as_slice()?, vptr.as_slice()?, fverts.as_slice()?);
     if lv.iter().any(|&c| c < 0 || c as usize + 1 >= vp.len()) || *vp.last().unwrap_or(&0) as usize > fv.len()
-        || fv.iter().any(|&v| v < 0 || v as usize >= p.len())
+        || fv.par_iter().any(|&v| v < 0 || v as usize >= p.len())
     {
         return Err(pyo3::exceptions::PyValueError::new_err("inconsistent leaf arrays"));
     }
@@ -227,7 +235,7 @@ pub fn piece_geometry<'py>(
     let (pf, vp, pv, hp) = (pfptr.as_slice()?, pvptr.as_slice()?, pverts.as_slice()?, hp.as_slice()?);
     let n = pf.len().saturating_sub(1);
     if hp.len() != n || *pf.last().unwrap_or(&0) as usize + 1 > vp.len() || *vp.last().unwrap_or(&0) as usize > pv.len()
-        || pv.iter().any(|&v| v < 0 || v as usize >= p.len())
+        || pv.par_iter().any(|&v| v < 0 || v as usize >= p.len())
     {
         return Err(pyo3::exceptions::PyValueError::new_err("inconsistent piece arrays"));
     }

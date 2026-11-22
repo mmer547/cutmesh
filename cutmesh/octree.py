@@ -40,6 +40,13 @@ class Octree:
         return self.h0 / 2.0 ** l
 
     def centers(self, idx=None):
+        if idx is not None and np.asarray(idx).dtype == bool:
+            idx = np.flatnonzero(idx)
+        if _core is not None and hasattr(_core, "octree_centers") and type(self).centers is Octree.centers:
+            # the same arithmetic in parallel
+            return _core.octree_centers(np.ascontiguousarray(self.ijk, np.int64), np.ascontiguousarray(self.lev, np.int64),
+                                        None if idx is None else np.ascontiguousarray(idx, np.int64),
+                                        [float(v) for v in self.x0], float(self.h0))
         lev = self.lev if idx is None else self.lev[idx]
         ijk = self.ijk if idx is None else self.ijk[idx]
         hh = self.h0 / 2.0 ** lev
@@ -60,8 +67,8 @@ class Octree:
         """physical points of lattice coordinates in finest units (level Lmax)"""
         return self.x0 + lat * (self.h0 / (1 << self.Lmax))
 
-    def leaf_sizes(self):
-        return self.h0 / 2.0 ** self.lev
+    def leaf_sizes(self, idx=None):
+        return self.h0 / 2.0 ** (self.lev if idx is None else self.lev[idx])
 
     def leaf_volumes(self):
         return self.leaf_sizes() ** 3
@@ -127,11 +134,17 @@ class Octree:
         self._balanced = False
         if getattr(self, "src", None) is not None:
             self.src = self.src[~mask[:len(self.src)]]
-        keep = ~mask
-        child_ijk = (2 * self.ijk[idx])[:, None, :] + CHILD[None]
-        child_lev = np.repeat(self.lev[idx] + 1, 8)
-        self.ijk = np.concatenate([self.ijk[keep], child_ijk.reshape(-1, 3)])
-        self.lev = np.concatenate([self.lev[keep], child_lev])
+        if _core is not None and hasattr(_core, "octree_split"):
+            # the same arrays, built in parallel
+            self.ijk, self.lev = _core.octree_split(np.ascontiguousarray(self.ijk, np.int64),
+                                                    np.ascontiguousarray(self.lev, np.int64),
+                                                    np.ascontiguousarray(mask, bool))
+        else:
+            keep = ~mask
+            child_ijk = (2 * self.ijk[idx])[:, None, :] + CHILD[None]
+            child_lev = np.repeat(self.lev[idx] + 1, 8)
+            self.ijk = np.concatenate([self.ijk[keep], child_ijk.reshape(-1, 3)])
+            self.lev = np.concatenate([self.lev[keep], child_lev])
         self._lk = None                        # the leaf lookup is rebuilt when needed
         return len(idx)
 

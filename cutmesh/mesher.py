@@ -882,21 +882,36 @@ def _nearest_in(pts, keep, q, cache=None):
     callers keep every vertex that can be near enough to matter (inf, 0 when none).
     cache (a list): the answer of an earlier call with the same masked points and
     queries is reused (the snapping attempts repeat most of these queries)."""
+    q = np.asarray(q, float)
+    if _core is not None and hasattr(_core, "nearest_kept") and len(q):
+        # a grid search in Rust (the KD-tree's distances; no cache needed); where several
+        # points are equally near, the KD-tree's choice among them
+        keep = np.ascontiguousarray(keep, bool)
+        if not keep.any():
+            return np.full(len(q), np.inf), np.zeros(len(q), np.int64)
+        d, gj, u = _core.nearest_kept(np.ascontiguousarray(pts, float), keep,
+                                      np.ascontiguousarray(q.reshape(-1, 3), float))
+        if not u.all():
+            idx = np.flatnonzero(keep)
+            dt, jt = cKDTree(pts[idx]).query(q[~u])
+            d[~u] = dt
+            gj[~u] = idx[jt]
+        return d, gj
     idx = np.flatnonzero(keep)
     if not len(idx):
         return np.full(len(q), np.inf), np.zeros(len(q), np.int64)
     P = pts[idx]
-    q = np.asarray(q, float)
     if cache is not None:
         for eidx, eP, eq, ed, ej in cache:
             if (len(eidx) == len(idx) and eq.shape == q.shape and np.array_equal(eidx, idx)
                     and np.array_equal(eq, q) and np.array_equal(eP, P)):
                 return ed.copy(), ej.copy()
     d, j = cKDTree(P).query(q)
+    gj = idx[j]
     if cache is not None:
-        cache.append((idx, P, q.copy(), d.copy(), idx[j]))
+        cache.append((idx, P, q.copy(), d.copy(), gj.copy()))
         del cache[:-6]
-    return d, idx[j]
+    return d, gj
 
 
 def _points_kd(p):
@@ -1522,13 +1537,14 @@ def select_clip_cells(pc, cand, faces_of, cells_of_face, special, pts):
     return E, mixed, dropped
 
 
-def _finer_nearby(oc, c, hl, cand):
+def _finer_nearby(oc, cand):
     """per candidate leaf: a finer leaf centre within 0.95 of its size.  In the balanced
     tree that is a face neighbour split into finer leaves (Rust: a lookup instead of a
     KD-tree per level)."""
     if _core is not None and hasattr(_core, "finer_face_neighbour") and not any(oc.periodic):
         return _core.finer_face_neighbour(np.ascontiguousarray(oc.ijk, np.int64), np.ascontiguousarray(oc.lev, np.int64),
                                           [int(v) for v in oc.n], int(oc.Lmax), np.ascontiguousarray(cand, np.int64))
+    c, hl = oc.centers(), oc.leaf_sizes()
     fine = np.zeros(len(cand), bool)
     for lv in np.unique(oc.lev[cand]).tolist():
         m_ = oc.lev[cand] == lv
@@ -1904,12 +1920,12 @@ def generate(cfg, log=print):
         corner = np.all(sgn != 0, axis=1)
         n_old = 0      # after a pass: the leaves before this index were tested there, unsplit
         for it in range(max(nfill_g, nfill_w)):
-            c = oc.centers(); hl = oc.leaf_sizes()
             near = oc.lev < oc.Lmax
             # a leaf tested in the pass before and left unsplit gives the same answer
             # (the tests depend on the cell alone, and they only drop out pass by pass)
             near[:n_old] = False
-            near[near] = dom.approx_below(c[near], 0.9 * hl[near] + dom._rmax)
+            ni = np.flatnonzero(near)                 # centres and sizes of these leaves only
+            near[ni] = dom.approx_below(oc.centers(ni), 0.9 * oc.leaf_sizes(ni) + dom._rmax)
             mark = np.zeros(len(oc.lev), bool)
             nh = nw = 0
             if it < nfill_g:
@@ -1917,7 +1933,7 @@ def generate(cfg, log=print):
                 # the vertex planes): no corner is in the fluid, so the cut would drop the
                 # cell and close the gap there.  One level beyond Lmax.
                 cand = np.nonzero(near & (oc.lev <= Lmax))[0]
-                q = (c[cand][:, None, :] + 0.5 * hl[cand][:, None, None] * sgn[None]).reshape(-1, 3)
+                q = (oc.centers(cand)[:, None, :] + 0.5 * oc.leaf_sizes(cand)[:, None, None] * sgn[None]).reshape(-1, 3)
                 ins = dom.inside(q).reshape(len(cand), 27)
                 hole = ~ins[:, corner].any(1) & ins[:, ~corner].any(1)
                 mark[cand[hole]] = True
@@ -1926,7 +1942,7 @@ def generate(cfg, log=print):
                 # a solid wall inside the cell with no corner in the solid vanishes: the
                 # fluid on both sides joins (a bypass).  Split until a corner lands in it.
                 cand = np.nonzero(near)[0]
-                wall = _thin_wall_cells(dom, c[cand], hl[cand])
+                wall = _thin_wall_cells(dom, oc.centers(cand), oc.leaf_sizes(cand))
                 mark[cand[wall]] = True
                 nw = int(wall.sum())
             if not mark.any():
@@ -1947,19 +1963,19 @@ def generate(cfg, log=print):
             # wall, far from the plane of the finer cells' centres, and the faces between
             # them are strongly non-orthogonal.  Split it: the level transition moves off
             # the wall, into whole cells.
-            c = oc.centers(); hl = oc.leaf_sizes()
             near = oc.lev < Lmax
             if cand_old is not None:
                 near[:len(cand_old)] = False           # unsplit leaves: as in the pass before
-            near[near] = dom.approx_below(c[near], 0.9 * hl[near] + dom._rmax)
+            ni = np.flatnonzero(near)
+            near[ni] = dom.approx_below(oc.centers(ni), 0.9 * oc.leaf_sizes(ni) + dom._rmax)
             cand = np.nonzero(near)[0]
-            fr, cut = _fluid_fraction(dom, c[cand], hl[cand])
+            fr, cut = _fluid_fraction(dom, oc.centers(cand), oc.leaf_sizes(cand))
             cand = cand[cut & (fr > 0) & (fr < thr)]
             if cand_old is not None:                   # the unsplit leaves come first
                 cand = np.concatenate([np.flatnonzero(cand_old), cand])
             is_cand = np.zeros(len(oc.lev), bool)
             is_cand[cand] = True
-            fine = _finer_nearby(oc, c, hl, cand)
+            fine = _finer_nearby(oc, cand)
             mark = np.zeros(len(oc.lev), bool)
             mark[cand[fine]] = True
             if not mark.any():
