@@ -179,7 +179,10 @@ window.MESHDICT_SCHEMA = {
    "x-doc": "md-refine"
   },
   "gapRefinement": {
-   "type": "object",
+   "type": [
+    "object",
+    "null"
+   ],
    "description": "流体の厚みが thickness 未満の所（スロットの先端、狭い流路）の壁を level まで細分化する",
    "required": [
     "thickness",
@@ -206,7 +209,8 @@ window.MESHDICT_SCHEMA = {
   "autoGapRefinement": {
    "type": [
     "boolean",
-    "object"
+    "object",
+    "null"
    ],
    "description": "壁から向かいの壁までの隙間に cellsAcross 個のセルが入るレベル（上限 maxLevel）まで壁を細分化する。true で既定値",
    "additionalProperties": false,
@@ -372,7 +376,10 @@ window.MESHDICT_SCHEMA = {
       "x-widget": "solidList"
      },
      "wallProximity": {
-      "type": "object",
+      "type": [
+       "object",
+       "null"
+      ],
       "description": "ゾーンの面のうち STL から distance 以内の部分だけを level まで細分化する（界面を狭い隙間に置くとき）",
       "required": [
        "distance",
@@ -636,7 +643,10 @@ window.MESHDICT_SCHEMA = {
    "x-doc": "ami"
   },
   "baseMesh": {
-   "type": "object",
+   "type": [
+    "object",
+    "null"
+   ],
    "description": "ベースメッシュ。省略時は直交格子。cylindrical で回転軸まわりの同心ブロック",
    "additionalProperties": false,
    "properties": {
@@ -784,8 +794,11 @@ window.MESHDICT_SCHEMA = {
    "x-doc": "cylbase"
   },
   "addLayers": {
-   "type": "object",
-   "description": "境界層（壁パッチにプリズム層を追加）。{} で既定値",
+   "type": [
+    "object",
+    "null"
+   ],
+   "description": "境界層（壁パッチにプリズム層を追加）。{} で既定値、null で付けない",
    "additionalProperties": false,
    "properties": {
     "patches": {
