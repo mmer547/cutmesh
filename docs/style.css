@@ -131,6 +131,16 @@ figcaption { font-size: 0.88rem; color: var(--fg-soft); margin-top: 8px; }
 .grid { display: grid; gap: 20px; }
 .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+/* update history (top page) */
+.news { list-style: none; padding: 0; margin: 1em 0 0.4em; border: 1px solid var(--line); border-radius: var(--radius); }
+.news li { display: grid; grid-template-columns: 6.2em 4.4em minmax(0, 1fr); gap: 4px 14px; padding: 10px 16px; border-top: 1px solid var(--line); }
+.news li:first-child { border-top: 0; }
+.news time { color: var(--fg-faint); font-variant-numeric: tabular-nums; }
+.news .ver { justify-self: start; align-self: start; margin-top: 0.15em; padding: 0 7px; border-radius: 4px;
+  font-family: var(--mono); font-size: 0.82rem; line-height: 1.7; color: var(--accent); background: var(--accent-soft); }
+.news p { margin: 0; font-size: 0.94rem; }
+.news-note { margin: 0 0 1.6em; font-size: 0.85rem; color: var(--fg-faint); }
+
 .cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin: 1.2em 0; }
 .card { border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; background: var(--bg-soft); }
 .card h3 { margin: 0 0 0.3em; font-size: 1rem; }
@@ -154,6 +164,8 @@ details pre { margin: 0.6em 0 0.4em; }
     padding: 0 0 12px; }
   .hero { grid-template-columns: minmax(0, 1fr); padding-top: 24px; }
   .cards, .grid.three { grid-template-columns: minmax(0, 1fr); }
+  .news li { grid-template-columns: auto minmax(0, 1fr); }
+  .news p { grid-column: 1 / -1; }
 }
 @media (max-width: 640px) {
   .grid.two { grid-template-columns: minmax(0, 1fr); }
