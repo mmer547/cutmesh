@@ -910,38 +910,83 @@ class _PosList:
     """CutContext.pos (a list of [x, y, z] that grows) over an array of the first
     positions: a row becomes a list when it is read, instead of the whole array at once
     (pts.tolist() of ten million points takes seconds).  Writes to the first rows go
-    into the array, which the caller shares on purpose."""
+    into the array, which the caller shares on purpose.  Rows added as an array (the
+    cut kernel's new points) stay an array too."""
 
     def __init__(self, a):
         self.a, self.n0, self.added = a, len(a), []
+        a = np.asarray(a)
+        self.b = np.zeros((0,) + a.shape[1:], a.dtype)        # rows n0 .. n0 + len(b)
+
+    def _row(self, x):
+        return x.tolist()
 
     def __len__(self):
-        return self.n0 + len(self.added)
+        return self.n0 + len(self.b) + len(self.added)
 
     def __getitem__(self, v):
         if isinstance(v, slice):
             return [self[i] for i in range(*v.indices(len(self)))]
         if v < 0:
             v += len(self)
-        return self.a[v].tolist() if v < self.n0 else self.added[v - self.n0]
+        if v < self.n0:
+            return self._row(self.a[v])
+        v -= self.n0
+        return self._row(self.b[v]) if v < len(self.b) else self.added[v - len(self.b)]
 
     def __setitem__(self, v, x):
         if v < 0:
             v += len(self)
         if v < self.n0:
             self.a[v] = x
+            return
+        v -= self.n0
+        if v < len(self.b):
+            self.b[v] = x
         else:
-            self.added[v - self.n0] = x
+            self.added[v - len(self.b)] = x
 
     def append(self, x):
         self.added.append(x)
 
+    def _tail(self):
+        return np.array(self.added, self.b.dtype).reshape((-1,) + self.b.shape[1:])
+
     def extend(self, xs):
-        self.added.extend(xs)
+        if isinstance(xs, np.ndarray):
+            self.b = np.concatenate([self.b, self._tail(), np.asarray(xs, self.b.dtype).reshape((-1,) + self.b.shape[1:])])
+            self.added = []
+        else:
+            self.added.extend(xs)
 
     def array(self):
         """np.array(positions)"""
-        return np.concatenate([self.a, np.array(self.added, float).reshape(-1, 3)])
+        return np.concatenate([np.asarray(self.a, self.b.dtype), self.b, self._tail()])
+
+
+class _PhiList(_PosList):
+    """CutContext.phi (a list of floats that grows) over the level-set array the same
+    way (phi.tolist() of ten million values is a third of a second, and the kernel
+    turns it back into an array)"""
+
+    def _row(self, x):
+        return float(x)
+
+
+class _ParList(_PosList):
+    """CutContext.new_parents (a list of (lo, hi) that grows) the same way, from the
+    rows given (the cut kernel's come as an array)"""
+
+    def __init__(self, rows=()):
+        super().__init__(np.array(list(rows), np.int64).reshape(-1, 2))
+
+    def _row(self, x):
+        return (int(x[0]), int(x[1]))
+
+
+def _parents_array(par):
+    """np.array(ctx.new_parents) as (n, 2)"""
+    return par.array() if isinstance(par, _PosList) else np.array(par, np.int64).reshape(-1, 2)
 
 
 class _PosView:
@@ -1009,6 +1054,17 @@ class _LazyMap:
 
     def update(self, other):
         self.d.update(other)
+
+
+class _LazyOptMap(_LazyMap):
+    """_LazyMap whose values may be None (the chord / pinch caches): the lookup says
+    whether it has the key, (found, value)"""
+
+    def get(self, k, default=None):
+        if k in self.d:
+            return self.d[k]
+        found, v = self.lookup(k)
+        return v if found else default
 
 
 class _FaceOcc:
@@ -1082,7 +1138,7 @@ def _cut_with_fallback_rs(ctx, items, shared_cap, hk, csize, P0, max_iter=4, lea
     st = hk[1] if hk else {}
     n0 = len(P0)
     Pa = np.concatenate([np.asarray(P0, float), np.array(ctx.pos[n0:], float).reshape(-1, 3)])
-    pa = np.array(ctx.phi, float)
+    pa = ctx.phi.array() if isinstance(ctx.phi, _PhiList) else np.array(ctx.phi, float)
     pinch_cb = cap_cb = None
     if ctx.pinch_hook is not None:
         ph = ctx.pinch_hook
@@ -1138,20 +1194,36 @@ def _cut_with_fallback_rs(ctx, items, shared_cap, hk, csize, P0, max_iter=4, lea
     nsharp = sum(1 for ch_, did in used if ch_ or did)
     res = K.results_csr(not shared_cap) if leaf_csr is not None else K.results()
     if hasattr(K, "take_caches"):
-        # the crossing cache and sub-face ids stay in Rust, looked up when asked for
-        newp, newv, newpar, nid, clog, nf = K.export_lazy()
+        # the crossing cache, sub-face ids and chord / pinch caches stay in Rust, looked
+        # up when asked for (taken first: no log of the chord / pinch changes then)
         caches = K.take_caches()
+        newp, newv, newpar, nid, clog, nf = K.export_lazy()
         ctx.cache = _LazyMap(ctx.cache, caches.cache_get)
         ctx.subids = _LazyMap(ctx.subids, lambda k: caches.subid_get((k[0], list(k[1]))))
+        if hasattr(caches, "chord_get"):
+            # the kernel's maps started from these dicts and have every entry since
+            ctx.chord_cache = _LazyOptMap({}, caches.chord_get)
+            ctx.pinch_cache = _LazyOptMap({}, caches.pinch_get)
     else:
         newp, newv, newpar, nid, cd, sd, clog, nf = K.export()
         ctx.cache.update(cd)
         ctx.subids.update(sd)
     del K
-    ctx.pos.extend(newp.tolist())
-    ctx.phi.extend([0.0] * len(newp))
+    if isinstance(ctx.pos, _PosList):
+        ctx.pos.extend(newp)
+    else:
+        ctx.pos.extend(newp.tolist())
+    if isinstance(ctx.phi, _PhiList):
+        ctx.phi.extend(np.zeros(len(newp)))
+    else:
+        ctx.phi.extend([0.0] * len(newp))
     ctx.new_vertices.extend(newv)
-    ctx.new_parents.extend(newpar)
+    if isinstance(newpar, np.ndarray):
+        if not isinstance(ctx.new_parents, _ParList):
+            ctx.new_parents = _ParList(ctx.new_parents)
+        ctx.new_parents.extend(newpar)
+    else:
+        ctx.new_parents.extend(newpar)
     ctx.next_id = nid
     for which, key, val in clog:
         (ctx.chord_cache if which == 0 else ctx.pinch_cache)[key] = val
@@ -1213,6 +1285,39 @@ def cut_with_fallback(ctx, items, shared_cap, hk, csize, max_iter=4, P0=None, fa
             do(k)
     nsharp = sum(1 for ch, did in used if ch or did)
     return res, nsharp, nfb
+
+
+def _leaf_centres(pts, cells, cptr, fptr, fverts):
+    """mean of the vertex occurrences of each leaf's faces (np.add.at column by column,
+    i.e. added in order, then divided by their number; Rust: faceops.leaf_mean)"""
+    cells = np.asarray(cells, np.int64)
+    if _core is not None and hasattr(_core, "leaf_mean"):
+        return _core.leaf_mean(np.ascontiguousarray(pts, float), cells,
+                               np.ascontiguousarray(fptr[cptr], np.int64), np.ascontiguousarray(fverts, np.int64))
+    occ = _cat_ranges(fptr[cptr[cells]], fptr[cptr[cells + 1]])
+    own = np.repeat(np.arange(len(cells)), fptr[cptr[cells + 1]] - fptr[cptr[cells]])
+    x = pts[fverts[occ]]
+    cen = np.stack([np.bincount(own, x[:, k], len(cells)) for k in range(3)], 1)
+    return cen / np.bincount(own, minlength=len(cells))[:, None]
+
+
+def _faces_cells(f_key, f_cell, n):
+    """cells_of_face(fid) -> the cells holding face fid, in face order (as a stable sort
+    by key gives them): a lookup of the first two (Rust first_two) when no face has more"""
+    if _core is not None and hasattr(_core, "first_two") and (not len(f_key) or np.bincount(f_key).max() <= 2):
+        k1, k2 = _core.first_two(np.ascontiguousarray(f_key, np.int64), np.ascontiguousarray(f_cell, np.int64), int(n))
+
+        def cells_of_face(fid):
+            a, b = int(k1[fid]), int(k2[fid])
+            return [] if a < 0 else [a] if b < 0 else [a, b]
+        cells_of_face.k12 = (k1, k2)          # for PlaneClipRs.select_cells
+        return cells_of_face
+    ko = _argsort_stable(f_key)
+    ks = f_key[ko]
+
+    def cells_of_face(fid):
+        return f_cell[ko[np.searchsorted(ks, fid):np.searchsorted(ks, fid, side="right")]].tolist()
+    return cells_of_face
 
 
 def _cat_ranges(lo, hi):
@@ -2282,7 +2387,8 @@ def generate(cfg, log=print):
     bulk_zone = np.full(nleaf, -1, np.int64)
     cut_leaves = np.nonzero(cls == 0)[0]
     positions = _PosList(pts)          # shares pts (both are updated together below)
-    ctx = CutContext(positions, phi_d.tolist(), M_nkeys := int(f_key.max()) + 1)
+    ctx = CutContext(positions, _PhiList(phi_d) if _core is not None and hasattr(_core, "CutKernel")
+                     else phi_d.tolist(), M_nkeys := int(f_key.max()) + 1)
     fc = cfg["featureCaps"]
     hk = make_feature_hook(dom_feat, csize) if fc in ("both", "domain", True) else None
     if hk:
@@ -2307,13 +2413,7 @@ def generate(cfg, log=print):
         cz = np.maximum.reduceat(fz.astype(np.int8), cptr[:-1]) > 0
         cand_b = np.nonzero(cz & bulk_alive)[0]
         if len(cand_b):
-            occ_b = _cat_ranges(fptr[cptr[cand_b]], fptr[cptr[cand_b + 1]])
-            own_b = np.repeat(np.arange(len(cand_b)), fptr[cptr[cand_b + 1]] - fptr[cptr[cand_b]])
-            # np.add.at, column by column (both add in index order)
-            xb = pts[fverts[occ_b]]
-            cen = np.stack([np.bincount(own_b, xb[:, k], len(cand_b)) for k in range(3)], 1)
-            del xb
-            cen /= np.bincount(own_b, minlength=len(cand_b))[:, None]
+            cen = _leaf_centres(pts, cand_b, cptr, fptr, fverts)
             _, dce = dom_ccv.closest(cen)
             cb = cand_b[dce < csize[cand_b]].tolist()
     # only cells with a face that can matter there (several surface vertices) are visited:
@@ -2423,12 +2523,7 @@ def generate(cfg, log=print):
             mphi = np.minimum.reduceat(np.minimum.reduceat(phi_d[fverts], fptr[:-1]), cptr[:-1])
         cnd = np.nonzero((cls >= 0) & (mphi < 0.9 * csize))[0]
         if len(cnd):
-            occ_c = _cat_ranges(fptr[cptr[cnd]], fptr[cptr[cnd + 1]])
-            own_c = np.repeat(np.arange(len(cnd)), fptr[cptr[cnd + 1]] - fptr[cptr[cnd]])
-            xc = pts[fverts[occ_c]]           # np.add.at column by column (the same order)
-            cen = np.stack([np.bincount(own_c, xc[:, k], len(cnd)) for k in range(3)], 1)
-            del xc
-            cen /= np.bincount(own_c, minlength=len(cnd))[:, None]
+            cen = _leaf_centres(pts, cnd, cptr, fptr, fverts)
             _, df = dom_feat.closest(cen)
             ok = df < 0.9 * csize[cnd]
             if ccv._kd is not None:
@@ -2454,16 +2549,21 @@ def generate(cfg, log=print):
                         if len(m_):
                             phi_z[i][m_] = z["geom"].sdf(pts[m_])
             pc.attach_rust(_core)              # points and level set are final now
-            ko = _argsort_stable(f_key)
-            ks = f_key[ko]
-
-            def cells_of_face(fid):
-                return f_cell[ko[np.searchsorted(ks, fid):np.searchsorted(ks, fid, side="right")]].tolist()
-            clip, mixed, nback = select_clip_cells(pc, cnd[ok].tolist(), leaf_faces, cells_of_face, special, pts)
-            # the faces they share with level-set cells: cut by the plain rule there (no
-            # chord or pinch points), which select_clip_cells checked the clip agrees with
-            ctx.plain_faces = set(fid for c in clip for fid, _ in leaf_faces(c)
-                                  if any(o not in clip for o in cells_of_face(fid)))
+            cells_of_face = _faces_cells(f_key, f_cell, M_nkeys)
+            k12 = getattr(cells_of_face, "k12", None)
+            # the faces the clipped cells share with level-set cells: cut by the plain rule
+            # there (no chord or pinch points), which select_clip_cells checked the clip
+            # agrees with
+            if k12 is not None and pc._rs is not None and hasattr(pc._rs, "select_cells"):
+                # the same selection in Rust (featclip.rs), with those faces
+                i64 = lambda a: np.ascontiguousarray(a, np.int64)            # noqa: E731
+                clip, mixed, nback, pf_ = pc._rs.select_cells(cnd[ok].tolist(), sorted(int(c) for c in special),
+                                                              i64(cptr), i64(fptr), i64(fverts), i64(f_key), *k12)
+                clip, mixed, ctx.plain_faces = set(clip), set(mixed), set(pf_)
+            else:
+                clip, mixed, nback = select_clip_cells(pc, cnd[ok].tolist(), leaf_faces, cells_of_face, special, pts)
+                ctx.plain_faces = set(fid for c in clip for fid, _ in leaf_faces(c)
+                                      if any(o not in clip for o in cells_of_face(fid)))
         keep = [k for k, (_, ci) in enumerate(items) if ci not in clip]
         items = [items[k] for k in keep]
         cl = [cl[k] for k in keep]
@@ -2515,6 +2615,9 @@ def generate(cfg, log=print):
     if clip:
         hook, st = hk
         nbad = nsl = nfac = ngap = 0
+        # volume and convexity of the pieces in Rust (the same arithmetic), on the points
+        # as the context holds them
+        rs_vb = isinstance(ctx.pos, _PosList) and _core is not None and hasattr(_core, "pieces_volume_bad")
         for ci in sorted(clip):
             st["cell"] = ci; st["forbid"] = False
             creases, walls = set(), set()
@@ -2523,9 +2626,12 @@ def generate(cfg, log=print):
                 continue
             bulk_alive[ci] = False
             kept = False
-            for comp in split_components(neg):
+            comps = split_components(neg)
+            vb = _core.pieces_volume_bad(ctx.pos.a, ctx.pos.b, ctx.pos.added, comps, float(csize[ci])) \
+                if rs_vb else None
+            for j, comp in enumerate(comps):
                 # faces lying on a wall plane alone (vertices snapped onto it): no volume
-                if _piece_volume(ctx.pos, comp) < 1e-6 * csize[ci] ** 3:
+                if (vb[j][0] if vb is not None else _piece_volume(ctx.pos, comp)) < 1e-6 * csize[ci] ** 3:
                     continue
                 # a sliver in a solid-side cell is kept where its caps lie on the walls
                 # (bent over a crease, or in one wall plane); one between a chord and a
@@ -2547,7 +2653,7 @@ def generate(cfg, log=print):
                         ngap += 1
                         continue
                 kept = True
-                nbad += _piece_bad(ctx.pos, comp, csize[ci])
+                nbad += vb[j][1] if vb is not None else _piece_bad(ctx.pos, comp, csize[ci])
                 pieces[2].append([comp, ci, -1])
             nsl += kept and cls[ci] > 0
         log(f"exact feature cut: {len(clip)} cells clipped by the STL planes ({nsl} solid-side cells"
@@ -2626,7 +2732,7 @@ def generate(cfg, log=print):
             next_id = ctx.next_id
             P = positions.array()
             newv = np.array(ctx.new_vertices, np.int64)
-            par = np.array(ctx.new_parents, np.int64).reshape(-1, 2)
+            par = _parents_array(ctx.new_parents)
             cutp = _Pieces.from_lists([x for pc, (negc, posc) in zip(tl, res)
                                        for x in [[comp, pc[1], zi] for comp in negc]
                                        + [[comp, pc[1], pc[2]] for comp in posc]])

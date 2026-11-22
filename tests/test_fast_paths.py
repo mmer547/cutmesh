@@ -8,6 +8,7 @@ python -m unittest discover -s tests
 import contextlib
 import copy
 import io
+import itertools
 import json
 import os
 import sys
@@ -353,7 +354,7 @@ class RustCutKernel(unittest.TestCase):
                 if k in ("merge_wall_faces", "contact_candidates", "surface_contact_samples",
                          "split_samples", "cut_batch_csr", "face_sign_counts", "vertex_min",
                          "leaf_any", "leaf_vertices", "finer_face_neighbour", "leaf_min", "leaf_mean", "feature_hook", "piece_geometry", "pair_faces", "first_two",
-                         "PlaneClipRs"):
+                         "pieces_volume_bad", "PlaneClipRs"):
                     raise AttributeError(k)
                 return getattr(real, k)
         with mock.patch.object(mesher, "_rust_cut_ok", lambda ctx, hk: False), \
@@ -366,6 +367,54 @@ class RustCutKernel(unittest.TestCase):
         fa, fb = A["faces"], B["faces"]
         self.assertEqual(len(fa), len(fb))
         self.assertTrue(all(list(x) == list(y) for x, y in zip(fa, fb)))
+
+    def test_context_after_kernel(self):
+        # the cut context after the Rust kernel holds what the Python cut leaves there:
+        # caches (looked up in Rust), points, level set, parents, face ids
+        from test_exact_cut import turned_cube
+        got = {"rs": [], "py": []}
+        orig = mesher.cut_with_fallback
+
+        def capture(tag):
+            def f(ctx, *a, **k):
+                r = orig(ctx, *a, **k)
+                got[tag].append(ctx)
+                return r
+            return f
+        with tempfile.TemporaryDirectory() as d:
+            turned_cube(os.path.join(d, "cube.stl"))
+            p = os.path.join(d, "m.json")
+            with open(p, "w") as f:
+                json.dump({"domain": "cube.stl", "baseCellSize": 0.15, "featureLevel": 1,
+                           "surfaceRefinement": {"default": 1}}, f)
+            with mock.patch.object(mesher, "cut_with_fallback", capture("rs")):
+                mesher.generate(mesher.load_config(p), log=lambda s: None)
+            with mock.patch.object(mesher, "cut_with_fallback", capture("py")), \
+                    mock.patch.object(mesher, "_rust_cut_ok", lambda ctx, hk: False):
+                mesher.generate(mesher.load_config(p), log=lambda s: None)
+        self.assertTrue(got["rs"] and len(got["rs"]) == len(got["py"]))
+        for cr, cp in zip(got["rs"], got["py"]):
+            self.assertIsInstance(cr.chord_cache, mesher._LazyMap)
+            for name in ("cache", "subids", "chord_cache", "pinch_cache"):
+                dp, dr = getattr(cp, name), getattr(cr, name)
+                if name != "pinch_cache":
+                    self.assertGreater(len(dp), 0, name)
+                for k, v in dp.items():
+                    self.assertIn(k, dr)
+                    self.assertEqual(dr[k], v, (name, k))
+                missing = {"cache": (-5, -4), "subids": (-5, (-4, -3))}.get(name, (-5, -4, -3))
+                self.assertNotIn(missing, dr)
+            self.assertIsNone(cr.chord_cache.get((-5, -4, -3)))
+            self.assertEqual(cr.next_id, cp.next_id)
+            self.assertEqual(len(cr.pos), len(cp.pos))
+            np.testing.assert_array_equal(cr.pos.array(), cp.pos.array())
+            np.testing.assert_array_equal(cr.phi.array(), np.asarray(cp.phi[:len(cp.phi)], float))
+            np.testing.assert_array_equal(mesher._parents_array(cr.new_parents), mesher._parents_array(cp.new_parents))
+            self.assertEqual(list(cr.new_vertices), list(cp.new_vertices))
+            self.assertEqual(set(cr.onfeat), set(cp.onfeat))
+            v = len(cr.pos) - 1
+            self.assertEqual((cr.pos[v], cr.phi[v], cr.new_parents[len(cr.new_parents) - 1]),
+                             (cp.pos[v], cp.phi[v], cp.new_parents[len(cp.new_parents) - 1]))
 
     def test_turned_cube(self):
         # convex feature edges: chord points, split caps, the exact feature cut
@@ -552,6 +601,36 @@ class RustFaceOps(unittest.TestCase):
             np.minimum.at(ref, fverts, np.repeat(val, fn))
             np.testing.assert_array_equal(geometry._core.vertex_min(nv + 3, fptr, fverts, val), ref)
 
+    @unittest.skipUnless(hasattr(geometry._core, "pieces_volume_bad"), "Rust extension not built")
+    def test_pieces_volume_bad(self):
+        # mesher._piece_volume / _piece_bad of the clipped cells' pieces, the points read
+        # from a _PosList (its array, its array block and its list of added rows)
+        rng = np.random.default_rng(5)
+        nbad = 0
+        for t in range(40):
+            pos = mesher._PosList(rng.random((30, 3)))
+            pos.extend(rng.random((10, 3)))
+            pos.extend([list(x) for x in rng.random((10, 3))])
+            pos.append([float(x) for x in rng.random(3)])
+            comps = []
+            for _ in range(int(rng.integers(1, 4))):
+                comps.append([(int(f), [int(v) for v in rng.choice(len(pos), int(rng.integers(3, 7)), replace=False)])
+                              for f in range(int(rng.integers(4, 9)))])
+            if t % 5 == 0:                          # a real cell: a unit cube's faces
+                q = [[0, 1, 3, 2], [4, 6, 7, 5], [0, 4, 5, 1], [2, 3, 7, 6], [0, 2, 6, 4], [1, 5, 7, 3]]
+                base = len(pos)
+                for x in itertools.product((0.0, 1.0), repeat=3):
+                    pos.append([x[2], x[1], x[0]])
+                comps.append([(f, [base + v for v in p]) for f, p in enumerate(q)])
+            h = float(rng.random()) + 0.1
+            got = geometry._core.pieces_volume_bad(pos.a, pos.b, pos.added, comps, h)
+            ref = [(mesher._piece_volume(pos, c), mesher._piece_bad(pos, c, h)) for c in comps]
+            self.assertEqual(got, ref)
+            nbad += sum(b for _, b in got)
+        self.assertGreater(nbad, 0)
+        with self.assertRaises(ValueError):
+            geometry._core.pieces_volume_bad(pos.a, pos.b, pos.added, [[(0, [0, 1, len(pos)])]], 1.0)
+
     def test_piece_geometry(self):
         # volumes and "bad" flags of pieces as the NumPy code of the merging stage
         rng = np.random.default_rng(21)
@@ -702,6 +781,98 @@ class RustPlaneClip(unittest.TestCase):
             pl = A.planes(tris)
             self.assertEqual(pl, B.planes(tris))
             np.testing.assert_array_equal(A.groups(pl), B.groups(pl))
+
+    @staticmethod
+    def _grid_cells(T, h, shift):
+        """a regular grid around the STL triangles T, its vertices near the walls snapped
+        onto them, and the hex cells near the walls as [(face id, polygon)]"""
+        from cutmesh.featclip import PlaneClip
+        with tempfile.TemporaryDirectory() as d:
+            geometry.write_stl_ascii(os.path.join(d, "s.stl"), [("walls", T)])
+            dom = geometry.Surface(geometry.read_stl(os.path.join(d, "s.stl")))
+        feat = geometry.FeatureSet(dom.feature_edges(30.0), L=dom.L)
+        g = np.arange(-1.0, 1.0 + 1e-9, h) + shift
+        n = len(g)
+        pts = np.stack(np.meshgrid(g, g, g, indexing="ij"), -1).reshape(-1, 3)
+        phi = dom.sdf(pts)
+        snap = np.abs(phi) < 0.25 * h
+        cp, _, _ = dom.closest(pts[snap])
+        pts[snap] = cp
+        phi[snap] = 0.0
+        vid = np.arange(n ** 3).reshape(n, n, n)
+        faces, cells = {}, []
+        for i in range(n - 1):
+            for j in range(n - 1):
+                for k in range(n - 1):
+                    v = vid[i:i + 2, j:j + 2, k:k + 2]
+                    if np.abs(phi[v.ravel()]).min() > 1.5 * h:
+                        continue
+                    quads = [[v[0, 0, 0], v[0, 0, 1], v[0, 1, 1], v[0, 1, 0]], [v[1, 0, 0], v[1, 1, 0], v[1, 1, 1], v[1, 0, 1]],
+                             [v[0, 0, 0], v[1, 0, 0], v[1, 0, 1], v[0, 0, 1]], [v[0, 1, 0], v[0, 1, 1], v[1, 1, 1], v[1, 1, 0]],
+                             [v[0, 0, 0], v[0, 1, 0], v[1, 1, 0], v[1, 0, 0]], [v[0, 0, 1], v[1, 0, 1], v[1, 1, 1], v[0, 1, 1]]]
+                    cells.append([(faces.setdefault(tuple(sorted(int(x) for x in q)), len(faces)), [int(x) for x in q])
+                                  for q in quads])
+
+        def clip():
+            pc = PlaneClip(dom, pts, phi, h, feat)
+            pc.zero_edge = {}
+            return pc
+        return clip, pts, cells, len(faces)
+
+    @staticmethod
+    def _l_prism():
+        """an L-shaped prism, turned: convex edges and a concave one"""
+        L = [(-0.7, -0.7), (0.7, -0.7), (0.7, 0.0), (0.0, 0.0), (0.0, 0.7), (-0.7, 0.7)]
+        z0, z1 = -0.6, 0.6
+        T = []
+        for i in range(6):
+            (x0, y0), (x1, y1) = L[i], L[(i + 1) % 6]
+            T += [[(x0, y0, z0), (x1, y1, z0), (x1, y1, z1)], [(x0, y0, z0), (x1, y1, z1), (x0, y0, z1)]]
+        for i in (4, 5, 0, 1):                     # fan from the reflex corner (0, 0)
+            (x0, y0), (x1, y1) = L[i], L[(i + 1) % 6]
+            T += [[(0.0, 0.0, z1), (x0, y0, z1), (x1, y1, z1)], [(0.0, 0.0, z0), (x1, y1, z0), (x0, y0, z0)]]
+        a, b, c = np.radians([19.0, 27.0, 11.0])
+        Rx = np.array([[1, 0, 0], [0, np.cos(a), -np.sin(a)], [0, np.sin(a), np.cos(a)]])
+        Ry = np.array([[np.cos(b), 0, np.sin(b)], [0, 1, 0], [-np.sin(b), 0, np.cos(b)]])
+        Rz = np.array([[np.cos(c), -np.sin(c), 0], [np.sin(c), np.cos(c), 0], [0, 0, 1]])
+        return np.array(T, float) @ (Rz @ Ry @ Rx).T
+
+    @unittest.skipUnless(hasattr(geometry._core, "PlaneClipRs") and hasattr(geometry._core.PlaneClipRs, "select_cells"),
+                         "Rust extension not built")
+    def test_select_cells(self):
+        """mesher.select_clip_cells in Rust (PlaneClipRs.select_cells): the same cells,
+        mixed faces, drops and shared faces, and the clip caches as the Python code
+        leaves them"""
+        from test_exact_cut import turned_cube
+        with tempfile.TemporaryDirectory() as d:
+            cube = turned_cube(os.path.join(d, "c.stl"))
+        seen = [0, 0, 0]
+        for T, h in ((cube, 0.11), (self._l_prism(), 0.1)):
+            clip, pts, cells, nfaces = self._grid_cells(T, h, 0.013)
+            A, B = clip(), clip()
+            B.attach_rust(geometry._core)
+            cptr = mesher._ptr([len(fl) for fl in cells])
+            f_key = np.array([fid for fl in cells for fid, _ in fl], np.int64)
+            fptr = mesher._ptr([len(p) for fl in cells for _, p in fl])
+            fverts = np.array([v for fl in cells for _, p in fl for v in p], np.int64)
+            f_cell = np.repeat(np.arange(len(cells)), np.diff(cptr))
+            cof = mesher._faces_cells(f_key, f_cell, nfaces)
+            self.assertIsNotNone(getattr(cof, "k12", None))
+            cand = [c for c in range(len(cells)) if c % 3 != 1] + [5, 0]
+            special = set(range(0, len(cells), 17))
+            E, mixed, nback = mesher.select_clip_cells(A, cand, lambda c: cells[c], cof, special, pts)
+            E2, mixed2, nback2, plain2 = B._rs.select_cells(cand, sorted(special), cptr, fptr, fverts, f_key, *cof.k12)
+            self.assertEqual((sorted(E), sorted(mixed), nback), (E2, mixed2, nback2))
+            self.assertEqual(sorted(set(fid for c in E for fid, _ in cells[c] if any(o not in E for o in cof(fid)))),
+                             plain2)
+            seen = [seen[0] + len(E), seen[1] + len(mixed), seen[2] + nback]
+            for fl in cells:
+                for fid, poly in fl:
+                    ra, pa = A.clip_face(fid, poly)
+                    rb, pb = B.clip_face(fid, poly)
+                    self.assertEqual(ra, rb)
+                    np.testing.assert_array_equal(np.reshape(pa, (-1, 3)), np.reshape(pb, (-1, 3)))
+        self.assertTrue(all(seen), seen)
 
 
 @unittest.skipUnless(geometry.rust_available() and hasattr(geometry._core, "feature_hook"),

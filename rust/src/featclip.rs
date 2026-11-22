@@ -380,6 +380,47 @@ impl PlaneClipRs {
         store(self, recs, p, pl)
     }
 
+    /// ls_compatible (see the method)
+    fn ls_compatible_rs(&mut self, fid: i64, poly: &[i64]) -> bool {
+        let (recs, _) = self.clip_face_rs(fid, poly);
+        let ph: Vec<f64> = poly.iter().map(|&v| self.phi[v as usize]).collect();
+        let m = poly.len();
+        if !ph.iter().any(|&v| v > 0.0) {
+            return recs.len() == m && recs.iter().all(|r| matches!(r, Rec::V(_)));
+        }
+        if !ph.iter().any(|&v| v < 0.0) {
+            return recs.is_empty();
+        }
+        if recs.iter().any(|r| matches!(r, Rec::F(..))) {
+            return false;
+        }
+        if !self.zero_edge.is_empty() {
+            for i in 0..m {
+                let (a, b) = (poly[i], poly[(i + 1) % m]);
+                if ph[i] == 0.0 && ph[(i + 1) % m] == 0.0 && self.zero_edge.contains_key(&(fid, a.min(b), a.max(b))) {
+                    return false;
+                }
+            }
+        }
+        let mut want_v: Vec<i64> = poly.iter().zip(&ph).filter(|p_| *p_.1 <= 0.0).map(|p_| *p_.0).collect();
+        let mut want_e: Vec<(i64, i64)> = (0..m)
+            .filter(|&i| ph[i] * ph[(i + 1) % m] < 0.0)
+            .map(|i| (poly[i].min(poly[(i + 1) % m]), poly[i].max(poly[(i + 1) % m])))
+            .collect();
+        let mut got_v: Vec<i64> = recs.iter().filter_map(|r| if let Rec::V(v) = r { Some(*v) } else { None }).collect();
+        let got_e: Vec<(i64, i64)> = recs.iter().filter_map(|r| if let Rec::E(a, b, _) = r { Some((*a, *b)) } else { None }).collect();
+        for v in [&mut want_v, &mut got_v] {
+            v.sort_unstable();
+            v.dedup();
+        }
+        want_e.sort_unstable();
+        want_e.dedup();
+        let mut ge = got_e.clone();
+        ge.sort_unstable();
+        ge.dedup();
+        got_v == want_v && got_e.len() == want_e.len() && ge == want_e
+    }
+
     fn rec_py<'py>(py: Python<'py>, r: &Rec) -> PyResult<Bound<'py, PyTuple>> {
         match r {
             Rec::V(v) => PyTuple::new(py, [("v").into_pyobject(py)?.into_any(), v.into_pyobject(py)?.into_any()]),
@@ -497,42 +538,191 @@ impl PlaneClipRs {
         if poly.iter().any(|&v| v < 0 || v as usize >= self.pts.len()) {
             return Err(pyo3::exceptions::PyValueError::new_err("vertex id out of range"));
         }
-        let (recs, _) = self.clip_face_rs(fid, &poly);
-        let ph: Vec<f64> = poly.iter().map(|&v| self.phi[v as usize]).collect();
-        let m = poly.len();
-        if !ph.iter().any(|&v| v > 0.0) {
-            return Ok(recs.len() == m && recs.iter().all(|r| matches!(r, Rec::V(_))));
+        Ok(self.ls_compatible_rs(fid, &poly))
+    }
+
+    /// mesher.select_clip_cells on the leaf arrays (cptr, fptr, fverts, f_key) with the
+    /// cells of each face (k1, k2: the first and second, -1 if none; no face has more):
+    /// (clipped cells, mixed faces, cells dropped, faces the clipped cells share with
+    /// others), sorted.  The same tests in the same order per face, so the clip and
+    /// level-set caches come out as from the Python code.
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    fn select_cells(
+        &mut self,
+        py: Python<'_>,
+        cand: Vec<i64>,
+        special: Vec<i64>,
+        cptr: PyReadonlyArray1<i64>,
+        fptr: PyReadonlyArray1<i64>,
+        fverts: PyReadonlyArray1<i64>,
+        f_key: PyReadonlyArray1<i64>,
+        k1: PyReadonlyArray1<i64>,
+        k2: PyReadonlyArray1<i64>,
+    ) -> PyResult<(Vec<i64>, Vec<i64>, usize, Vec<i64>)> {
+        let (cp, fp, fv, fk) = (cptr.as_slice()?, fptr.as_slice()?, fverts.as_slice()?, f_key.as_slice()?);
+        let (k1, k2) = (k1.as_slice()?, k2.as_slice()?);
+        let nc = cp.len().saturating_sub(1);
+        let np_ = self.pts.len();
+        let bad = cand.iter().any(|&c| c < 0 || c as usize >= nc)
+            || cp.windows(2).any(|w| w[1] < w[0])
+            || *cp.last().unwrap_or(&0) as usize >= fp.len()
+            || fk.len() + 1 < fp.len()
+            || fp.windows(2).any(|w| w[1] < w[0])
+            || *fp.last().unwrap_or(&0) as usize > fv.len()
+            || fv.iter().any(|&v| v < 0 || v as usize >= np_)
+            || k1.len() != k2.len()
+            || fk.iter().any(|&f| f < 0 || f as usize >= k1.len())
+            || k1.iter().chain(k2.iter()).any(|&c| c < -1 || c >= nc as i64);
+        if bad {
+            return Err(pyo3::exceptions::PyValueError::new_err("inconsistent leaf arrays"));
         }
-        if !ph.iter().any(|&v| v < 0.0) {
-            return Ok(recs.is_empty());
+        let faces_of = |c: i64| {
+            let c = c as usize;
+            (cp[c] as usize..cp[c + 1] as usize).map(move |f| (fk[f], &fv[fp[f] as usize..fp[f + 1] as usize]))
+        };
+        let cells_at = |fid: i64| -> Vec<i64> {
+            [k1[fid as usize], k2[fid as usize]].into_iter().take_while(|&c| c >= 0).collect()
+        };
+        let poly_of = |c: i64, fid: i64| -> Vec<i64> {
+            faces_of(c).filter(|(f, _)| *f == fid).last().map(|(_, p)| p.to_vec()).unwrap_or_default()
+        };
+        let cell_pts = |c: i64, pts: &[V3]| -> (Vec<V3>, f64) {
+            let mut vs: Vec<i64> = faces_of(c).flat_map(|(_, p)| p.iter().copied()).collect();
+            vs.sort_unstable();
+            vs.dedup();
+            let p: Vec<V3> = vs.iter().map(|&v| pts[v as usize]).collect();
+            let m = mean(&p);
+            let r = np_max(p.iter().map(|x| row_norm([x[0] - m[0], x[1] - m[1], x[2] - m[2]])));
+            (p, 1.5 * r)
+        };
+        let special: crate::cut::FxSet<i64> = special.into_iter().collect();
+        let mut elig: FxMap<i64, bool> = FxMap::default();
+        // the candidates in one batch (in parallel), the neighbours reached later one by one
+        let mut seen: crate::cut::FxSet<i64> = Default::default();
+        let cs: Vec<i64> = cand.iter().copied().filter(|c| seen.insert(*c) && !special.contains(c)).collect();
+        for &c in &cand {
+            if special.contains(&c) {
+                elig.insert(c, false);
+            }
         }
-        if recs.iter().any(|r| matches!(r, Rec::F(..))) {
-            return Ok(false);
+        if !cs.is_empty() {
+            let pr: Vec<(Vec<V3>, f64)> = cs.iter().map(|&c| cell_pts(c, &self.pts)).collect();
+            let me = &*self;
+            let ok: Vec<bool> = py.detach(|| {
+                pr.par_iter().map(|(p, r)| me.convex_with(p, &me.tris_near(mean(p), *r)).0).collect()
+            });
+            for (c, e) in cs.iter().zip(ok) {
+                elig.insert(*c, e);
+            }
         }
-        if !self.zero_edge.is_empty() {
-            for i in 0..m {
-                let (a, b) = (poly[i], poly[(i + 1) % m]);
-                if ph[i] == 0.0 && ph[(i + 1) % m] == 0.0 && self.zero_edge.contains_key(&(fid, a.min(b), a.max(b))) {
-                    return Ok(false);
+        let eligible = |c: i64, elig: &mut FxMap<i64, bool>, me: &Self| -> bool {
+            if let Some(&e) = elig.get(&c) {
+                return e;
+            }
+            let e = if special.contains(&c) {
+                false
+            } else {
+                let (p, r) = cell_pts(c, &me.pts);
+                me.convex_with(&p, &me.tris_near(mean(&p), r)).0
+            };
+            elig.insert(c, e);
+            e
+        };
+        let mut compat: FxMap<i64, bool> = FxMap::default();
+        let mut mismatch = |fid: i64, poly: &[i64], me: &mut Self| -> bool {
+            let ok = match compat.get(&fid) {
+                Some(&ok) => ok,
+                None => {
+                    let ok = me.ls_compatible_rs(fid, poly);
+                    compat.insert(fid, ok);
+                    ok
+                }
+            };
+            !ok
+        };
+        let mut e_set: crate::cut::FxSet<i64> = Default::default();
+        for &c in &cand {
+            if eligible(c, &mut elig, self) {
+                e_set.insert(c);
+            }
+        }
+        let mut todo: Vec<i64> = e_set.iter().copied().collect();
+        todo.sort_unstable();
+        while let Some(c) = todo.pop() {
+            for (fid, poly) in faces_of(c) {
+                let others: Vec<i64> = cells_at(fid).into_iter().filter(|&o| o != c && !e_set.contains(&o)).collect();
+                if !others.is_empty() && mismatch(fid, poly, self) && others.iter().all(|&o| eligible(o, &mut elig, self)) {
+                    e_set.extend(others.iter().copied());
+                    todo.extend(others);
                 }
             }
         }
-        let mut want_v: Vec<i64> = poly.iter().zip(&ph).filter(|p_| *p_.1 <= 0.0).map(|p_| *p_.0).collect();
-        let mut want_e: Vec<(i64, i64)> = (0..m)
-            .filter(|&i| ph[i] * ph[(i + 1) % m] < 0.0)
-            .map(|i| (poly[i].min(poly[(i + 1) % m]), poly[i].max(poly[(i + 1) % m])))
-            .collect();
-        let mut got_v: Vec<i64> = recs.iter().filter_map(|r| if let Rec::V(v) = r { Some(*v) } else { None }).collect();
-        let got_e: Vec<(i64, i64)> = recs.iter().filter_map(|r| if let Rec::E(a, b, _) = r { Some((*a, *b)) } else { None }).collect();
-        for v in [&mut want_v, &mut got_v] {
+        // next to a cell that cannot be clipped, the clipped cells go back to the
+        // level-set cut until no such face is left (only the removed cells' faces change)
+        let mut is_hard = |fid: i64, e_set: &crate::cut::FxSet<i64>, me: &mut Self| -> bool {
+            let cs = cells_at(fid);
+            if !cs.iter().any(|o| !e_set.contains(o) && !special.contains(o)) {
+                return false;
+            }
+            for &c in &cs {
+                if e_set.contains(&c)
+                    && cs.iter().any(|&o| o != c && !e_set.contains(&o))
+                    && mismatch(fid, &poly_of(c, fid), me)
+                {
+                    return true;
+                }
+            }
+            false
+        };
+        let sorted = |s: &crate::cut::FxSet<i64>| {
+            let mut v: Vec<i64> = s.iter().copied().collect();
             v.sort_unstable();
-            v.dedup();
+            v
+        };
+        let mut dropped = 0usize;
+        let mut hard: crate::cut::FxSet<i64> = Default::default();
+        for c in sorted(&e_set) {
+            for (fid, _) in faces_of(c) {
+                if is_hard(fid, &e_set, self) {
+                    hard.insert(fid);
+                }
+            }
         }
-        want_e.sort_unstable();
-        want_e.dedup();
-        let mut ge = got_e.clone();
-        ge.sort_unstable();
-        ge.dedup();
-        Ok(got_v == want_v && got_e.len() == want_e.len() && ge == want_e)
+        while !hard.is_empty() {
+            let mut badc: crate::cut::FxSet<i64> = Default::default();
+            for fid in sorted(&hard) {
+                for c in cells_at(fid) {
+                    if e_set.contains(&c) {
+                        badc.insert(c);
+                    }
+                }
+            }
+            for c in &badc {
+                e_set.remove(c);
+            }
+            dropped += badc.len();
+            hard.clear();
+            for c in sorted(&badc) {
+                for (fid, _) in faces_of(c) {
+                    if is_hard(fid, &e_set, self) {
+                        hard.insert(fid);
+                    }
+                }
+            }
+        }
+        let mut mixed: crate::cut::FxSet<i64> = Default::default();
+        let mut plain: crate::cut::FxSet<i64> = Default::default();
+        for c in sorted(&e_set) {
+            for (fid, poly) in faces_of(c) {
+                let cs = cells_at(fid);
+                if cs.iter().any(|o| !e_set.contains(o)) {
+                    plain.insert(fid);
+                }
+                if cs.iter().any(|&o| o != c && !e_set.contains(&o)) && mismatch(fid, poly, self) {
+                    mixed.insert(fid);
+                }
+            }
+        }
+        Ok((sorted(&e_set), sorted(&mixed), dropped, sorted(&plain)))
     }
 }
