@@ -11,3 +11,6 @@ run/
 rust/target/
 cutmesh/_core*.pyd
 cutmesh/_core*.so
+# agent instruction files: kept local, not committed
+AGENTS.md
+CLAUDE.md
