@@ -19,7 +19,7 @@ https://mmer547.github.io/cutmesh/ ）にあります。
   スライディングメッシュ（AMI）用に、界面を 2 つのパッチに分けて `dynamicMeshDict` を書くこともできる
 - **円筒ベースメッシュ（任意）**: 回転機械向けに、八分木の根を軸まわりの同心ブロックにできる
 - **依存が少ない**: Python 3.9+, numpy, scipy（断面図に matplotlib）。メッシュ生成に OpenFOAM は不要。
-  幾何計算を Rust 拡張で高速化できる（任意）
+  Rust 拡張でメッシュ生成のほぼ全段階を並列化できる（任意、攪拌槽の例で約 100 倍速い）
 
 > メッシュ品質は `checkMesh` と同じ式の自前チェック（`cutmesh/quality.py`）で確認していますが、
 > OpenFOAM 本体での検証は限られています。使用前に手元で `checkMesh` を実行してください。
@@ -72,8 +72,8 @@ python run.py                         # 断面図も欲しい場合 → slice_z.
 | `meshDict_ami.json` | スライディングメッシュ（AMI）: 界面を `cyclicAMI` パッチの対にし、`dynamicMeshDict` を書く |
 | `meshDict_cylindrical.json` | 円筒ベースメッシュ |
 | `meshDict_layers.json` | 境界層（3層、全壁） |
-| `meshDict_stator_1mm.json` | ローター・ステーター: 翼の外側 1 mm に固定リング（`python make_geometry.py --stator 1` で `tank_stator_1mm.stl` を生成）、回転ゾーンの界面は隙間の中央。約 60 万セル・2 分 |
-| `meshDict_stator.json` | 同、隙間 0.5 mm（`--stator 0.5`）。最小セル 0.195 mm が界面の全周に並ぶので約 200 万セルになり、15 GB のメモリでは足りない |
+| `meshDict_stator_1mm.json` | ローター・ステーター: 翼の外側 1 mm に固定リング（`python make_geometry.py --stator 1` で `tank_stator_1mm.stl` を生成）、回転ゾーンの界面は隙間の中央。約 60 万セル・約 10 秒 |
+| `meshDict_stator.json` | 同、隙間 0.5 mm（`--stator 0.5`）。最小セル 0.195 mm が界面の全周に並ぶので約 200 万セル（約 30 秒、メモリ約 8 GB） |
 
 `rotatingZones` を消せば、同じ形状で回転ゾーンのないメッシュになります。
 
@@ -318,8 +318,9 @@ python -m cutmesh.layers CASE [layerDict.json] [-out CASE2] [-noCheck] [-ascii |
 
 ## 高速化（Rust 拡張、任意）
 
-最近点・内外判定・符号付き距離（STL と特徴線）、特徴線が面を貫く点（鋭角エッジに沿わせるカット）、フックなしのカット（回転ゾーン）、面・セルの重心と体積（品質チェック、セル統合、
-境界層の判定で使う）、境界層の内部節点の平滑化とセルの妥当性検査を Rust（`rust/`、BVH + rayon による並列化）で計算します。Rust ツールチェーン（cargo）があれば次でビルドされ、`cutmesh/_core.pyd`（Linux/macOS は
+幾何の問い合わせ（最近点・内外判定・符号付き距離、STL の表面のサンプル）、八分木の細分化とバランス、多面体セルの構築、節点のスナップ、
+STL と回転ゾーンのカット（特徴線のフック・厳密カットを含む）、セル統合、組み立て、リーク検査、品質チェック、境界層の平滑化と妥当性検査など、
+メッシュ生成のほぼすべての段階を Rust（`rust/`、BVH + rayon による並列化）で計算します。Rust ツールチェーン（cargo）があれば次でビルドされ、`cutmesh/_core.pyd`（Linux/macOS は
 `.so`）が置かれます。無ければ従来の Python/NumPy の処理で動きます（結果は同じ）。
 
 ```bash
@@ -330,9 +331,11 @@ python -m unittest discover -s tests  # Rust と Python の結果の一致を確
 
 | 例題 | Python | Rust 拡張あり |
 |---|---|---|
-| examples/stirred_tank | 26 s | 7 s |
-| 別の実形状（55万セル） | 162 s | 41 s（節点スナップ 44→2 s、STL のカット 59→8 s、回転ゾーンのカット 10→1 s、セル統合 29→9 s） |
-| 同、境界層の追加（3層） | 51 s | 27 s |
+| examples/stirred_tank（`meshDict.json`、約 10 万セル） | 142 s | 1.3 s |
+| 同、境界層あり（`meshDict_layers.json`） | 148 s | 2.8 s |
+| 同、隙間 1 mm（`meshDict_stator_1mm.json`、約 60 万セル） | 2080 s（約 35 分） | 9.0 s |
+
+16 コアのマシン、v0.5.0（2026-11-22）、品質チェックを含む。約 850 万セルの実形状では約 100 秒（メモリ約 30 GB）。
 
 ### 書き出し形式（`writeFormat`）
 
@@ -496,17 +499,16 @@ REPAIR: domain STL: removed 20 zero-area triangles, 50 duplicated triangles (one
 - レベル遷移が壁にかかる所のぶら下がり節点は表面へ投影するので壁の凹凸は出ないが、投影で
   八分木セルが壊れる所は取り消され、そこだけ最大0.3×最小セル程度のくぼみが残る
 - 統合相手が見つからない小セルはそのまま残る（最小体積が小さくなる）
-- 幾何問い合わせと回転ゾーンのカットは Rust 拡張に移したが、STL のカット・セル統合・組み立ては Python のままで、残りの時間の大半を占める
-- メモリは 100 万セルあたり約 5 GB 使う。狭い隙間の中に回転ゾーンの界面を置くと、セル数とメモリが急に増える（`meshDict_stator.json` は 15 GB では足りない）
+- Rust 拡張がないと（Python/NumPy の処理）大幅に遅い（攪拌槽の例で約 100 倍）
+- メモリは 100 万セルあたり約 4 GB 使う。狭い隙間の中に回転ゾーンの界面を置くと、セル数とメモリが急に増える（`meshDict_stator.json` は約 200 万セル・約 8 GB）
 
 ## ロードマップ
 
 1. **境界層**: 自前実装の初版あり（上記）。今後: 層の被覆率の向上（狭い隙間や鋭いエッジでの
    厚さの割り当て）、法線の平滑化、層の品質指標（アスペクト比など）の出力
 2. **品質改善**: レベル遷移とカットが重なるセルの追加細分化、薄い（扁平）セルの統合基準
-3. **Rust 化**: 距離計算（BVH）と回転ゾーンのカット（特徴線のフックなし）は Rust 拡張に移行済み（上記「高速化」）。
-   次は STL のカット（特徴線のフックつき。セル単位で独立なので並列化しやすい）、セル統合。
-   メモリの削減も課題（`benchmark/PLAN.md` の P0-2）
+3. **高速化**: メッシュ生成のほぼすべての段階を Rust 拡張に移した（v0.5.0、上記「高速化」）。
+   次は残りの逐次処理（スナップのやり直し、隙間の判定など）とメモリの削減（目標: 1000 万セルを 1 分）
 4. **スライディングメッシュ**: 界面の AMI / 非適合カップル用パッチへの分割は対応済み（上記）。今後: OpenFOAM 本体での
    動作確認、openfoam.org 開発版の `dynamicMeshDict`
 
