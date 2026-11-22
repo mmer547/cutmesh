@@ -381,6 +381,22 @@ def make_feature_hook(feat, h_of_cell, min_bend=0.03, reach=0.75):
         h = h_of_cell[state["cell"]]
         if state.get("forbid"):
             return [loop]
+        if _core is not None and hasattr(_core, "feature_hook") and getattr(feat, "_rs", None) is not None:
+            # the same hook in Rust (fhook.rs): the same polygons and new points
+            polys, newp, newf, did, fan = _core.feature_hook(
+                feat._rs, np.ascontiguousarray(feat.corners, float).reshape(-1, 3), [int(v) for v in loop],
+                np.array([ctx.pos[v] for v in loop], float).reshape(-1, 3), [v in ctx.onfeat for v in loop],
+                len(ctx.pos), float(h), float(reach), float(min_bend))
+            for x in newp:
+                vid = len(ctx.pos)
+                ctx.pos.append(list(x)); ctx.phi.append(0.0)
+                ctx.new_vertices.append(vid); ctx.new_parents.append((-1, -1))
+            for v in newf:
+                ctx.onfeat.add(v)
+            state["n"] += int(fan)
+            if did:
+                state["did"] = True
+            return polys
         sp = _split_on_features(ctx, loop, feat, h)
         if sp is not None:
             state["did"] = True
@@ -413,6 +429,7 @@ def make_feature_hook(feat, h_of_cell, min_bend=0.03, reach=0.75):
         return [[loop[i], loop[(i + 1) % m], vid] for i in range(m)]
 
     hook.feat, hook.reach = feat, reach      # for the Rust cut kernel's quick test
+    hook.min_bend = min_bend                 # and its own copy of the hook (fhook.rs)
     return hook, state
 
 
@@ -964,6 +981,36 @@ class _HookCtx:
         self.new_vertices, self.new_parents = [], []
 
 
+class _LazyMap:
+    """a dict over a Python dict and, for the keys it does not have, a lookup function
+    (the Rust kernel's caches): get, [], in and assignment (into the dict)"""
+
+    def __init__(self, d, lookup):
+        self.d, self.lookup = d, lookup
+
+    def get(self, k, default=None):
+        v = self.d.get(k)
+        if v is not None or k in self.d:
+            return v
+        v = self.lookup(k)
+        return default if v is None else v
+
+    def __getitem__(self, k):
+        v = self.get(k, _LazyMap)
+        if v is _LazyMap:
+            raise KeyError(k)
+        return v
+
+    def __contains__(self, k):
+        return self.get(k, _LazyMap) is not _LazyMap
+
+    def __setitem__(self, k, v):
+        self.d[k] = v
+
+    def update(self, other):
+        self.d.update(other)
+
+
 class _FaceOcc:
     """{face id: [pieces holding it]} (pieces in order, a piece once per face it has)
     looked up in the sorted face ids instead of a dict built over every face"""
@@ -1032,7 +1079,15 @@ def _cut_with_fallback_rs(ctx, items, shared_cap, hk, csize, P0, max_iter=4, lea
                         float(hook.reach) if hook is not None else 0.0,
                         np.ascontiguousarray(csize, float), pinch_cb, cap_cb, float(ctx.pinch_min_area))
     del Pa, pa
-    if leaf_csr is not None:
+    if hook is not None and hasattr(K, "set_rust_hook") and hasattr(hook, "min_bend"):
+        # the cap hook in Rust: no callback, and the parallel pass keeps these items
+        K.set_rust_hook(np.ascontiguousarray(hook.feat.corners, float).reshape(-1, 3), float(hook.min_bend))
+    if leaf_csr is not None and hasattr(K, "set_items_leaves"):
+        cptr_, fptr_, fverts_, f_key_ = leaf_csr
+        K.set_items_leaves(np.fromiter((ci for _, ci in items), np.int64, count=len(items)),
+                           cptr_, fptr_, fverts_, f_key_,
+                           [(k, fl) for k, (fl, _) in enumerate(items) if fl is not None])
+    elif leaf_csr is not None:
         K.set_items_csr(*_items_csr(items, *leaf_csr))
     else:
         K.set_items(items)
@@ -1057,15 +1112,22 @@ def _cut_with_fallback_rs(ctx, items, shared_cap, hk, csize, P0, max_iter=4, lea
             used[k] = u
     nsharp = sum(1 for ch_, did in used if ch_ or did)
     res = K.results_csr(not shared_cap) if leaf_csr is not None else K.results()
-    newp, newv, newpar, nid, cd, sd, clog, nf = K.export()
+    if hasattr(K, "take_caches"):
+        # the crossing cache and sub-face ids stay in Rust, looked up when asked for
+        newp, newv, newpar, nid, clog, nf = K.export_lazy()
+        caches = K.take_caches()
+        ctx.cache = _LazyMap(ctx.cache, caches.cache_get)
+        ctx.subids = _LazyMap(ctx.subids, lambda k: caches.subid_get((k[0], list(k[1]))))
+    else:
+        newp, newv, newpar, nid, cd, sd, clog, nf = K.export()
+        ctx.cache.update(cd)
+        ctx.subids.update(sd)
     del K
     ctx.pos.extend(newp.tolist())
     ctx.phi.extend([0.0] * len(newp))
     ctx.new_vertices.extend(newv)
     ctx.new_parents.extend(newpar)
     ctx.next_id = nid
-    ctx.cache.update(cd)
-    ctx.subids.update(sd)
     for which, key, val in clog:
         (ctx.chord_cache if which == 0 else ctx.pinch_cache)[key] = val
     ctx.onfeat.update(nf)
@@ -2330,12 +2392,17 @@ def generate(cfg, log=print):
         pc = PlaneClip(dom, pts, phi_d, hmin, dom_feat, ccv, cfg["featureAngle"])
         pc.zero_edge = ctx.zero_edge
         special = set(drop) | split_cells | set(opened) | set(cb)
-        mphi = np.minimum.reduceat(np.minimum.reduceat(phi_d[fverts], fptr[:-1]), cptr[:-1])
+        if _core is not None and hasattr(_core, "leaf_min"):
+            mphi = _core.leaf_min(np.ascontiguousarray(phi_d, float), leaf_vptr_full, fverts)
+        else:
+            mphi = np.minimum.reduceat(np.minimum.reduceat(phi_d[fverts], fptr[:-1]), cptr[:-1])
         cnd = np.nonzero((cls >= 0) & (mphi < 0.9 * csize))[0]
         if len(cnd):
             occ_c = _cat_ranges(fptr[cptr[cnd]], fptr[cptr[cnd + 1]])
             own_c = np.repeat(np.arange(len(cnd)), fptr[cptr[cnd + 1]] - fptr[cptr[cnd]])
-            cen = np.zeros((len(cnd), 3)); np.add.at(cen, own_c, pts[fverts[occ_c]])
+            xc = pts[fverts[occ_c]]           # np.add.at column by column (the same order)
+            cen = np.stack([np.bincount(own_c, xc[:, k], len(cnd)) for k in range(3)], 1)
+            del xc
             cen /= np.bincount(own_c, minlength=len(cnd))[:, None]
             _, df = dom_feat.closest(cen)
             ok = df < 0.9 * csize[cnd]
@@ -2361,6 +2428,7 @@ def generate(cfg, log=print):
                         m_ = mv[phi_z[i][mv] != 0]
                         if len(m_):
                             phi_z[i][m_] = z["geom"].sdf(pts[m_])
+            pc.attach_rust(_core)              # points and level set are final now
             ko = _argsort_stable(f_key)
             ks = f_key[ko]
 
