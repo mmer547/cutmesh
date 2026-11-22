@@ -25,6 +25,7 @@ mod fhook;
 mod quality;
 mod sampling;
 mod centroids;
+mod nearest;
 
 pub(crate) type V3 = [f64; 3];
 
@@ -308,6 +309,9 @@ pub(crate) fn points(p: &PyReadonlyArray2<f64>) -> PyResult<Vec<V3>> {
     let a = p.as_array();
     if a.ncols() != 3 {
         return Err(pyo3::exceptions::PyValueError::new_err("points must have shape (n, 3)"));
+    }
+    if let Ok(flat) = p.as_slice() {
+        return Ok(flat.as_chunks::<3>().0.to_vec()); // C-contiguous: one copy
     }
     Ok(a.outer_iter().map(|r| [r[0], r[1], r[2]]).collect())
 }
@@ -1145,6 +1149,8 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(layers::cells_bad, m)?)?;
     m.add_function(wrap_pyfunction!(octree::build_cells, m)?)?;
     m.add_function(wrap_pyfunction!(octree::balance, m)?)?;
+    m.add_function(wrap_pyfunction!(octree::octree_split, m)?)?;
+    m.add_function(wrap_pyfunction!(nearest::nearest_kept, m)?)?;
     m.add_function(wrap_pyfunction!(octree::leaf_bad, m)?)?;
     m.add_function(wrap_pyfunction!(octree::finer_face_neighbour, m)?)?;
     m.add_function(wrap_pyfunction!(wallmerge::merge_wall_faces, m)?)?;

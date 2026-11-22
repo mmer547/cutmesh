@@ -196,6 +196,26 @@ class RustOctree(unittest.TestCase):
                 nsplit += len(la)
         self.assertGreater(nsplit, 0)
 
+    @unittest.skipUnless(hasattr(geometry._core, "octree_split"), "Rust extension not built")
+    def test_split(self):
+        # Octree.split in Rust: the arrays of the NumPy code (unsplit leaves, then children)
+        rng = np.random.default_rng(3)
+        for args in CASES:
+            oc = random_octree(*args)
+            mask = rng.random(len(oc.lev)) < 0.3
+            mask &= oc.lev < oc.Lmax
+            kids = (2 * oc.ijk[mask])[:, None, :] + octree.CHILD[None]
+            ref_ijk = np.concatenate([oc.ijk[~mask], kids.reshape(-1, 3)])
+            ref_lev = np.concatenate([oc.lev[~mask], np.repeat(oc.lev[mask] + 1, 8)])
+            ijk, lev = geometry._core.octree_split(oc.ijk, oc.lev, mask)
+            np.testing.assert_array_equal(ijk, ref_ijk)
+            np.testing.assert_array_equal(lev, ref_lev)
+            self.assertEqual((ijk.dtype, lev.dtype), (np.int64, np.int64))
+            oc.split(mask)
+            np.testing.assert_array_equal(oc.ijk, ref_ijk)
+        with self.assertRaises(ValueError):
+            geometry._core.octree_split(oc.ijk, oc.lev, np.zeros(3, bool))
+
     @unittest.skipUnless(hasattr(geometry._core, "finer_face_neighbour"), "Rust extension not built")
     def test_finer_nearby(self):
         # the face-neighbour lookup answers "a finer leaf centre within 0.95 h" as the
@@ -217,7 +237,7 @@ class RustOctree(unittest.TestCase):
                     hc = float(hl[cand[m_]][0])
                     dd, _ = cKDTree(c[fl]).query(c[cand[m_]], distance_upper_bound=0.95 * hc)
                     ref[m_] = dd < 0.95 * hc
-            np.testing.assert_array_equal(mesher._finer_nearby(oc, c, hl, cand), ref)
+            np.testing.assert_array_equal(mesher._finer_nearby(oc, cand), ref)
             nfine += int(ref.sum())
         self.assertGreater(nfine, 0)
 
@@ -600,6 +620,36 @@ class RustFaceOps(unittest.TestCase):
             ref = np.full(nv + 3, np.inf)                  # vertices in no face stay inf
             np.minimum.at(ref, fverts, np.repeat(val, fn))
             np.testing.assert_array_equal(geometry._core.vertex_min(nv + 3, fptr, fverts, val), ref)
+
+    @unittest.skipUnless(hasattr(geometry._core, "nearest_kept"), "Rust extension not built")
+    def test_nearest_kept(self):
+        # mesher._nearest_in through the grid search: the KD-tree's distances bit for bit
+        # and its points (where several are equally near, the KD-tree's choice)
+        from scipy.spatial import cKDTree
+        rng = np.random.default_rng(8)
+        ties = 0
+        for t in range(120):
+            if t % 3 == 0:                          # a lattice: queries equally near several
+                g = np.arange(-3, 4) * 0.1
+                P = np.stack(np.meshgrid(g, g, g, indexing="ij"), -1).reshape(-1, 3) + (t % 2) * rng.normal(size=3)
+            else:
+                P = rng.normal(size=(int(rng.integers(1, 2500)), 3)) * rng.uniform(0.01, 10, 3)
+            keep = rng.random(len(P)) < 0.6
+            keep[int(rng.integers(len(P)))] = True
+            q = rng.normal(size=(int(rng.integers(1, 150)), 3)) * 3
+            if t % 3 == 0:
+                q[:6] = P[0] + 0.05
+            idx = np.flatnonzero(keep)
+            dr, jr = cKDTree(P[idx]).query(q)
+            d, j = mesher._nearest_in(P, keep, q)
+            np.testing.assert_array_equal(d, dr)
+            np.testing.assert_array_equal(j, idx[jr])
+            _, _, u = geometry._core.nearest_kept(P, keep, q)
+            ties += int((~u).sum())
+        self.assertGreater(ties, 0)
+        P = rng.random((10, 3))
+        with self.assertRaises(ValueError):
+            geometry._core.nearest_kept(P, np.zeros(10, bool), P)
 
     @unittest.skipUnless(hasattr(geometry._core, "pieces_volume_bad"), "Rust extension not built")
     def test_pieces_volume_bad(self):
