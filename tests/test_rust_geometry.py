@@ -66,6 +66,18 @@ class RustMatchesPython(unittest.TestCase):
             np.testing.assert_array_equal(self.dom._rs.inside(Z), self.dom._rs.inside_bvh(Z))
         far = np.array([[1e9, 0, 0], [0, 1e9, 0], [0, 0, -1e9], [np.nan, 0, 0]])
         np.testing.assert_array_equal(self.dom._rs.inside(far), self.dom._rs.inside_bvh(far))
+        self.assertTrue(self.dom._rs.inside_grid())
+        # solids in a row along x overlap in (y, z): no grid (its registrations would
+        # grow with the square of the triangles), the BVH answers
+        V = np.array([[x, y, z] for z in (0, 1) for y in (0, 1) for x in (0, 1)], float)
+        F = np.array([(0, 2, 1), (1, 2, 3), (4, 5, 6), (5, 7, 6), (0, 1, 4), (1, 5, 4),
+                      (2, 6, 3), (3, 6, 7), (0, 4, 2), (2, 4, 6), (1, 3, 5), (3, 7, 5)])
+        T = np.concatenate([V[F] + [2.0 * i, 0, 0] for i in range(3000)])
+        m = G._core.TriMesh(np.ascontiguousarray(T))
+        self.assertFalse(m.inside_grid())
+        q = rng.random((5000, 3)) * [6000, 1, 1]
+        np.testing.assert_array_equal(m.inside(q), m.inside_bvh(q))
+        self.assertTrue(m.inside(np.array([[0.5, 0.5, 0.5], [3000.5, 0.5, 0.5]])).all())
 
     @unittest.skipUnless(hasattr(G._core, "unique_points"), "Rust extension not built")
     def test_unique_points(self):

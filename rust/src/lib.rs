@@ -375,7 +375,10 @@ struct TriMesh {
 
 /// the BVH's leaves by their (y, z) boxes on a grid: the leaves a +x ray from q can
 /// reach are those of q's cell whose box passes the BVH's own test (an ancestor's box
-/// contains its leaves' boxes, so the BVH tests exactly those leaves)
+/// contains its leaves' boxes, so the BVH tests exactly those leaves).  Not built
+/// (n = [0, 0]: inside() walks the BVH) where the leaves overlap so much in (y, z) that
+/// the registrations would exceed 64 per leaf or per cell (e.g. many solids in a row
+/// along x).
 struct YzGrid {
     o: [f64; 2],
     cs: [f64; 2],
@@ -396,25 +399,55 @@ impl YzGrid {
                 hi[k] = hi[k].max(nd.hi[k + 1]);
             }
         }
-        let m = ((leaf.len() as f64).sqrt() * 2.0).ceil().max(1.0) as usize;
-        let mut cs = [1.0f64; 2];
-        let mut n = [1usize; 2];
-        for k in 0..2 {
-            let e = hi[k] - lo[k];
-            if e.is_finite() && e > 0.0 {
-                n[k] = m.min(4096);
-                cs[k] = e / n[k] as f64;
-            } else {
-                lo[k] = if lo[k].is_finite() { lo[k] } else { 0.0 };
+        // cells per axis: about two per leaf on a side, halved while the registrations
+        // (counted before anything is allocated) exceed 64 per leaf; no grid when even a
+        // coarse one would, or when its cells hold more than 64 leaves on average (leaves
+        // overlapping in (y, z), e.g. solids in a row along x)
+        let grid = |m: usize| {
+            let (mut o, mut cs, mut n) = (lo, [1.0f64; 2], [1usize; 2]);
+            for k in 0..2 {
+                let e = hi[k] - lo[k];
+                if e.is_finite() && e > 0.0 {
+                    n[k] = m.min(4096);
+                    cs[k] = e / n[k] as f64;
+                } else {
+                    o[k] = if lo[k].is_finite() { lo[k] } else { 0.0 };
+                }
             }
-        }
-        let g = YzGrid { o: lo, cs, n, start: Vec::new(), leaves: Vec::new() };
-        let mut cnt = vec![0u32; n[0] * n[1] + 1];
-        let range = |nd: &Node| {
+            YzGrid { o, cs, n, start: Vec::new(), leaves: Vec::new() }
+        };
+        let range = |g: &YzGrid, nd: &Node| {
             let (a0, a1) = (g.idx(0, nd.lo[1]), g.idx(0, nd.hi[1]));
             let (b0, b1) = (g.idx(1, nd.lo[2]), g.idx(1, nd.hi[2]));
             (a0, a1, b0, b1)
         };
+        let total = |g: &YzGrid| -> u64 {
+            leaf.iter()
+                .map(|&l| {
+                    let (a0, a1, b0, b1) = range(g, &nodes[l as usize]);
+                    ((a1 - a0 + 1) * (b1 - b0 + 1)) as u64
+                })
+                .sum()
+        };
+        let mut m = ((leaf.len() as f64).sqrt() * 2.0).ceil().max(1.0) as usize;
+        let g = loop {
+            let g = grid(m);
+            if leaf.is_empty() || m < 4 {
+                return YzGrid { n: [0, 0], ..g };
+            }
+            let (t, cells) = (total(&g), (g.n[0] * g.n[1]) as u64);
+            if t <= 64 * leaf.len() as u64 {
+                if t <= 64 * cells {
+                    break g;
+                }
+                // fits, but a cell holds too many leaves to beat the BVH: coarser will not help
+                return YzGrid { n: [0, 0], ..g };
+            }
+            m /= 2;
+        };
+        let n = g.n;
+        let range = |nd: &Node| range(&g, nd);
+        let mut cnt = vec![0u32; n[0] * n[1] + 1];
         for &l in &leaf {
             let (a0, a1, b0, b1) = range(&nodes[l as usize]);
             for a in a0..=a1 {
@@ -536,6 +569,9 @@ impl TriMesh {
     }
 
     fn inside_one(&self, p: V3) -> bool {
+        if self.yz.n[0] == 0 {
+            return self.inside_one_bvh(p); // no grid (leaves overlapping too much)
+        }
         let q = [p[0] + self.pert[0], p[1] + self.pert[1], p[2] + self.pert[2]];
         let mut parity = false;
         if self.bvh.nodes.is_empty() {
@@ -690,6 +726,11 @@ impl TriMesh {
         let id: Vec<i64> = res.iter().map(|r| r.2 as i64).collect();
         let cp: Vec<V3> = res.into_iter().map(|r| r.1).collect();
         Ok((vec3_array(py, cp)?, d.into_pyarray(py), id.into_pyarray(py)))
+    }
+
+    /// whether inside() uses the (y, z) grid (else the BVH traversal)
+    fn inside_grid(&self) -> bool {
+        self.yz.n[0] > 0
     }
 
     /// inside() by the BVH traversal instead of the (y, z) grid (for the tests)
