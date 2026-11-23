@@ -81,6 +81,8 @@ def main(argv=None):
     ap.add_argument("--out", default="same_mesh_out")
     ap.add_argument("--only", action="append", help="case names (tank, tank_ami, pipe_elbow, ...)")
     a = ap.parse_args(argv)
+    # absolute: the subprocesses run in other directories (the trees, the examples)
+    a.base, a.head, a.out = (os.path.abspath(x) for x in (a.base, a.head, a.out))
     os.makedirs(a.out, exist_ok=True)
     tank_names = [m for m in TANK_CASES
                   if not a.only or ("tank_" + m[len("meshDict"):-len(".json")].strip("_") if m != "meshDict.json" else "tank")
