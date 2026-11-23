@@ -11,6 +11,7 @@ python benchmark/run_bench.py benchmark/suites/local.json       # 手元の実�
 python benchmark/run_bench.py benchmark/suites/large.json -j 1  # 約 100 万セル・回転ゾーン（速さの確認。1 ケースずつ）
 python benchmark/run_bench.py benchmark/suites/scale.json -j 1 --only tilted_1m   # 高速化の確認（100 万 / 800 万セル）
 python benchmark/mesh_hash.py CASE_A CASE_B                     # 2 つのメッシュがバイト単位で同じか
+python benchmark/same_mesh.py BASE_TREE HEAD_TREE               # 2 つのチェックアウトのコードで同じメッシュになるか
 python benchmark/stl_check.py some.stl                          # 入力 STL の診断だけ
 ```
 
@@ -24,7 +25,8 @@ PASS したケースの polyMesh は削除します（`--keep` で残す）。�
 |---|---|
 | `run_bench.py` | スイートを実行して判定・集計する。1 ケース 1 プロセス（落ちても固まっても他のケースは続く）、タイムアウト付き |
 | `render_mesh.py` | メッシュの画像: `overview.png`（壁面を 2 方向から、パッチごとに色分け）と `cut.png`（x 方向の中央より奥のセルだけを残した 3D 図 + x・y・z の中央断面）。checkMesh の基準を満たさないセル（体積 ≤ 0、非直交性 > 70°、歪度 > 4）は赤。`run_bench.py` が毎回呼ぶ（`--no-images` で省略）。単独でも `python benchmark/render_mesh.py <case>` で使える |
-| `mesh_hash.py` | 書き出した polyMesh の各ファイルの SHA-256。2 つのケースが同じメッシュかを比べる（`--save` / `--check` で保存した値とも比べられる）。`run_bench.py` が毎回記録する |
+| `mesh_hash.py` | 書き出した polyMesh の各ファイルの SHA-256。2 つのケースが同じメッシュかを比べる（`--save` / `--check` で保存した値とも比べられる）。`run_bench.py` が毎回記録する。値はマシンごとに違う（CPU・NumPy・OS で丸めが変わる）ので、同じマシンで作ったものどうしを比べる |
+| `same_mesh.py` | 2 つのチェックアウト（例: main とプルリクエスト）のコードで、攪拌槽の例と `showcase` を同じマシンで作って比べる。CI（`.github/workflows/same-mesh.yml`）がプルリクエストごとに実行する |
 | `stl_check.py` | 入力 STL の診断: 開いた辺、非多様体の辺、向きの不一致、潰れた三角形、重複した三角形、部品の数、オイラー標数、符号付き体積 |
 | `make_synthetic.py` | 人工形状 25 個と実用的な形状 8 個（`showcase`）を `data/synthetic/` に生成 |
 | `fetch_thingi10k.py` | Thingi10K から段階ごとに抜き出して `data/thingi10k/` と `suites/thingi10k.json` を作る（`pip install thingi10k` が必要。初回はデータセット全体をダウンロードする） |
