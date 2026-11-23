@@ -6,6 +6,7 @@
 <title>実行例 — cutmesh</title>
 <meta name="description" content="cutmesh で作ったメッシュの例: 攪拌槽（回転ゾーン、円筒ベースメッシュ、境界層）、ローター・ステーターの狭い隙間、形状のテスト集、配管・ダクト・外部流れの例。どの図も境界層ありの図に切り替えられる">
 <link rel="stylesheet" href="style.css">
+<link rel="alternate" hreflang="en" href="en/examples.html">
 </head>
 <body>
 <header class="site-header"><div class="inner">
@@ -15,6 +16,7 @@
     <a href="examples.html" aria-current="page">実行例</a>
     <a href="meshdict.html">meshDict 作成</a>
     <a href="https://github.com/mmer547/cutmesh">GitHub</a>
+    <a href="en/examples.html" lang="en" hreflang="en">English</a>
   </nav>
 </div></header>
 
@@ -45,7 +47,7 @@
 <p>図の上の「境界層あり」を選ぶと、同じ設定に境界層（全壁に 3 層、
 <code>"addLayers": { "nLayers": 3, "expansionRatio": 1.2, "finalLayerThickness": 0.3 }</code>）を加えたメッシュの図に替わります。
 セル数・時間・品質も層を付けたメッシュの値になり、「目標の厚さ」は層を目標の厚さまで付けられた壁の節点の割合です。</p>
-<div class="layer-switch" id="layer-switch" hidden>
+<div class="layer-switch" id="layer-switch" data-figure-label="境界層" hidden>
   <span>すべての図:</span>
   <div class="vswitch" role="group" aria-label="すべての図の境界層">
     <button type="button" data-set="plain" aria-pressed="true">境界層なし</button><button type="button" data-set="layers" aria-pressed="false">境界層あり</button>
@@ -361,50 +363,6 @@ python tools/make_docs_images.py --variant plain    # 境界層なしの図だ�
   This offering is not approved or endorsed by OpenCFD Limited, producer and distributor of the OpenFOAM software via www.openfoam.com,
   and owner of the OPENFOAM® and OpenCFD® trade marks.
 </div></footer>
-<script>
-// "境界層なし / あり" switches: one per figure.vfig, and one for all of them
-(function () {
-  var figs = document.querySelectorAll("figure.vfig");
-  function make(label, onSet) {
-    var g = document.createElement("div");
-    g.className = "vswitch"; g.setAttribute("role", "group"); g.setAttribute("aria-label", label);
-    [["plain", "境界層なし"], ["layers", "境界層あり"]].forEach(function (v) {
-      var b = document.createElement("button");
-      b.type = "button"; b.dataset.set = v[0]; b.textContent = v[1];
-      b.setAttribute("aria-pressed", v[0] === "plain" ? "true" : "false");
-      g.appendChild(b);
-    });
-    g.addEventListener("click", function (e) {
-      var b = e.target.closest("button");
-      if (b) onSet(b.dataset.set === "layers");
-    });
-    return g;
-  }
-  function press(group, on) {
-    group.querySelectorAll("button").forEach(function (b) {
-      b.setAttribute("aria-pressed", String((b.dataset.set === "layers") === on));
-    });
-  }
-  function setFig(f, on) {
-    f.classList.toggle("layers-on", on);
-    press(f.querySelector(".vswitch"), on);
-  }
-  figs.forEach(function (f) {
-    f.insertBefore(make("境界層", function (on) { setFig(f, on); }), f.firstChild);
-  });
-  var all = document.getElementById("layer-switch");
-  if (all && figs.length) {
-    all.hidden = false;
-    var g = all.querySelector(".vswitch");
-    g.addEventListener("click", function (e) {
-      var b = e.target.closest("button");
-      if (!b) return;
-      var on = b.dataset.set === "layers";
-      press(g, on);
-      figs.forEach(function (f) { setFig(f, on); });
-    });
-  }
-})();
-</script>
+<script src="examples.js"></script>
 </body>
 </html>

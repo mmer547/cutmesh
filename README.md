@@ -1,5 +1,7 @@
 # cutmesh — OpenFOAM 用の八分木カットセル・メッシャー
 
+**日本語** | [English](README.en.md)
+
 水密な STL の**内部**に八分木ベースの多面体メッシュを生成し、OpenFOAM の `constant/polyMesh` を
 直接書き出すメッシャーです（開発中のプロトタイプ）。八分木のセルを STL で直接切断（カットセル）して
 壁面を作ります。

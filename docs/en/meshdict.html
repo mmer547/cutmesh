@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>meshDict builder — cutmesh</title>
+<meta name="description" content="Build a cutmesh meshDict.json in your browser. Read STL solid names and dimensions, validate settings as you type, and export JSON locally.">
+<link rel="stylesheet" href="../style.css">
+<link rel="alternate" hreflang="ja" href="../meshdict.html">
+</head>
+<body>
+<header class="site-header"><div class="inner">
+  <a class="brand" href="index.html">cut<span>mesh</span></a>
+  <nav class="site-nav">
+    <a href="manual.html">Manual</a>
+    <a href="examples.html">Examples</a>
+    <a href="meshdict.html" aria-current="page">Build a meshDict</a>
+    <a href="https://github.com/mmer547/cutmesh">GitHub</a>
+    <a href="../meshdict.html" lang="ja" hreflang="ja">日本語</a>
+  </nav>
+</div></header>
+
+<main class="page">
+<h1>meshDict builder</h1>
+<p class="mdf-lead">Fill in the form to generate <code>meshDict.json</code> in the output panel. On narrow screens it appears below the form.
+Load an STL to get its solid names (patch names) and dimensions, which the form uses for name suggestions and cell count estimates.
+The output omits default values unless you choose to include them. Files are processed locally in your browser.</p>
+
+<noscript><div class="warn"><p>This page requires JavaScript.</p></div></noscript>
+
+<div class="mdf-toolbar" role="toolbar" aria-label="Files">
+  <label class="btn primary mdf-filebtn">Load STL<input type="file" id="mdf-stl" accept=".stl,.STL" hidden></label>
+  <label class="btn mdf-filebtn">Open meshDict<input type="file" id="mdf-open" accept=".json,application/json" hidden></label>
+  <label class="mdf-select">Start from an example
+    <select id="mdf-example"><option value="">Choose…</option></select>
+  </label>
+  <button type="button" class="btn mdf-plain" id="mdf-clear">Clear all</button>
+  <span class="mdf-toolbar-sep"></span>
+  <label class="mdf-check"><input type="checkbox" id="mdf-advanced"> Show advanced settings</label>
+  <label class="mdf-check"><input type="checkbox" id="mdf-defaults"> Include default values</label>
+</div>
+<p class="mdf-drop-hint">You can also drop an STL or meshDict.json file onto this page.</p>
+
+<div id="mdf-stlinfo" class="mdf-stlinfo" hidden></div>
+
+<div class="mdf">
+  <form id="mdf-form" class="mdf-form" autocomplete="off" novalidate></form>
+  <aside class="mdf-out" aria-label="Output">
+    <div class="mdf-out-head">
+      <strong>meshDict.json</strong>
+      <span class="mdf-out-actions">
+        <button type="button" class="btn mdf-small" id="mdf-copy">Copy</button>
+        <button type="button" class="btn primary mdf-small" id="mdf-download">Download</button>
+      </span>
+    </div>
+    <ul id="mdf-issues" class="mdf-issues" aria-live="polite"></ul>
+    <pre class="mdf-json"><code id="mdf-json"></code></pre>
+    <p class="mdf-run">Put meshDict.json in the same folder as the STL, then run this command.</p>
+    <pre class="mdf-cmd"><code>cutmesh meshDict.json</code></pre>
+  </aside>
+</div>
+
+<datalist id="mdf-solids"></datalist>
+<datalist id="mdf-solids-default"></datalist>
+<datalist id="mdf-ptypes"></datalist>
+</main>
+
+<footer class="site-footer"><div class="inner">
+  The fields and defaults come from <code>cutmesh/schema.py</code>. <a href="meshdict.schema.json">View the JSON Schema</a>.
+</div></footer>
+
+<script src="meshdict-data.js"></script>
+<script src="../meshdict.js"></script>
+</body>
+</html>

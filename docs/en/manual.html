@@ -1,0 +1,445 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manual — cutmesh</title>
+<meta name="description" content="Install and use cutmesh. Configure meshDict.json, rotating zones, cylindrical base meshes, boundary layers, export formats, and input checks.">
+<link rel="stylesheet" href="../style.css">
+<link rel="alternate" hreflang="ja" href="../manual.html">
+</head>
+<body>
+<header class="site-header"><div class="inner">
+  <a class="brand" href="index.html">cut<span>mesh</span></a>
+  <nav class="site-nav">
+    <a href="manual.html" aria-current="page">Manual</a>
+    <a href="examples.html">Examples</a>
+    <a href="meshdict.html">Build a meshDict</a>
+    <a href="https://github.com/mmer547/cutmesh">GitHub</a>
+    <a href="../manual.html" lang="ja" hreflang="ja">日本語</a>
+  </nav>
+</div></header>
+
+<main class="page doc">
+<nav class="toc" aria-label="Table of contents">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#install">Installation</a></li>
+    <li><a href="#usage">Usage</a></li>
+    <li><a href="#meshdict">meshDict.json</a>
+      <ol>
+        <li><a href="#md-basic">Basic</a></li>
+        <li><a href="#md-refine">Refinement</a></li>
+        <li><a href="#md-snap">Snapping and merging</a></li>
+        <li><a href="#md-thin">Thin geometry</a></li>
+        <li><a href="#md-check">Checks and output</a></li>
+      </ol>
+    </li>
+    <li><a href="#zones">Rotating zones</a></li>
+    <li><a href="#ami">Sliding meshes (AMI)</a></li>
+    <li><a href="#cylbase">Cylindrical base mesh</a></li>
+    <li><a href="#layers">Boundary layers</a></li>
+    <li><a href="#format">Export format</a></li>
+    <li><a href="#rust">Rust acceleration</a></li>
+    <li><a href="#checks">Configuration and input checks</a></li>
+    <li><a href="#tools">Commands and options</a>
+      <ol>
+        <li><a href="#cmd-cutmesh">cutmesh</a></li>
+        <li><a href="#cmd-layers">Adding boundary layers</a></li>
+        <li><a href="#cmd-ami">Converting to a sliding mesh</a></li>
+        <li><a href="#cmd-check">Mesh inspection</a></li>
+        <li><a href="#cmd-bench">Benchmarks</a></li>
+        <li><a href="#cmd-misc">Other tools</a></li>
+      </ol>
+    </li>
+    <li><a href="#limits">Known limitations</a></li>
+  </ol>
+</nav>
+
+<article class="content">
+<h1>Manual</h1>
+<p>cutmesh generates octree-based polyhedral meshes <strong>inside</strong> watertight STL geometry and writes OpenFOAM's
+<code>constant/polyMesh</code> directly. It cuts octree cells against the STL to create wall faces.
+All settings go into one JSON file, <code>meshDict.json</code>.</p>
+<div class="warn">
+  <p>cutmesh is a prototype. Its built-in quality checks use the same formulas as <code>checkMesh</code>, and testing with OpenFOAM itself is limited.
+  Run <code>checkMesh</code> locally before using a mesh.</p>
+</div>
+
+<h2 id="install">Installation</h2>
+<p>Mesh generation requires Python 3.9 or later, NumPy, and SciPy. Use Matplotlib to plot cross-sections. OpenFOAM is optional.</p>
+<pre><code>git clone https://github.com/mmer547/cutmesh.git
+cd cutmesh
+pip install -e .                      # Offline: use --no-build-isolation (requires wheel)
+python tools/build_rust.py            # Optional Rust build (about 100× faster on the stirred tank example)</code></pre>
+<p>To run from the source tree, use <code>python -m cutmesh</code> from the repository root or add the repository directory to <code>PYTHONPATH</code>.</p>
+
+<h2 id="usage">Usage</h2>
+<pre><code>cutmesh meshDict.json [-case DIR] [-noCheck]    # python -m cutmesh also works</code></pre>
+<div class="table-wrap"><table>
+  <tr><th>Option</th><th>Description</th></tr>
+  <tr><td><code>-case DIR</code></td><td>Output case directory (overrides <code>case</code> in the meshDict)</td></tr>
+  <tr><td><code>-noCheck</code></td><td>Skip the final quality check (about 10% faster on large meshes)</td></tr>
+</table></div>
+<p>A minimal <code>meshDict.json</code> for meshing the inside of an STL follows.</p>
+<pre><code>{
+  "domain": "model.stl",
+  "baseCellSize": 0.01,
+  "surfaceRefinement": { "default": 2 },
+  "patchTypes": { "inlet": "patch", "outlet": "patch" },
+  "case": "case"
+}</code></pre>
+<p>cutmesh writes <code>case/constant/polyMesh</code> and then logs the quality check results. Paths such as <code>domain</code> are relative to
+the directory containing meshDict.json. STL solid names become patch names. Patches omitted from <code>patchTypes</code> default to <code>wall</code>.</p>
+<p>The log contains these messages.</p>
+<ul>
+  <li><code>[  63.15s] leak check (1.55s, peak 3.82 GB)</code> shows when each stage finished, its duration, and peak memory.</li>
+  <li><code>REPAIR: ...</code> describes automatic STL repairs. See <a href="#checks">Configuration and input checks</a>.</li>
+  <li><code>WARNING: ...</code> reports problems such as open edges, leaks, or volume mismatches.</li>
+  <li>The final <code>checkMesh-style report</code> summarizes non-orthogonality, skewness, volume, and other quality metrics.</li>
+</ul>
+<p>The stirred tank case is in <code>examples/stirred_tank</code>. See <a href="examples.html">Examples</a> for the walkthrough and images.</p>
+<pre><code>cd examples/stirred_tank
+python make_geometry.py               # Generate the sample STL
+cutmesh meshDict.json                 # → case/constant/polyMesh, case/constant/MRFProperties
+python run.py                         # Also plot cross-sections → slice_z.png, slice_y.png</code></pre>
+
+<h2 id="meshdict">meshDict.json</h2>
+<p>Keys starting with <code>_</code> or <code>//</code> are treated as comments. Unknown keys produce warnings so typos are visible.</p>
+<p class="note">The <a href="meshdict.html">meshDict builder</a> reads STL solid names and dimensions and validates your inputs as you type. Use the <a href="meshdict.schema.json">JSON Schema</a> for editor completion.</p>
+
+<h3 id="md-basic">Basic</h3>
+<div class="table-wrap"><table>
+  <tr><th>Key</th><th>Description</th><th>Default</th></tr>
+  <tr><td><code>domain</code></td><td>Watertight STL of the fluid domain. Multiple solids are supported and their names become patch names. Accepts ASCII and binary.</td><td>Required</td></tr>
+  <tr><td><code>baseCellSize</code></td><td>Level 0 cell edge length [m]. The size at level L is <code>baseCellSize / 2^L</code>.</td><td>Required</td></tr>
+  <tr><td><code>case</code></td><td>Output case directory</td><td><code>.</code></td></tr>
+  <tr><td><code>patchTypes</code></td><td>Patch name → type (for example, <code>wall</code> or <code>patch</code>)</td><td>All <code>wall</code></td></tr>
+  <tr><td><code>padding</code></td><td>Number of base cells added around the STL bounding box</td><td>1</td></tr>
+  <tr><td><code>rotatingZones</code></td><td>List of <a href="#zones">rotating zones</a></td><td><code>[]</code></td></tr>
+  <tr><td><code>baseMesh</code></td><td>Base mesh (see <a href="#cylbase">Cylindrical base mesh</a>)</td><td>Cartesian grid</td></tr>
+  <tr><td><code>addLayers</code></td><td><a href="#layers">Boundary-layer</a> settings</td><td>None</td></tr>
+</table></div>
+
+<h3 id="md-refine">Refinement</h3>
+<div class="table-wrap"><table>
+  <tr><th>Key</th><th>Description</th><th>Default</th></tr>
+  <tr><td><code>surfaceRefinement</code></td><td>Solid name → refinement level. Set <code>default</code> for other solids.</td><td><code>{}</code></td></tr>
+  <tr><td><code>featureLevel</code></td><td>Refinement level near sharp feature edges (<code>null</code> uses the maximum surface level)</td><td><code>null</code></td></tr>
+  <tr><td><code>featureAngle</code></td><td>Angle threshold for detecting feature edges [deg]</td><td>30</td></tr>
+  <tr><td><code>refinementRegions</code></td><td>Volume refinement regions <code>[{"cylinder": {...}, "level": n}]</code></td><td><code>[]</code></td></tr>
+  <tr><td><code>bufferLayers</code></td><td>Number of buffer cells per level transition. Set to 1 to reduce the cell count.</td><td>2</td></tr>
+  <tr><td><code>gapRefinement</code></td><td>With <code>{"thickness": t, "level": L}</code>, refine walls to <code>L</code> where the fluid is thinner than <code>t</code>, such as at slot tips or in narrow channels.</td><td>None</td></tr>
+  <tr><td><code>autoGapRefinement</code></td><td>With <code>{"cellsAcross": n, "maxLevel": L}</code> (or <code>true</code> for defaults), measure the gap width w along the wall normal and refine until <code>n</code> cells fit across the gap, up to level <code>L</code>. This preserves grooves, slits, and narrow gaps without a prescribed thickness.</td><td><code>n</code> = 3, <code>L</code> = maximum surface level + 2</td></tr>
+</table></div>
+
+<h3 id="md-snap">Snapping and merging</h3>
+<div class="table-wrap"><table>
+  <tr><th>Key</th><th>Description</th><th>Default</th></tr>
+  <tr><td><code>snapTolerance</code></td><td>Distance for snapping vertices to surfaces, as a fraction of the cell edge length. Helps prevent sliver cells.</td><td>0.3</td></tr>
+  <tr><td><code>featureSnapTolerance</code></td><td>Distance for snapping to sharp STL edges and cylinder rims, as a fraction of the cell edge length</td><td>0.5</td></tr>
+  <tr><td><code>featureSnapMax</code></td><td>Experimental. Snap to feature edges within this distance and undo snaps that invalidate octree cells. Disabled by default because some cut cells invert.</td><td>0.5</td></tr>
+  <tr><td><code>concaveSnapMax</code></td><td>Distance for snapping vertices on the solid side to sharp concave edges</td><td>0.75</td></tr>
+  <tr><td><code>hangingSnap</code></td><td>Treatment of hanging vertices that do not reach the surface. <code>"free"</code> projects them directly, and <code>"constrained"</code> leaves them in place.</td><td><code>"free"</code></td></tr>
+  <tr><td><code>featureCaps</code></td><td>Align cut faces with sharp convex feature edges (<code>"domain"</code> / <code>"zone"</code> / <code>"both"</code> / <code>false</code>).</td><td><code>"domain"</code></td></tr>
+  <tr><td><code>exactFeatureCut</code></td><td>Cut cells near sharp convex edges directly with STL planes to keep off-grid edges straight. Works when <code>featureCaps</code> is <code>"domain"</code> or <code>"both"</code>.</td><td>true</td></tr>
+  <tr><td><code>mergeRatio</code></td><td>Merge cut cells below this fraction of the original hexahedron volume into a neighboring cell.</td><td>0.25</td></tr>
+  <tr><td><code>mergeMaxNonOrtho</code></td><td>Maximum non-orthogonality angle after merging [deg]</td><td>65</td></tr>
+  <tr><td><code>mergeWallFaces</code></td><td>Combine nearly coplanar wall-face fragments of a cell into a single face.</td><td>true</td></tr>
+</table></div>
+
+<h3 id="md-thin">Thin geometry</h3>
+<div class="table-wrap"><table>
+  <tr><th>Key</th><th>Description</th><th>Default</th></tr>
+  <tr><td><code>fillThinGaps</code></td><td>Number of splits for cells with fluid inside but no corners in the fluid, as in thin gaps between grid planes. Set to 0 to disable (Cartesian only).</td><td>2</td></tr>
+  <tr><td><code>fillThinWalls</code></td><td>Number of splits for cells with a thin solid wall inside but no corners in the solid. Keeps the wall from disappearing and connecting the fluid on both sides (Cartesian only).</td><td>3</td></tr>
+  <tr><td><code>thinCutCells</code></td><td>Number of splits for cut cells with little remaining fluid and an adjacent finer cell (Cartesian only)</td><td>2</td></tr>
+  <tr><td><code>thinCutFraction</code></td><td>Fluid fraction threshold for <code>thinCutCells</code></td><td>0.35</td></tr>
+  <tr><td><code>minRegionVolume</code></td><td>Remove disconnected fluid regions below this fraction of total fluid volume. Warn about larger regions.</td><td>1e-3</td></tr>
+</table></div>
+
+<h3 id="md-check">Checks and output</h3>
+<div class="table-wrap"><table>
+  <tr><th>Key</th><th>Description</th><th>Default</th></tr>
+  <tr><td><code>checkLeaks</code></td><td>Check for fluid cells that connect across a solid wall and log any leaks found.</td><td>true</td></tr>
+  <tr><td><code>strictInput</code></td><td>Stop with an error if the STL has open or non-manifold edges.</td><td>false</td></tr>
+  <tr><td><code>volumeCheckTolerance</code></td><td>Warn if the volume difference between the mesh and STL exceeds this fraction.</td><td>0.05</td></tr>
+  <tr><td><code>writeFormat</code></td><td><a href="#format">polyMesh export format</a>, <code>"binary"</code> or <code>"ascii"</code></td><td><code>"binary"</code></td></tr>
+  <tr><td><code>writeMRFProperties</code></td><td>Write a <code>constant/MRFProperties</code> template for rotating zones, excluding those with <code>"ami": true</code>.</td><td>true</td></tr>
+  <tr><td><code>openfoam</code></td><td><a href="#ami">Sliding-mesh dialect</a>. Use <code>"com"</code> for openfoam.com / ESI, or <code>"org10"</code>, <code>"org11"</code>, or <code>"org12"</code> for openfoam.org.</td><td><code>"com"</code></td></tr>
+  <tr><td><code>writeDynamicMeshDict</code></td><td>Write <code>constant/dynamicMeshDict</code> when a zone has <code>"ami": true</code>.</td><td>true</td></tr>
+  <tr><td><code>amiExactRims</code></td><td>Make the <a href="#ami">sliding-mesh interface</a> of a zone with <code>"ami": true</code> follow its top and bottom rims exactly by splitting cells outside the rim in two.</td><td>true</td></tr>
+</table></div>
+
+<h2 id="zones">Rotating zones (<code>rotatingZones</code>)</h2>
+<p>Define rotating regions for MRF or sliding meshes (AMI) with cylinders. cutmesh cuts the octree against the cylinder during meshing, so
+<strong>the cylinder surface itself becomes internal mesh faces</strong>.
+The interface lies on the cylinder even in coarse cells, so it does not require extra refinement.</p>
+<pre><code>"rotatingZones": [
+  { "name": "rotor",
+    "cylinder": { "point1": [0, 0, 0.06], "point2": [0, 0, 0.14], "radius": 0.07 },
+    "surfaceLevel": 2, "volumeLevel": 2, "omega": 31.416, "nonRotatingPatches": [] }
+]</code></pre>
+<div class="table-wrap"><table>
+  <tr><th>Key</th><th>Description</th></tr>
+  <tr><td><code>name</code></td><td>Zone name (cellZone name, with <code>&lt;name&gt;_interface</code> as the faceZone name)</td></tr>
+  <tr><td><code>cylinder</code></td><td>Cylinder defined by axis endpoints <code>point1</code> and <code>point2</code> and a <code>radius</code></td></tr>
+  <tr><td><code>stl</code>, <code>origin</code>, <code>axis</code></td><td>Use a closed STL to define the zone (see <code>examples/stirred_tank/meshDict_stlRotor.json</code>).</td></tr>
+  <tr><td><code>surfaceLevel</code> / <code>volumeLevel</code></td><td>Refinement levels on the zone surface and inside the zone</td></tr>
+  <tr><td><code>omega</code></td><td>Angular velocity [rad/s] written to MRFProperties</td></tr>
+  <tr><td><code>nonRotatingPatches</code></td><td>Patches that stay stationary inside the zone</td></tr>
+  <tr><td><code>wallProximity</code></td><td>With <code>{"distance": d, "level": L}</code>, refine the zone surface to <code>L</code> only within <code>d</code> of the STL. Use this to keep refinement local when the interface lies near a wall or in a narrow gap.</td></tr>
+  <tr><td><code>ami</code></td><td>Set to <code>true</code> to split the interface into two <a href="#ami">sliding-mesh</a> patches and write <code>dynamicMeshDict</code>.</td></tr>
+  <tr><td><code>conforming</code></td><td>Set to <code>false</code> to include cells in the cellZone by their centers without cutting the interface. Works with MRF only. Use it when a narrow gap prevents a conforming interface.</td></tr>
+</table></div>
+<p>cutmesh writes <code>cellZones</code> for the rotating regions, <code>faceZones</code> for the oriented cylinder interfaces (<code>&lt;name&gt;_interface</code>), and
+a <code>constant/MRFProperties</code> template. Multiple zones are supported if they do not overlap.</p>
+<div class="note">
+  <p><strong>For an interface in a narrow gap</strong>, such as between rotor and stator, fit at least 1 cell between the interface and each wall.
+  Choose the <code>wallProximity</code> <code>level</code> so the cell size is at most half the gap width. The cell count rises sharply as the gap narrows.
+  See the <a href="examples.html#stator">rotor–stator example</a>.</p>
+</div>
+
+<h2 id="ami">Sliding meshes (AMI)</h2>
+<p>Set <code>"ami": true</code> on a rotating zone to split its internal interface faces into two patches, one owned by rotating cells and one by stationary cells.
+cutmesh duplicates the interface points on the rotating side to separate the patches. This combines the effects of OpenFOAM's <code>createBaffles</code> and <code>mergeOrSplitBaffles -split</code> / <code>splitBaffles</code>.
+cutmesh adds any boundary layers before splitting, then writes <code>constant/dynamicMeshDict</code> for rigid-body rotation of the cellZone. AMI zones are omitted from <code>MRFProperties</code>.</p>
+<pre><code>"rotatingZones": [
+  { "name": "rotor",
+    "cylinder": { "point1": [0, 0, 0.06], "point2": [0, 0, 0.14], "radius": 0.07 },
+    "surfaceLevel": 2, "volumeLevel": 2, "omega": 31.416,
+    "ami": true }
+],
+"openfoam": "com"</code></pre>
+<p>Use <code>openfoam</code> to select the output dialect for your OpenFOAM distribution.</p>
+<div class="table-wrap"><table>
+  <tr><th><code>openfoam</code></th><th>Patches (rotating / stationary)</th><th>dynamicMeshDict</th><th>OpenFOAM step</th></tr>
+  <tr><td><code>"com"</code> (default)</td><td><code>&lt;name&gt;_AMI1</code> / <code>&lt;name&gt;_AMI2</code>, type <code>cyclicAMI</code></td><td><code>dynamicMotionSolverFvMesh</code> + <code>solidBody</code></td><td>Use directly</td></tr>
+  <tr><td><code>"org10"</code>, <code>"org11"</code>, <code>"org12"</code></td><td><code>&lt;name&gt;_nonCouple1</code> / <code>&lt;name&gt;_nonCouple2</code>, type <code>patch</code></td><td><code>mover { type motionSolver; ... }</code></td><td>Couple them with <code>createNonConformalCouples -overwrite &lt;name&gt;_nonCouple1 &lt;name&gt;_nonCouple2</code></td></tr>
+</table></div>
+<ul>
+  <li>The interface must be a surface of revolution about the rotation axis. Cylinders satisfy this requirement. cutmesh warns if a zone STL is not a surface of revolution or if <code>origin</code> or <code>axis</code> is misaligned.</li>
+  <li>AMI requires conforming zones. For multiple zones, cutmesh writes <code>multiSolidBodyMotionSolver</code> for openfoam.com and <code>motionSolverList</code> for openfoam.org.</li>
+  <li>Use <code>python -m cutmesh.ami</code> to <a href="#cmd-ami">convert an existing mesh</a>.</li>
+  <li>Cut cells outside the top and bottom cylinder rims can wrap around them, leaving bent interface faces. OpenFOAM represents each face using its center, effectively chamfering the rim so the two sides stop matching as they rotate.
+  <code>amiExactRims</code> (default true) inserts rim points on crossing edges and splits outer cells in two along one plane of the bent face, so the interface follows the rim exactly.
+  cutmesh leaves any splits that would create poor-quality cells in place and reports their count. The standalone <code>python -m cutmesh.ami</code> conversion has no zone geometry for this step.</li>
+</ul>
+<div class="warn"><p>The output follows the distribution tutorials, <code>interFoam/RAS/mixerVesselAMI</code> for openfoam.com and <code>mixerVessel2D</code> for openfoam.org 10–12.
+The case in <code>examples/stirred_tank/meshDict_ami.json</code> (about 100,000 cells with 90° of laminar rotation) completed in openfoam.com v2606 <code>pimpleFoam</code> and OpenFOAM-13 <code>foamRun</code> using the <code>"org12"</code> dialect.
+In OpenFOAM-12, both this mesh and a rimless cylindrical zone halted with a floating-point exception in <code>cyclicFvPatch::makeWeights</code> when rotation began. The same mesh runs in OpenFOAM-13, which points to an OpenFOAM-12 issue.</p></div>
+
+<h2 id="cylbase">Cylindrical base mesh (<code>baseMesh</code>)</h2>
+<p>For rotating machinery, use concentric blocks around the rotation axis as the octree roots.
+cutmesh lays out the central square, ring radii, and divisions automatically. A minimal configuration follows.</p>
+<pre><code>"baseMesh": { "type": "cylindrical", "origin": [0, 0, 0], "axis": [0, 0, 1] }</code></pre>
+<div class="table-wrap"><table>
+  <tr><th>Key</th><th>Description</th><th>Default</th></tr>
+  <tr><td><code>origin</code>, <code>axis</code></td><td>Rotation axis (origin and direction)</td><td><code>[0,0,0]</code>, <code>[0,0,1]</code></td></tr>
+  <tr><td><code>zRange</code></td><td>Axial range <code>[z0, z1]</code> measured from <code>origin</code></td><td>STL extent ± <code>baseCellSize</code></td></tr>
+  <tr><td><code>nz</code> / <code>dz</code></td><td>Number or width of axial divisions (shared by all blocks)</td><td><code>dz = baseCellSize</code></td></tr>
+  <tr><td><code>rOuter</code></td><td>Outer radius of the outermost block in the automatic layout</td><td>STL radius + <code>2/3 × cellSize</code></td></tr>
+  <tr><td><code>cellSize</code></td><td>Target radial and circumferential cell width for the automatic layout</td><td>Smaller of <code>baseCellSize</code> and <code>dz</code></td></tr>
+  <tr><td><code>core</code>, <code>blocks</code></td><td>For manual block layout, supply both keys. Otherwise omit both.</td><td>Automatic layout</td></tr>
+  <tr><td><code>maxSizeRatio</code></td><td>Maximum cell size ratio across block boundaries</td><td>2.5</td></tr>
+</table></div>
+<p><strong>Automatic layout</strong> (omit <code>core</code> and <code>blocks</code>)</p>
+<ul>
+  <li>A small 2×2 central square has a half-width of 0.5–0.95 times <code>cellSize</code>. An O-grid ring with 8 circumferential divisions connects it to a circle of twice that radius. Beyond this, concentric rings grow by about 1.5625× in radius until <code>rOuter</code>.</li>
+  <li>Each ring's <code>nTheta</code> is a multiple of 4 chosen to make the circumferential width near mid-ring close to <code>cellSize</code>. The radial width is at most <code>1.15 × cellSize</code>. Every edge is at most 1.3 times <code>baseCellSize</code>, avoiding extra refinement levels.</li>
+  <li>Only the 4 central cells and those in the first ring lack circumferential alignment. When a solid shaft or hub lies on the axis, most of these cells fall inside it.</li>
+  <li>cutmesh finds the radii of coaxial cylinders in the domain and zone STLs (such as shafts, hubs, tank walls, and blade-tip circles) and coaxial rotating or refinement cylinders. It positions radial vertices so each surface falls 1/3 of the way through a cell. When refinement halves the cell, the surface remains at 1/3 or 2/3 of the new cell, avoiding thin cut cells. The central square is sized to keep a similar separation between the inner cylinder (shaft) and the midpoint of its edge.</li>
+  <li>The log shows the layout and detected radii. Its <code>"core": ..., "blocks": [...]</code> entries can be reused for manual layout. Blocks with nonuniform spacing have <code>nr + 1</code> radial vertices in <code>radii</code>.</li>
+</ul>
+<p><strong>Manual layout</strong></p>
+<pre><code>"core": { "halfWidth": 0.0375, "n": 6 },
+"blocks": [
+  { "rOuter": 0.06, "nr": 2 },
+  { "rOuter": 0.10, "nr": 3, "nTheta": 38 },
+  { "rOuter": 0.155, "nr": 4 }
+]</code></pre>
+<ul>
+  <li><code>core</code> is the central square block with half-width <code>halfWidth</code> and <code>n</code> divisions per side. <code>blocks</code> lists the concentric blocks outward, with outer radius <code>rOuter</code>, radial divisions <code>nr</code>, and circumferential divisions <code>nTheta</code>.</li>
+  <li>The first block is an O-grid connecting the square to a circle, so <code>nTheta</code> is fixed at <code>4 × core.n</code>. Later blocks can use any <code>nTheta</code>, even when adjacent counts are not integer multiples. Optional <code>radii</code> sets the <code>nr + 1</code> radial vertices.</li>
+  <li>Set the outermost <code>rOuter</code> greater than the STL radius. A smaller value triggers a warning and clips the STL.</li>
+</ul>
+<p><strong>Both layouts</strong></p>
+<ul>
+  <li>At block boundaries, cutmesh overlays faces from both sides and splits them into shared faces. This produces a conforming polyhedral mesh for arbitrary division ratios, without AMI.</li>
+  <li>Refinement level L represents a target size of <code>baseCellSize / 2^L</code>. Refinement halves all 3 dimensions together, so base cells narrower than the axial width <code>dz</code> can become too fine in cross-section. When laying out blocks by hand, choose divisions that give near-cubic cells, as the automatic layout does.</li>
+</ul>
+
+<h2 id="layers">Boundary layers (<code>addLayers</code>)</h2>
+<p>cutmesh adds prismatic layers to wall patches. Set <code>addLayers</code> in the meshDict to add layers after meshing, or run the standalone command on an existing mesh.
+The command also supports polyMesh files created with other tools.</p>
+<pre><code># Add "addLayers": {...} to meshDict.json (see examples/stirred_tank/meshDict_layers.json)
+cutmesh examples/stirred_tank/meshDict_layers.json
+# Add layers to an existing case
+python -m cutmesh.layers CASE [layerDict.json] [-out CASE2] [-noCheck] [-ascii | -binary]</code></pre>
+<div class="table-wrap"><table>
+  <tr><th>Key</th><th>Description</th><th>Default</th></tr>
+  <tr><td><code>patches</code></td><td>List of patches to receive layers</td><td>All patches of type <code>wall</code></td></tr>
+  <tr><td><code>nLayers</code></td><td>Number of layers</td><td>3</td></tr>
+  <tr><td><code>expansionRatio</code></td><td>Ratio of successive layer thicknesses away from the wall</td><td>1.2</td></tr>
+  <tr><td><code>finalLayerThickness</code></td><td>Thickness of the innermost layer, as a fraction of the local cell size if <code>relativeSizes</code> is enabled</td><td>0.3</td></tr>
+  <tr><td><code>relativeSizes</code></td><td>Specify thickness as a fraction of the local cell size.</td><td>true</td></tr>
+  <tr><td><code>minThickness</code></td><td>Omit layers below this total thickness.</td><td>0.05</td></tr>
+  <tr><td><code>maxNonOrtho</code></td><td>Treat cells above this non-orthogonality angle [deg] as invalid and reduce the layer thickness there.</td><td>65</td></tr>
+  <tr><td><code>maxSkewness</code></td><td>Treat cells adjacent to faces above this skewness limit as invalid. <code>null</code> disables the check.</td><td>4</td></tr>
+  <tr><td><code>maxGapFraction</code></td><td>Limit total thickness to this fraction of the distance to the opposing wall. Set to 0 to disable.</td><td>0.3</td></tr>
+  <tr><td><code>maxThicknessSlope</code></td><td>Limit changes in total thickness along the wall so the layers taper gradually.</td><td>0.5</td></tr>
+</table></div>
+<p>Additional settings include <code>minNormalCos</code>, <code>wallNonOrthMargin</code>, <code>cornerStretch</code>, <code>mergeWallPoints</code>,
+<code>concaveSlide</code>, <code>nRings</code>, <code>nSmooth</code>, <code>nIter</code>, and <code>nCollapseIter</code>. See <a href="https://github.com/mmer547/cutmesh/blob/main/README.en.md#boundary-layers-cutmeshlayerspy">Boundary layers in the README</a>.
+Use <code>"addLayers": {}</code> to add layers with the defaults. For narrow gaps, a <code>finalLayerThickness</code> of about 0.15 lets many more vertices reach the target thickness.
+The log reports the percentages of wall vertices at the target thickness, with thinner layers, and without layers.</p>
+
+<h2 id="format">Export format (<code>writeFormat</code>)</h2>
+<p>cutmesh writes polyMesh in binary by default, using the OpenFOAM <code>writeFormat binary</code> format.
+The large <code>points</code>, <code>faces</code>, <code>owner</code>, and <code>neighbour</code> files are binary.
+The <code>boundary</code>, <code>cellZones</code>, and <code>faceZones</code> files are ASCII.
+Set <code>"writeFormat": "ascii"</code> to inspect the files by hand or use them with ASCII-only tools.</p>
+<div class="table-wrap"><table>
+  <tr><th>About 690,000 cells</th><th class="num">ASCII</th><th class="num">Binary</th></tr>
+  <tr><td>Write</td><td class="num">4.3–4.5 s</td><td class="num">0.14–0.19 s</td></tr>
+  <tr><td>File size</td><td class="num">122 MB</td><td class="num">80 MB</td></tr>
+  <tr><td>Read (cutmesh)</td><td class="num">3.1 s</td><td class="num">0.18 s</td></tr>
+</table></div>
+<ul>
+  <li>The header specifies <code>format binary;</code> and <code>arch "LSB;label=32;scalar=64";</code>. The <code>faces</code> file is a <code>faceCompactList</code>.</li>
+  <li>Meshes whose labels exceed 32 bits use <code>label=64</code> and require an OpenFOAM build with 64-bit labels.</li>
+  <li><code>python -m cutmesh.layers</code> writes the input format by default. Override it with <code>-ascii</code> or <code>-binary</code>.</li>
+</ul>
+<div class="warn">
+  <p>The binary format follows the OpenFOAM source. Reading it with OpenFOAM itself has yet to be verified. If reading fails,
+  set <code>"writeFormat": "ascii"</code> or convert using OpenFOAM's <code>foamFormatConvert</code>.</p>
+</div>
+
+<h2 id="rust">Rust acceleration</h2>
+<p>The Rust extension covers nearly every meshing stage: geometry queries (nearest points, inside/outside tests, and signed distances), octree refinement and balancing, vertex snapping, STL and rotating-zone cuts, merging, assembly, leak and quality checks, and boundary-layer smoothing. It uses BVH acceleration and Rayon for parallelism.
+With the Rust toolchain (cargo) installed, the build below installs <code>cutmesh/_core</code>. The Python/NumPy fallback produces the same result.</p>
+<pre><code>python tools/build_rust.py                          # Run cargo build --release and copy into the package
+CUTMESH_NO_RUST=1 python -m cutmesh meshDict.json   # Force the Python path for comparison</code></pre>
+<div class="table-wrap"><table>
+  <tr><th>Example</th><th class="num">Python</th><th class="num">With Rust extension</th></tr>
+  <tr><td>examples/stirred_tank (<code>meshDict.json</code>, about 100,000 cells)</td><td class="num">142 s</td><td class="num">1.3 s</td></tr>
+  <tr><td>Stirred tank with layers (<code>meshDict_layers.json</code>)</td><td class="num">148 s</td><td class="num">2.8 s</td></tr>
+  <tr><td>Stirred tank with a 1 mm gap (<code>meshDict_stator_1mm.json</code>, about 600,000 cells)</td><td class="num">2080 s (about 35 min)</td><td class="num">9.0 s</td></tr>
+</table></div>
+<p>Measured with v0.5.0 on a 16-core machine, including quality checks. With v0.5.1, a real-world geometry of about 8.5 million cells takes about 95 seconds and uses about 13 GB of memory.</p>
+
+<h2 id="checks">Configuration and input checks</h2>
+<p>cutmesh validates <code>meshDict.json</code> before meshing.</p>
+<ul>
+  <li><strong>Errors stop meshing.</strong> One message collects missing required keys or files, invalid types or ranges,
+  duplicate zone names, zones with both or neither of <code>cylinder</code> and <code>stl</code>, overlapping zones, and invalid JSON.</li>
+  <li><strong>Warnings</strong> (<code>WARNING: meshDict:</code>) report unknown keys with suggestions and names in settings such as <code>surfaceRefinement</code> that do not match an STL solid.</li>
+  <li>The <code>cutmesh</code> command prints <code>ERROR: ...</code> without a traceback and returns exit code 1. Invalid command-line arguments return 2.</li>
+</ul>
+<p><strong>Automatic STL repairs</strong> always produce a log line beginning with <code>REPAIR:</code>.</p>
+<div class="table-wrap"><table>
+  <tr><th>Repair</th><th>Reason</th></tr>
+  <tr><td>Remove zero-area triangles.</td><td>Their normals are undefined, which disrupts feature-edge and intersection calculations.</td></tr>
+  <tr><td>Keep one copy of each duplicate triangle.</td><td>Ray parity tests count duplicate intersections twice, reversing the inside/outside result.</td></tr>
+  <tr><td>Remove both triangles in each coincident pair with opposite orientations (a zero-thickness membrane).</td><td>Same as above.</td></tr>
+</table></div>
+<pre><code>REPAIR: domain STL: removed 20 zero-area triangles, 50 duplicated triangles (one copy kept) (1350 -> 1280 triangles)</code></pre>
+<p>Open edges, non-manifold edges, and inconsistent orientations produce <code>WARNING:</code> messages and require repair in the source STL. For a valid STL, the log reads
+<code>domain STL check: closed, consistently oriented, N triangles</code>. After meshing, cutmesh compares the mesh volume with the STL volume
+（<code>volume check: mesh ..., STL ... (+x%)</code>）。</p>
+
+<h2 id="tools">Commands and options</h2>
+<p>These paths are relative to the repository root. After <code>pip install -e .</code>, you can run <code>cutmesh</code> and <code>python -m cutmesh.*</code> from any directory.</p>
+
+<h3 id="cmd-cutmesh">Generating a mesh with <code>cutmesh</code></h3>
+<pre><code>cutmesh meshDict.json [-case DIR] [-noCheck]      # python -m cutmesh also works</code></pre>
+<div class="table-wrap"><table>
+  <tr><th>Option</th><th>Description</th></tr>
+  <tr><td><code>-case DIR</code></td><td>Output case directory (overrides <code>case</code> in the meshDict)</td></tr>
+  <tr><td><code>-noCheck</code></td><td>Skip the final quality check.</td></tr>
+  <tr><td><code>-h</code>, <code>--help</code></td><td>Show usage.</td></tr>
+</table></div>
+<p>Exit code 0 means success, 1 means a configuration or STL error (printed as <code>ERROR: ...</code>), and 2 means a command-line argument error.</p>
+
+<h3 id="cmd-layers">Adding boundary layers with <code>python -m cutmesh.layers</code></h3>
+<pre><code>python -m cutmesh.layers CASE [layerDict.json] [-out CASE2] [-noCheck] [-ascii | -binary]</code></pre>
+<div class="table-wrap"><table>
+  <tr><th>Argument or option</th><th>Description</th></tr>
+  <tr><td><code>CASE</code></td><td>Case containing the mesh to receive layers (<code>CASE/constant/polyMesh</code>)</td></tr>
+  <tr><td><code>layerDict.json</code></td><td>Layer settings (see <a href="#layers">Boundary layers</a>). Pass a meshDict to use its <code>addLayers</code>, or omit the file to use defaults.</td></tr>
+  <tr><td><code>-out CASE2</code></td><td>Output case. If omitted, overwrites <code>CASE</code>.</td></tr>
+  <tr><td><code>-noCheck</code></td><td>Skip the quality check.</td></tr>
+  <tr><td><code>-ascii</code> / <code>-binary</code></td><td>Export format (defaults to the input format)</td></tr>
+</table></div>
+
+<h3 id="cmd-ami">Converting to a sliding mesh with <code>python -m cutmesh.ami</code></h3>
+<pre><code>python -m cutmesh.ami CASE [-zone NAME ...] [-openfoam com|org10|org11|org12] [-out CASE2] [-noDynamicMeshDict] [-ascii | -binary]</code></pre>
+<div class="table-wrap"><table>
+  <tr><th>Argument or option</th><th>Description</th></tr>
+  <tr><td><code>CASE</code></td><td>Mesh from cutmesh with cellZone <code>NAME</code> and faceZone <code>NAME_interface</code></td></tr>
+  <tr><td><code>-zone NAME</code></td><td>Zone to convert. Specify it more than once for multiple zones. The default is all zones with a matching faceZone.</td></tr>
+  <tr><td><code>-openfoam</code></td><td>Output dialect (default <code>com</code>)</td></tr>
+  <tr><td><code>-out CASE2</code></td><td>Output case. If omitted, overwrites <code>CASE</code>.</td></tr>
+  <tr><td><code>-noDynamicMeshDict</code></td><td>Skip writing <code>dynamicMeshDict</code>. Rotation settings are read from <code>constant/MRFProperties</code> and entries for converted zones are removed from <code>MRFProperties</code>.</td></tr>
+  <tr><td><code>-ascii</code> / <code>-binary</code></td><td>Export format (defaults to the input format)</td></tr>
+</table></div>
+
+<h3 id="cmd-check">Mesh inspection</h3>
+<div class="table-wrap"><table>
+  <tr><th>Command</th><th>Description</th></tr>
+  <tr><td><code>python -m cutmesh.diagnose meshDict.json [CASE]</code></td><td>Check for fluid connections through solid walls, as with <code>checkLeaks</code>. <code>CASE</code> defaults to <code>case</code> in the meshDict. Returns exit code 1 if a leak is found.</td></tr>
+  <tr><td><code>python tools/edge_check.py meshDict.json [-case DIR]</code></td><td>Remesh and measure the distance from STL feature edges and cylinder rims to the nearest mesh edge in units of the smallest cell size. A distance of 0 means the edge was captured. With <code>-case</code>, also write the mesh.</td></tr>
+  <tr><td><code>python benchmark/render_mesh.py CASE [-o OUT] [--title NAME]</code></td><td>Draw a 3D view of the walls (<code>overview.png</code>) and a cutaway with 3 sections (<code>cut.png</code>). Poor-quality cells are red. <code>-o</code> defaults to the parent directory of CASE.</td></tr>
+  <tr><td><code>python benchmark/stl_check.py model.stl [...] [--json]</code></td><td>Inspect the input STL for open or non-manifold edges, inconsistent orientation, duplicate or zero-area triangles, number of components, and volume.</td></tr>
+</table></div>
+
+<h3 id="cmd-bench">Benchmarking with <code>benchmark/run_bench.py</code></h3>
+<p>Run a set of STL cases and report each result (PASS / WARN / INVALID / ERROR), cell count, quality, and time. Each case runs in its own process so other cases continue if one crashes.</p>
+<pre><code>python benchmark/make_synthetic.py                           # Generate synthetic STL geometry (first run only)
+python benchmark/run_bench.py benchmark/suites/synthetic.json [OPTIONS]</code></pre>
+<div class="table-wrap"><table>
+  <tr><th>Option</th><th>Description</th></tr>
+  <tr><td><code>-j N</code></td><td>Run N cases in parallel (use 1 to compare timings).</td></tr>
+  <tr><td><code>--only PATTERN</code></td><td>Filter by case name. Supports wildcards and can be specified more than once.</td></tr>
+  <tr><td><code>--cells-across N</code></td><td>Set the base cell size to the longest bounding-box edge / N for every case (default 24).</td></tr>
+  <tr><td><code>--set KEY=JSON</code></td><td>Override a meshDict key for every case, for example <code>--set addLayers='{"nLayers": 3}'</code>.</td></tr>
+  <tr><td><code>--keep</code></td><td>Keep polyMesh files for passing cases too. They are deleted by default.</td></tr>
+  <tr><td><code>--no-images</code></td><td>Skip image rendering.</td></tr>
+  <tr><td><code>--out DIR</code></td><td>Output directory (default <code>benchmark/results/&lt;suite&gt;-&lt;timestamp&gt;</code>)</td></tr>
+  <tr><td><code>--baseline FILE</code></td><td>Compare with past results and return exit code 1 if any regress.</td></tr>
+  <tr><td><code>--save-baseline</code></td><td>Save results to <code>benchmark/baselines/&lt;suite&gt;.json</code>.</td></tr>
+  <tr><td><code>--timeout SEC</code></td><td>Per-case time limit (default 900 s)</td></tr>
+  <tr><td><code>--vol-tol X</code></td><td>Report WARN if the volume difference exceeds this fraction (default 0.01).</td></tr>
+  <tr><td><code>--strict</code></td><td>Count stricter checks than checkMesh as WARN, including checks on tetrahedra built by triangulating faces.</td></tr>
+</table></div>
+<p>Suites include <code>synthetic.json</code> (26 synthetic shapes), <code>large.json</code> (speed tests, including about 1 million cells and rotating zones), and <code>local.json</code> (local real-world geometry). See <code>benchmark/README.md</code> for details.</p>
+
+<h3 id="cmd-misc">Other tools</h3>
+<div class="table-wrap"><table>
+  <tr><th>Command</th><th>Description</th></tr>
+  <tr><td><code>python tools/build_rust.py [--debug]</code></td><td>Build and install the Rust extension into the package (requires cargo).</td></tr>
+  <tr><td><code>python examples/stirred_tank/make_geometry.py [--stator GAP_MM]</code></td><td>Generate the stirred tank STL. <code>--stator</code> adds a stationary ring with a gap of GAP_MM outside the blades.</td></tr>
+  <tr><td><code>python examples/stirred_tank/run.py [meshDict]</code></td><td>Generate the example mesh and plot <code>slice_z.png</code> and <code>slice_y.png</code>.</td></tr>
+  <tr><td><code>python tools/make_docs_images.py [--only NAME ...]</code></td><td>Regenerate the documentation images.</td></tr>
+  <tr><td><code>CUTMESH_NO_RUST=1</code></td><td>Environment variable that forces the Python implementation for comparison.</td></tr>
+</table></div>
+
+<h2 id="limits">Known limitations</h2>
+<ul>
+  <li>The STL must be watertight, closed, and consistently oriented. Open edges and self-intersections require repair in the source geometry. Open edges generate warnings and self-intersections often show up in the volume check.</li>
+  <li>Geometry thinner than a cell, such as thin blades or baffles, needs refinement to around its thickness.</li>
+  <li>Re-entrant wall corners and cylinder rims can be chamfered at cell scale. Exact cuts capture sharp convex edges, while chamfering can persist at concave edges or where curved surfaces meet.</li>
+  <li>A few boundary faces can have skewness &gt; 4, which can cause a checkMesh quality check to fail.</li>
+  <li>Memory use is about 1.5–2 GB per million cells. Placing a rotating-zone interface in a narrow gap can sharply increase both cell count and memory use.</li>
+  <li>The Python/NumPy fallback is substantially slower than the Rust extension, by about 100× in the stirred tank example.</li>
+</ul>
+</article>
+</main>
+
+<footer class="site-footer"><div class="inner">
+  cutmesh is an independent tool that writes meshes (<code>constant/polyMesh</code>) for OpenFOAM.
+  This offering is not approved or endorsed by OpenCFD Limited, producer and distributor of the OpenFOAM software via www.openfoam.com,
+  and owner of the OPENFOAM® and OpenCFD® trade marks.
+</div></footer>
+</body>
+</html>

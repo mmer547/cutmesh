@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cutmesh — Octree cut-cell mesher for OpenFOAM</title>
+<meta name="description" content="Generate octree-based polyhedral meshes inside watertight STL geometry and export directly to OpenFOAM polyMesh. Supports rotating zones, cylindrical base meshes, and boundary layers.">
+<link rel="stylesheet" href="../style.css">
+<link rel="alternate" hreflang="ja" href="../index.html">
+</head>
+<body>
+<header class="site-header"><div class="inner">
+  <a class="brand" href="index.html">cut<span>mesh</span></a>
+  <nav class="site-nav">
+    <a href="manual.html">Manual</a>
+    <a href="examples.html">Examples</a>
+    <a href="meshdict.html">Build a meshDict</a>
+    <a href="https://github.com/mmer547/cutmesh">GitHub</a>
+    <a href="../index.html" lang="ja" hreflang="ja">日本語</a>
+  </nav>
+</div></header>
+
+<main class="page">
+<section class="hero">
+  <div>
+    <h1>cutmesh</h1>
+    <p class="lead">cutmesh generates octree-based polyhedral meshes inside watertight STL geometry and writes OpenFOAM's <code>constant/polyMesh</code> directly.
+    It cuts octree cells against the STL to create wall faces and cuts out rotating zones during meshing for applications such as stirred tanks.</p>
+    <div class="actions">
+      <a class="btn primary" href="manual.html">Manual</a>
+      <a class="btn" href="examples.html">View examples</a>
+      <a class="btn" href="https://github.com/mmer547/cutmesh">GitHub</a>
+    </div>
+  </div>
+  <figure>
+    <a class="img" href="examples.html#tank"><img src="../images/tank_cut.png" alt="3D cutaway of a stirred tank mesh, showing the tank, shaft, four paddle blades, and fine cells around the blades" width="996" height="908"></a>
+    <figcaption>Stirred tank with a rotating zone, shown with the front half of the mesh removed</figcaption>
+  </figure>
+</section>
+
+<h2 id="news">News</h2>
+<ul class="news">
+  <li><time datetime="2026-11-23">2026-11-23</time><span class="ver">v0.5.1</span>
+    <p><strong>Lower memory usage.</strong> Each stage now releases data it has finished using, including octree faces, intermediate cut results, search structures, and caches.
+    Peak memory dropped from 30 GB to about 13 GB on a real-world geometry with about 8.5 million cells, and from 7.8 GB to 3.4 GB in the 0.5 mm gap example (about 2 million cells). Usage is about 1.5–2 GB per million cells.
+    The mesh and runtime are unchanged.</p></li>
+  <li><time datetime="2026-11-22">2026-11-22</time><span class="ver">v0.5.0</span>
+    <p><strong>Performance improvements, step 1.</strong> The octree, snapping, STL and rotating-zone cuts, cell merging, assembly, and quality checks moved to the Rust extension and now run in parallel.
+    On a real-world geometry with about 8.5 million cells, runtime fell from 1209 seconds to about 100 seconds (about 12× faster) and memory use fell from 65 GB to about 30 GB. At each step, the mesh was verified byte for byte on this geometry and the public benchmarks.
+    The <a href="examples.html">example</a> timings were updated. The stirred tank went from 14.1 to 1.3 seconds and the 1 mm gap example from 131 to 9.2 seconds. The test machine also changed from 4 cores to 16.
+    This release also added automatic block layout for cylindrical base meshes and the <a href="meshdict.html">meshDict builder</a>.</p></li>
+  <li><time datetime="2026-11-21">2026-11-21</time><span class="ver">v0.4.0</span>
+    <p>Added exact cuts for sharp convex edges that do not align with the grid, sliding-mesh (AMI) interfaces for rotating zones, showcase cases for pipes, ducts, and bluff bodies,
+    and STL and meshDict input checks. The documentation site went live.</p></li>
+  <li><time datetime="2026-11-13">2026-11-13</time><span class="ver">v0.3.0</span>
+    <p>Added splitting of thin cut cells at refinement transitions, improved boundary-layer coverage on curved walls and concave corners, and sped up octree and boundary-layer processing.
+    Also added automatic removal of duplicate and zero-area STL triangles and a benchmark suite.</p></li>
+  <li><time datetime="2026-10-25">2026-10-25</time><span class="ver">v0.2.0</span>
+    <p>Added rotating-zone interfaces in narrow gaps, non-conforming rotating zones, and cylindrical base meshes. This release also added preservation of sub-cell gaps and walls,
+    automatic gap refinement, reduced chamfering of concave edges, and a boundary-layer thickness limit in narrow gaps.</p></li>
+  <li><time datetime="2026-10-21">2026-10-21</time><span class="ver">v0.1.0</span>
+    <p>First release with octree cut-cell meshing inside STLs, OpenFOAM polyMesh export, rotating-zone cuts,
+    prismatic boundary layers, and a Rust extension for faster geometry calculations.</p></li>
+</ul>
+<p class="news-note">Versions and dates were assigned retrospectively to milestones in the commit history. cutmesh is still in pre-1.0 development.</p>
+
+<h2>Features</h2>
+<div class="cards">
+  <div class="card"><h3>Mesh the inside of an STL</h3><p>Create a wall patch for each solid name and set refinement levels by patch, feature edge, or volume region.</p></div>
+  <div class="card"><h3>Cut rotating zones into the mesh</h3><p>Cut a cylinder defined by dimensions or an STL to form internal faces on the cylinder surface. Export a cellZone, an oriented faceZone, and an MRFProperties template.</p></div>
+  <div class="card"><h3>Narrow gaps and thin walls</h3><p>Detect and refine features thinner than a cell to prevent blocked flow paths and leaks through missing walls. Automatic refinement can also use the measured gap width.</p></div>
+  <div class="card"><h3>Boundary layers</h3><p>Add prismatic layers to wall patches, including on polyMesh files created with other tools.</p></div>
+  <div class="card"><h3>Cylindrical base mesh</h3><p>Use concentric blocks around the rotation axis as the roots of the octree for rotating machinery.</p></div>
+  <div class="card"><h3>Few dependencies</h3><p>Runs with Python 3.9+, NumPy, and SciPy. OpenFOAM is optional for mesh generation. The Rust extension parallelizes almost every meshing stage (about 100× faster on the stirred tank example).</p></div>
+</div>
+
+<h2>Quick start</h2>
+<pre><code>git clone https://github.com/mmer547/cutmesh.git
+cd cutmesh
+pip install -e .
+python tools/build_rust.py            # Optional Rust extension (requires cargo)
+
+cd examples/stirred_tank
+python make_geometry.py               # Generate the sample STL
+cutmesh meshDict.json                 # → case/constant/polyMesh</code></pre>
+<p>Put the settings in one JSON file. A minimal example follows.</p>
+<pre><code>{
+  "domain": "model.stl",
+  "baseCellSize": 0.01,
+  "surfaceRefinement": { "default": 2 },
+  "patchTypes": { "inlet": "patch", "outlet": "patch" },
+  "case": "case"
+}</code></pre>
+<p>See the <a href="manual.html">manual</a> for settings and feature details.</p>
+
+<h2>Examples</h2>
+<div class="grid three">
+  <figure>
+    <a class="img" href="examples.html#tank"><img src="../images/tank_slices.png" alt="Horizontal and vertical sections of a stirred tank, with the rotating-zone interface in red" loading="lazy"></a>
+    <figcaption>Stirred tank. The rotating-zone interface (red) follows the cylinder surface.</figcaption>
+  </figure>
+  <figure>
+    <a class="img" href="examples.html#stator"><img src="../images/stator_gap.png" alt="Close-up of the 1 mm gap between the blade tip and the stationary ring" loading="lazy"></a>
+    <figcaption>Rotor–stator interface in the middle of a 1 mm gap</figcaption>
+  </figure>
+  <figure>
+    <a class="img" href="examples.html#tilted-edges"><img src="../images/shape_cube_rotated_walls.png" alt="Wall mesh of a cube rotated relative to the grid, with straight edges" loading="lazy"></a>
+    <figcaption>Direct cuts with STL planes keep off-grid edges straight in the shape tests.</figcaption>
+  </figure>
+  <figure>
+    <a class="img" href="examples.html#showcase"><img src="../images/showcase_body_in_tunnel.png" alt="Longitudinal section of a body in a wind tunnel" loading="lazy"></a>
+    <figcaption>External flow around a bluff body in a wind tunnel, with local refinement around the body</figcaption>
+  </figure>
+  <figure>
+    <a class="img" href="examples.html#showcase"><img src="../images/showcase_pin_fins.png" alt="Horizontal section of a staggered pin array" loading="lazy"></a>
+    <figcaption>Pin-fin and tube-bank example with a duct containing 13 pins</figcaption>
+  </figure>
+  <figure>
+    <a class="img" href="examples.html#showcase"><img src="../images/showcase_venturi.png" alt="Longitudinal section of a Venturi pipe" loading="lazy"></a>
+    <figcaption>Pipe examples include a Venturi, elbow, orifice, and helical coil.</figcaption>
+  </figure>
+</div>
+
+<div class="note">
+  <p>cutmesh is a prototype. Its built-in quality checks use the same formulas as <code>checkMesh</code>, and testing with OpenFOAM itself is limited. Run <code>checkMesh</code> locally before using a mesh.</p>
+</div>
+</main>
+
+<footer class="site-footer"><div class="inner">
+  cutmesh is an independent tool that writes meshes (<code>constant/polyMesh</code>) for OpenFOAM.
+  This offering is not approved or endorsed by OpenCFD Limited, producer and distributor of the OpenFOAM software via www.openfoam.com,
+  and owner of the OPENFOAM® and OpenCFD® trade marks.
+</div></footer>
+</body>
+</html>

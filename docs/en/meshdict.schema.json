@@ -1,0 +1,1000 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "https://mmer547.github.io/cutmesh/en/meshdict.schema.json",
+ "title": "cutmesh meshDict",
+ "description": "cutmesh configuration file (meshDict.json). Keys starting with _ or // are treated as comments.",
+ "type": "object",
+ "required": [
+  "domain",
+  "baseCellSize"
+ ],
+ "properties": {
+  "domain": {
+   "type": "string",
+   "description": "Watertight STL of the fluid domain. It can contain multiple solids, whose names become patch names. The path is relative to meshDict.json.",
+   "minLength": 1,
+   "x-group": "basic",
+   "x-widget": "stl",
+   "x-doc": "md-basic"
+  },
+  "baseCellSize": {
+   "type": "number",
+   "description": "Level 0 cell edge length. The size at level L is baseCellSize / 2^L.",
+   "exclusiveMinimum": 0,
+   "x-group": "basic",
+   "x-unit": "m",
+   "x-doc": "md-basic"
+  },
+  "case": {
+   "type": "string",
+   "description": "Output case directory",
+   "default": ".",
+   "x-group": "basic",
+   "x-doc": "md-basic"
+  },
+  "patchTypes": {
+   "type": "object",
+   "description": "Patch name → type (such as wall or patch). Omitted patches are treated as wall.",
+   "default": {},
+   "additionalProperties": {
+    "type": "string",
+    "minLength": 1,
+    "examples": [
+     "wall",
+     "patch",
+     "symmetry",
+     "symmetryPlane",
+     "empty",
+     "wedge"
+    ]
+   },
+   "x-group": "basic",
+   "x-widget": "solidTypes",
+   "x-doc": "md-basic"
+  },
+  "padding": {
+   "type": "integer",
+   "description": "Number of base cells to add around the STL bounding box",
+   "default": 1,
+   "minimum": 0,
+   "x-group": "basic",
+   "x-advanced": true,
+   "x-doc": "md-basic"
+  },
+  "surfaceRefinement": {
+   "type": "object",
+   "description": "Solid name → refinement level. Set default for all remaining solids.",
+   "default": {},
+   "additionalProperties": {
+    "type": "integer",
+    "minimum": 0
+   },
+   "x-group": "refine",
+   "x-widget": "solidLevels",
+   "x-doc": "md-refine"
+  },
+  "featureLevel": {
+   "type": [
+    "integer",
+    "null"
+   ],
+   "description": "Refinement level near sharp feature edges (null uses the maximum surface level)",
+   "default": null,
+   "minimum": 0,
+   "x-group": "refine",
+   "x-doc": "md-refine"
+  },
+  "featureAngle": {
+   "type": "number",
+   "description": "Angle threshold for detecting feature edges",
+   "default": 30.0,
+   "exclusiveMinimum": 0,
+   "exclusiveMaximum": 180,
+   "x-group": "refine",
+   "x-unit": "deg",
+   "x-doc": "md-refine"
+  },
+  "refinementRegions": {
+   "type": "array",
+   "description": "Volume refinement regions. Refine inside each cylinder to its specified level.",
+   "default": [],
+   "items": {
+    "type": "object",
+    "required": [
+     "cylinder",
+     "level"
+    ],
+    "additionalProperties": false,
+    "properties": {
+     "cylinder": {
+      "type": "object",
+      "description": "Cylinder to refine",
+      "x-widget": "cylinder",
+      "required": [
+       "point1",
+       "point2",
+       "radius"
+      ],
+      "additionalProperties": false,
+      "properties": {
+       "point1": {
+        "type": "array",
+        "description": "One endpoint of the axis",
+        "items": {
+         "type": "number"
+        },
+        "minItems": 3,
+        "maxItems": 3,
+        "x-widget": "vec3",
+        "x-unit": "m"
+       },
+       "point2": {
+        "type": "array",
+        "description": "The other endpoint of the axis (must differ from point1)",
+        "items": {
+         "type": "number"
+        },
+        "minItems": 3,
+        "maxItems": 3,
+        "x-widget": "vec3",
+        "x-unit": "m"
+       },
+       "radius": {
+        "type": "number",
+        "description": "Radius",
+        "exclusiveMinimum": 0,
+        "x-unit": "m"
+       },
+       "origin": {
+        "type": "array",
+        "description": "Center of rotation (rotating zones only, defaults to point1)",
+        "items": {
+         "type": "number"
+        },
+        "minItems": 3,
+        "maxItems": 3,
+        "x-advanced": true,
+        "x-widget": "vec3",
+        "x-unit": "m"
+       }
+      }
+     },
+     "level": {
+      "type": "integer",
+      "description": "Refinement level",
+      "minimum": 0
+     }
+    }
+   },
+   "x-group": "refine",
+   "x-doc": "md-refine"
+  },
+  "bufferLayers": {
+   "type": "integer",
+   "description": "Number of buffer cells at each level transition. Set to 1 to reduce the cell count.",
+   "default": 2,
+   "minimum": 0,
+   "x-group": "refine",
+   "x-doc": "md-refine"
+  },
+  "gapRefinement": {
+   "type": [
+    "object",
+    "null"
+   ],
+   "description": "Refine walls to level where the fluid is thinner than thickness (for example, at slot tips or in narrow channels).",
+   "required": [
+    "thickness",
+    "level"
+   ],
+   "additionalProperties": false,
+   "properties": {
+    "thickness": {
+     "type": "number",
+     "description": "Fluid thickness",
+     "exclusiveMinimum": 0,
+     "x-unit": "m"
+    },
+    "level": {
+     "type": "integer",
+     "description": "Refinement level",
+     "minimum": 0
+    }
+   },
+   "x-group": "refine",
+   "x-advanced": true,
+   "x-doc": "md-refine"
+  },
+  "autoGapRefinement": {
+   "type": [
+    "boolean",
+    "object",
+    "null"
+   ],
+   "description": "Refine walls until cellsAcross cells fit in the gap to the opposing wall, up to maxLevel. Set to true to use the defaults.",
+   "additionalProperties": false,
+   "properties": {
+    "cellsAcross": {
+     "type": "number",
+     "description": "Number of cells across the gap",
+     "default": 3,
+     "exclusiveMinimum": 0
+    },
+    "maxLevel": {
+     "type": "integer",
+     "description": "Maximum level (defaults to the maximum surface level + 2)",
+     "minimum": 0
+    }
+   },
+   "x-group": "refine",
+   "x-doc": "md-refine"
+  },
+  "rotatingZones": {
+   "type": "array",
+   "description": "List of rotating zones for MRF or sliding meshes. The zones must not overlap.",
+   "default": [],
+   "items": {
+    "type": "object",
+    "required": [
+     "name"
+    ],
+    "additionalProperties": false,
+    "oneOf": [
+     {
+      "required": [
+       "cylinder"
+      ]
+     },
+     {
+      "required": [
+       "stl"
+      ]
+     }
+    ],
+    "properties": {
+     "name": {
+      "type": "string",
+      "description": "Zone name (cellZone name, with <name>_interface as the faceZone name)",
+      "minLength": 1
+     },
+     "cylinder": {
+      "type": "object",
+      "description": "Rotating zone cylinder (specify either cylinder or stl)",
+      "x-widget": "cylinder",
+      "required": [
+       "point1",
+       "point2",
+       "radius"
+      ],
+      "additionalProperties": false,
+      "properties": {
+       "point1": {
+        "type": "array",
+        "description": "One endpoint of the axis",
+        "items": {
+         "type": "number"
+        },
+        "minItems": 3,
+        "maxItems": 3,
+        "x-widget": "vec3",
+        "x-unit": "m"
+       },
+       "point2": {
+        "type": "array",
+        "description": "The other endpoint of the axis (must differ from point1)",
+        "items": {
+         "type": "number"
+        },
+        "minItems": 3,
+        "maxItems": 3,
+        "x-widget": "vec3",
+        "x-unit": "m"
+       },
+       "radius": {
+        "type": "number",
+        "description": "Radius",
+        "exclusiveMinimum": 0,
+        "x-unit": "m"
+       },
+       "origin": {
+        "type": "array",
+        "description": "Center of rotation (rotating zones only, defaults to point1)",
+        "items": {
+         "type": "number"
+        },
+        "minItems": 3,
+        "maxItems": 3,
+        "x-advanced": true,
+        "x-widget": "vec3",
+        "x-unit": "m"
+       }
+      }
+     },
+     "stl": {
+      "type": "string",
+      "description": "Closed STL for the rotating zone (specify either cylinder or stl)",
+      "minLength": 1,
+      "x-widget": "stl"
+     },
+     "origin": {
+      "type": "array",
+      "description": "Center of rotation for an STL-defined zone",
+      "default": [
+       0,
+       0,
+       0
+      ],
+      "items": {
+       "type": "number"
+      },
+      "minItems": 3,
+      "maxItems": 3,
+      "x-widget": "vec3",
+      "x-unit": "m"
+     },
+     "axis": {
+      "type": "array",
+      "description": "Rotation axis for an STL-defined zone (must be a nonzero vector)",
+      "default": [
+       0,
+       0,
+       1
+      ],
+      "items": {
+       "type": "number"
+      },
+      "minItems": 3,
+      "maxItems": 3,
+      "x-widget": "vec3"
+     },
+     "surfaceLevel": {
+      "type": "integer",
+      "description": "Refinement level on the zone surface",
+      "default": 0,
+      "minimum": 0
+     },
+     "volumeLevel": {
+      "type": "integer",
+      "description": "Refinement level inside the zone",
+      "default": 0,
+      "minimum": 0
+     },
+     "omega": {
+      "type": "number",
+      "description": "Angular velocity written to MRFProperties or dynamicMeshDict",
+      "default": 0.0,
+      "x-unit": "rad/s"
+     },
+     "nonRotatingPatches": {
+      "type": "array",
+      "description": "Patches that stay stationary inside the zone",
+      "default": [],
+      "items": {
+       "type": "string"
+      },
+      "x-widget": "solidList"
+     },
+     "wallProximity": {
+      "type": [
+       "object",
+       "null"
+      ],
+      "description": "Refine the zone surface to level only where it lies within distance of the STL. Use this for an interface in a narrow gap.",
+      "required": [
+       "distance",
+       "level"
+      ],
+      "additionalProperties": false,
+      "properties": {
+       "distance": {
+        "type": "number",
+        "description": "Distance from the STL",
+        "exclusiveMinimum": 0,
+        "x-unit": "m"
+       },
+       "level": {
+        "type": "integer",
+        "description": "Refinement level",
+        "minimum": 0
+       },
+       "bufferLayers": {
+        "type": "integer",
+        "description": "Number of buffer cells",
+        "minimum": 0
+       }
+      },
+      "x-advanced": true
+     },
+     "ami": {
+      "type": "boolean",
+      "description": "Set to true to split the interface into two sliding-mesh patches and write dynamicMeshDict.",
+      "default": false
+     },
+     "conforming": {
+      "type": "boolean",
+      "description": "Set to false to select the cellZone by cell centers without cutting the interface. For MRF only. Incompatible with ami.",
+      "default": true,
+      "x-advanced": true
+     }
+    }
+   },
+   "x-group": "zones",
+   "x-doc": "zones"
+  },
+  "snapTolerance": {
+   "type": "number",
+   "description": "Distance for snapping vertices to surfaces, as a fraction of the cell edge length. Helps prevent sliver cells.",
+   "default": 0.3,
+   "minimum": 0,
+   "x-group": "snap",
+   "x-doc": "md-snap"
+  },
+  "featureSnapTolerance": {
+   "type": "number",
+   "description": "Distance for snapping to sharp STL edges and cylinder rims, as a fraction of the cell edge length",
+   "default": 0.5,
+   "minimum": 0,
+   "x-group": "snap",
+   "x-doc": "md-snap"
+  },
+  "featureSnapMax": {
+   "type": "number",
+   "description": "Experimental. Snap to feature edges within this distance and undo snaps that invalidate octree cells.",
+   "default": 0.5,
+   "minimum": 0,
+   "x-group": "snap",
+   "x-advanced": true,
+   "x-doc": "md-snap"
+  },
+  "concaveSnapMax": {
+   "type": "number",
+   "description": "Distance for snapping vertices on the solid side to sharp concave edges",
+   "default": 0.75,
+   "minimum": 0,
+   "x-group": "snap",
+   "x-advanced": true,
+   "x-doc": "md-snap"
+  },
+  "mergeRatio": {
+   "type": "number",
+   "description": "Merge cut cells below this fraction of the original hexahedron volume into a neighboring cell.",
+   "default": 0.25,
+   "minimum": 0,
+   "exclusiveMaximum": 1,
+   "x-group": "snap",
+   "x-doc": "md-snap"
+  },
+  "mergeMaxNonOrtho": {
+   "type": "number",
+   "description": "Maximum non-orthogonality angle after merging",
+   "default": 65.0,
+   "exclusiveMinimum": 0,
+   "maximum": 90,
+   "x-group": "snap",
+   "x-advanced": true,
+   "x-unit": "deg",
+   "x-doc": "md-snap"
+  },
+  "hangingSnap": {
+   "type": "string",
+   "description": "Treatment of hanging vertices that do not reach the surface. free projects them directly onto it. constrained leaves them in place.",
+   "default": "free",
+   "enum": [
+    "free",
+    "constrained"
+   ],
+   "x-group": "snap",
+   "x-advanced": true,
+   "x-doc": "md-snap"
+  },
+  "featureCaps": {
+   "type": [
+    "string",
+    "boolean",
+    "null"
+   ],
+   "description": "Align cut faces with sharp convex feature edges (domain / zone / both / false).",
+   "default": "domain",
+   "enum": [
+    "domain",
+    "zone",
+    "both",
+    true,
+    false,
+    null
+   ],
+   "x-group": "snap",
+   "x-advanced": true,
+   "x-doc": "md-snap"
+  },
+  "exactFeatureCut": {
+   "type": "boolean",
+   "description": "Cut cells near sharp convex edges directly with STL planes. Works when featureCaps is domain or both.",
+   "default": true,
+   "x-group": "snap",
+   "x-advanced": true,
+   "x-doc": "md-snap"
+  },
+  "mergeWallFaces": {
+   "type": "boolean",
+   "description": "Combine nearly coplanar wall-face fragments of a cell into a single face.",
+   "default": true,
+   "x-group": "snap",
+   "x-advanced": true,
+   "x-doc": "md-snap"
+  },
+  "fillThinGaps": {
+   "type": "integer",
+   "description": "Number of splits for cells with fluid inside but no corners in the fluid. Set to 0 to disable (Cartesian only).",
+   "default": 2,
+   "minimum": 0,
+   "x-group": "thin",
+   "x-advanced": true,
+   "x-doc": "md-thin"
+  },
+  "fillThinWalls": {
+   "type": "integer",
+   "description": "Number of splits for cells with a thin solid wall inside but no corners in the solid (Cartesian only)",
+   "default": 3,
+   "minimum": 0,
+   "x-group": "thin",
+   "x-advanced": true,
+   "x-doc": "md-thin"
+  },
+  "thinCutCells": {
+   "type": "integer",
+   "description": "Number of splits for cut cells with little remaining fluid and an adjacent finer cell (Cartesian only)",
+   "default": 2,
+   "minimum": 0,
+   "x-group": "thin",
+   "x-advanced": true,
+   "x-doc": "md-thin"
+  },
+  "thinCutFraction": {
+   "type": "number",
+   "description": "Fluid fraction threshold for thinCutCells",
+   "default": 0.35,
+   "exclusiveMinimum": 0,
+   "exclusiveMaximum": 1,
+   "x-group": "thin",
+   "x-advanced": true,
+   "x-doc": "md-thin"
+  },
+  "minRegionVolume": {
+   "type": "number",
+   "description": "Remove disconnected fluid regions below this fraction of the total fluid volume.",
+   "default": 0.001,
+   "minimum": 0,
+   "exclusiveMaximum": 1,
+   "x-group": "thin",
+   "x-advanced": true,
+   "x-doc": "md-thin"
+  },
+  "checkLeaks": {
+   "type": "boolean",
+   "description": "Check whether fluid cells are connected across a solid wall.",
+   "default": true,
+   "x-group": "check",
+   "x-doc": "md-check"
+  },
+  "strictInput": {
+   "type": "boolean",
+   "description": "Stop with an error if the STL has open or non-manifold edges.",
+   "default": false,
+   "x-group": "check",
+   "x-advanced": true,
+   "x-doc": "md-check"
+  },
+  "volumeCheckTolerance": {
+   "type": "number",
+   "description": "Warn if the volume difference between the mesh and STL exceeds this fraction.",
+   "default": 0.05,
+   "minimum": 0,
+   "x-group": "check",
+   "x-advanced": true,
+   "x-doc": "md-check"
+  },
+  "writeFormat": {
+   "type": "string",
+   "description": "polyMesh format",
+   "default": "binary",
+   "enum": [
+    "binary",
+    "ascii"
+   ],
+   "x-group": "check",
+   "x-doc": "format"
+  },
+  "writeMRFProperties": {
+   "type": "boolean",
+   "description": "Write a constant/MRFProperties template when rotating zones are present.",
+   "default": true,
+   "x-group": "check",
+   "x-doc": "md-check"
+  },
+  "openfoam": {
+   "type": "string",
+   "description": "Sliding-mesh dialect. Use com for openfoam.com / ESI or org10, org11, or org12 for openfoam.org.",
+   "default": "com",
+   "enum": [
+    "com",
+    "org10",
+    "org11",
+    "org12"
+   ],
+   "x-group": "check",
+   "x-doc": "ami"
+  },
+  "writeDynamicMeshDict": {
+   "type": "boolean",
+   "description": "Write constant/dynamicMeshDict when an ami zone is present.",
+   "default": true,
+   "x-group": "check",
+   "x-advanced": true,
+   "x-doc": "md-check"
+  },
+  "amiExactRims": {
+   "type": "boolean",
+   "description": "Make the ami interface follow the zone rims exactly.",
+   "default": true,
+   "x-group": "check",
+   "x-advanced": true,
+   "x-doc": "ami"
+  },
+  "baseMesh": {
+   "type": [
+    "object",
+    "null"
+   ],
+   "description": "Base mesh. The default is Cartesian. Use cylindrical for concentric blocks around the rotation axis.",
+   "additionalProperties": false,
+   "properties": {
+    "type": {
+     "type": "string",
+     "description": "cartesian for a Cartesian grid or cylindrical for a cylindrical grid",
+     "default": "cartesian",
+     "enum": [
+      "cartesian",
+      "cylindrical"
+     ]
+    },
+    "origin": {
+     "type": "array",
+     "description": "Origin of the rotation axis",
+     "default": [
+      0,
+      0,
+      0
+     ],
+     "items": {
+      "type": "number"
+     },
+     "minItems": 3,
+     "maxItems": 3,
+     "x-widget": "vec3",
+     "x-unit": "m"
+    },
+    "axis": {
+     "type": "array",
+     "description": "Direction of the rotation axis",
+     "default": [
+      0,
+      0,
+      1
+     ],
+     "items": {
+      "type": "number"
+     },
+     "minItems": 3,
+     "maxItems": 3,
+     "x-widget": "vec3"
+    },
+    "zRange": {
+     "type": "array",
+     "description": "Axial range [z0, z1] measured from origin. Defaults to the STL extent ± baseCellSize.",
+     "items": {
+      "type": "number"
+     },
+     "minItems": 2,
+     "maxItems": 2,
+     "x-advanced": true,
+     "x-unit": "m"
+    },
+    "nz": {
+     "type": "integer",
+     "description": "Number of axial divisions (use nz or dz)",
+     "minimum": 1
+    },
+    "dz": {
+     "type": "number",
+     "description": "Axial cell width (defaults to baseCellSize)",
+     "exclusiveMinimum": 0,
+     "x-unit": "m"
+    },
+    "rOuter": {
+     "type": "number",
+     "description": "Outer radius of the outermost block in the automatic layout. Defaults to the STL radius + 2/3 × cellSize.",
+     "exclusiveMinimum": 0,
+     "x-advanced": true,
+     "x-unit": "m"
+    },
+    "cellSize": {
+     "type": "number",
+     "description": "Target cell size for the automatic layout (defaults to the smaller of baseCellSize and dz)",
+     "exclusiveMinimum": 0,
+     "x-advanced": true,
+     "x-unit": "m"
+    },
+    "maxSizeRatio": {
+     "type": "number",
+     "description": "Maximum cell size ratio across block boundaries",
+     "default": 2.5,
+     "exclusiveMinimum": 0,
+     "x-advanced": true
+    },
+    "core": {
+     "type": "object",
+     "description": "Central square block for manual layout. Specify it together with blocks.",
+     "required": [
+      "halfWidth",
+      "n"
+     ],
+     "properties": {
+      "halfWidth": {
+       "type": "number",
+       "description": "Half-width",
+       "exclusiveMinimum": 0,
+       "x-unit": "m"
+      },
+      "n": {
+       "type": "integer",
+       "description": "Number of divisions along an edge",
+       "minimum": 1
+      }
+     },
+     "x-advanced": true,
+     "x-widget": "json"
+    },
+    "blocks": {
+     "type": "array",
+     "description": "Outward sequence of concentric blocks for manual layout. Specify it together with core.",
+     "items": {
+      "type": "object",
+      "required": [
+       "rOuter",
+       "nr"
+      ],
+      "properties": {
+       "rOuter": {
+        "type": "number",
+        "exclusiveMinimum": 0
+       },
+       "nr": {
+        "type": "integer",
+        "minimum": 1
+       },
+       "nTheta": {
+        "type": "integer",
+        "minimum": 4
+       },
+       "radii": {
+        "type": "array",
+        "items": {
+         "type": "number"
+        }
+       }
+      }
+     },
+     "x-advanced": true,
+     "x-widget": "json"
+    }
+   },
+   "x-group": "baseMesh",
+   "x-doc": "cylbase"
+  },
+  "addLayers": {
+   "type": [
+    "object",
+    "null"
+   ],
+   "description": "Add prismatic boundary layers to wall patches. Use {} for defaults or null to omit layers.",
+   "additionalProperties": false,
+   "properties": {
+    "patches": {
+     "type": [
+      "array",
+      "null"
+     ],
+     "description": "List of patches to receive layers. null selects all patches of type wall.",
+     "default": null,
+     "items": {
+      "type": "string"
+     },
+     "x-widget": "solidList"
+    },
+    "nLayers": {
+     "type": "integer",
+     "description": "Number of layers",
+     "default": 3,
+     "minimum": 1
+    },
+    "expansionRatio": {
+     "type": "number",
+     "description": "Ratio of successive layer thicknesses away from the wall",
+     "default": 1.2,
+     "exclusiveMinimum": 0
+    },
+    "finalLayerThickness": {
+     "type": "number",
+     "description": "Thickness of the innermost layer, expressed as a fraction of the local cell size if relativeSizes is enabled",
+     "default": 0.3,
+     "exclusiveMinimum": 0
+    },
+    "relativeSizes": {
+     "type": "boolean",
+     "description": "Specify thickness as a fraction of the local cell size.",
+     "default": true
+    },
+    "minThickness": {
+     "type": "number",
+     "description": "Omit layers where their total thickness would fall below this value.",
+     "default": 0.05,
+     "minimum": 0
+    },
+    "maxNonOrtho": {
+     "type": "number",
+     "description": "Treat cells above this non-orthogonality angle as invalid and reduce layer thickness there.",
+     "default": 65.0,
+     "exclusiveMinimum": 0,
+     "maximum": 90,
+     "x-unit": "deg"
+    },
+    "maxSkewness": {
+     "type": [
+      "number",
+      "null"
+     ],
+     "description": "Treat cells adjacent to faces above this skewness limit as invalid. null disables the check.",
+     "default": 4.0,
+     "exclusiveMinimum": 0
+    },
+    "maxGapFraction": {
+     "type": "number",
+     "description": "Limit total thickness to this fraction of the distance to the opposing wall. Set to 0 to disable.",
+     "default": 0.3,
+     "minimum": 0
+    },
+    "maxThicknessSlope": {
+     "type": "number",
+     "description": "Maximum change in total thickness along the wall, so layers taper gradually at their ends",
+     "default": 0.5,
+     "minimum": 0
+    },
+    "minNormalCos": {
+     "type": "number",
+     "description": "Omit layers where the cosine between vertex and face normals is below this threshold, at sharp convex edges.",
+     "default": 0.25,
+     "x-advanced": true
+    },
+    "wallNonOrthMargin": {
+     "type": [
+      "number",
+      "null"
+     ],
+     "description": "Allow the original wall face up to its boundary-face angle plus this margin.",
+     "default": null,
+     "x-advanced": true,
+     "x-unit": "deg"
+    },
+    "cornerStretch": {
+     "type": "boolean",
+     "description": "Move corner vertices by T/cos to maintain layer thickness T at corners.",
+     "default": true,
+     "x-advanced": true
+    },
+    "mergeWallPoints": {
+     "type": "number",
+     "description": "Merge wall vertices closer than this value times the local edge length. Set to 0 to disable.",
+     "default": 0.1,
+     "minimum": 0,
+     "x-advanced": true
+    },
+    "concaveSlide": {
+     "type": [
+      "number",
+      "null"
+     ],
+     "description": "At concave corners, slide vertices that would intersect the other wall's layers along their own wall. null disables this.",
+     "default": 0.5,
+     "x-advanced": true
+    },
+    "nRings": {
+     "type": "integer",
+     "description": "Number of edges from the wall over which interior vertices are displaced",
+     "default": 6,
+     "minimum": 0,
+     "x-advanced": true
+    },
+    "nSmooth": {
+     "type": "integer",
+     "description": "Number of Laplacian smoothing iterations for interior displacements",
+     "default": 60,
+     "minimum": 0,
+     "x-advanced": true
+    },
+    "nIter": {
+     "type": "integer",
+     "description": "Number of iterations that halve layer thickness at invalid cells",
+     "default": 8,
+     "minimum": 0,
+     "x-advanced": true
+    },
+    "nCollapseIter": {
+     "type": "integer",
+     "description": "Number of subsequent iterations that suppress layers",
+     "default": 60,
+     "minimum": 0,
+     "x-advanced": true
+    }
+   },
+   "x-group": "layers",
+   "x-doc": "layers"
+  }
+ },
+ "patternProperties": {
+  "^(_|//)": {
+   "description": "Comment (ignored)"
+  }
+ },
+ "additionalProperties": false,
+ "x-groups": [
+  {
+   "key": "basic",
+   "title": "Basic",
+   "doc": "md-basic"
+  },
+  {
+   "key": "refine",
+   "title": "Refinement",
+   "doc": "md-refine"
+  },
+  {
+   "key": "zones",
+   "title": "Rotating zones",
+   "doc": "zones"
+  },
+  {
+   "key": "snap",
+   "title": "Snapping and merging",
+   "doc": "md-snap"
+  },
+  {
+   "key": "thin",
+   "title": "Thin geometry",
+   "doc": "md-thin"
+  },
+  {
+   "key": "check",
+   "title": "Checks and output",
+   "doc": "md-check"
+  },
+  {
+   "key": "baseMesh",
+   "title": "Base mesh",
+   "doc": "cylbase"
+  },
+  {
+   "key": "layers",
+   "title": "Boundary layers",
+   "doc": "layers"
+  }
+ ],
+ "x-patchTypes": [
+  "wall",
+  "patch",
+  "symmetry",
+  "symmetryPlane",
+  "empty",
+  "wedge"
+ ]
+}

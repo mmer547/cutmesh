@@ -321,11 +321,8 @@ def main(argv=None):
 
 
 def update_page(stats):
-    """Write the cells / seconds into docs/examples.html (<span data-stat="case.key">)."""
+    """Update matching data-stat spans on both language versions of the examples page."""
     import re
-    p = os.path.join(ROOT, "docs", "examples.html")
-    if not os.path.exists(p):
-        return
 
     def value(m):
         case, key = m.group(1).split(".")
@@ -343,11 +340,15 @@ def update_page(stats):
         else:
             txt = f"{v:.0f}" if v >= 20 else f"{v:.1f}"
         return f'<span data-stat="{m.group(1)}">{txt}</span>'
-    with open(p, encoding="utf-8") as f:
-        s = f.read()
-    s = re.sub(r'<span data-stat="(\w+\.\w+)">[^<]*</span>', value, s)
-    with open(p, "w", encoding="utf-8") as f:
-        f.write(s)
+    for directory in ("docs", os.path.join("docs", "en")):
+        p = os.path.join(ROOT, directory, "examples.html")
+        if not os.path.exists(p):
+            continue
+        with open(p, encoding="utf-8") as f:
+            s = f.read()
+        s = re.sub(r'<span data-stat="(\w+\.\w+)">[^<]*</span>', value, s)
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(s)
 
 
 if __name__ == "__main__":
