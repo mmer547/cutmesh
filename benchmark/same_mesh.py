@@ -71,7 +71,21 @@ def showcase(tree, out, only):
         cmd += ["--only", n]
     rc, t = run(cmd, tree, log=out + ".log")
     print(f"  showcase ({len(names)} cases) exit {rc} {t:6.1f} s", flush=True)
-    return {n: os.path.join(out, "cases", n, "case") for n in names}
+    # a case whose run failed (an error after the mesh was written, a crash, a timeout)
+    # counts as failed even when its files match: only PASS / WARN are compared
+    status = {}
+    try:
+        with open(os.path.join(out, "results.json"), encoding="utf-8") as f:
+            status = {r["name"]: r.get("status") for r in json.load(f)["results"]}
+    except (OSError, ValueError, KeyError):
+        pass
+    res = {}
+    for n in names:
+        ok = status.get(n) in ("PASS", "WARN")
+        if not ok:
+            print(f"  {n}: {status.get(n, 'no result')}", flush=True)
+        res[n] = os.path.join(out, "cases", n, "case") if ok else None
+    return res
 
 
 def main(argv=None):
