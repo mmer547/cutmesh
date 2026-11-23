@@ -1,0 +1,368 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Examples — cutmesh</title>
+<meta name="description" content="See cutmesh examples for a stirred tank, cylindrical base mesh, boundary layers, a narrow rotor–stator gap, shape tests, pipe and duct flows, and external flow.">
+<link rel="stylesheet" href="../style.css">
+<link rel="alternate" hreflang="ja" href="../examples.html">
+</head>
+<body>
+<header class="site-header"><div class="inner">
+  <a class="brand" href="index.html">cut<span>mesh</span></a>
+  <nav class="site-nav">
+    <a href="manual.html">Manual</a>
+    <a href="examples.html" aria-current="page">Examples</a>
+    <a href="meshdict.html">Build a meshDict</a>
+    <a href="https://github.com/mmer547/cutmesh">GitHub</a>
+    <a href="../examples.html" lang="ja" hreflang="ja">日本語</a>
+  </nav>
+</div></header>
+
+<main class="page doc">
+<nav class="toc" aria-label="Table of contents">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#tank">Stirred tank</a>
+      <ol>
+        <li><a href="#tank-zone">Rotating zone</a></li>
+        <li><a href="#tank-cyl">Cylindrical base mesh</a></li>
+        <li><a href="#tank-layers">Boundary layers</a></li>
+      </ol>
+    </li>
+    <li><a href="#stator">Rotor–stator</a></li>
+    <li><a href="#shapes">Shape tests</a>
+      <ol><li><a href="#tilted-edges">Off-grid edges</a></li></ol>
+    </li>
+    <li><a href="#showcase">Showcase geometries</a></li>
+    <li><a href="#reproduce">Reproducing the images</a></li>
+  </ol>
+</nav>
+
+<article class="content">
+<h1>Examples</h1>
+<p>Black lines show STL walls, red lines show rotating-zone interfaces (faceZones), and gray lines show cell faces.
+Cell counts and runtimes were measured with the Rust extension on a 16-core machine (v0.5.0, including quality checks). Click any image to open it at full size.</p>
+<p>Choose “With layers” above a figure to see the same configuration with three layers on all walls
+(<code>"addLayers": { "nLayers": 3, "expansionRatio": 1.2, "finalLayerThickness": 0.3 }</code>).
+The cell count, runtime, and quality metrics switch to the layered mesh. “Target thickness” gives the percentage of wall vertices where the layers reached their target thickness.</p>
+<div class="layer-switch" id="layer-switch" data-figure-label="Boundary layers" hidden>
+  <span>All figures</span>
+  <div class="vswitch" role="group" aria-label="Boundary layers for all figures">
+    <button type="button" data-set="plain" aria-pressed="true">Without layers</button><button type="button" data-set="layers" aria-pressed="false">With layers</button>
+  </div>
+</div>
+
+<h2 id="tank">Stirred tank (<code>examples/stirred_tank</code>)</h2>
+<p>A flat-bottomed tank 300 mm in diameter and 300 mm tall contains a 100 mm diameter impeller with 4 paddle blades, each 6 mm thick, and a shaft that reaches the lid.
+Generate the STL with <code>python make_geometry.py</code>. The solids are <code>tankWall</code>, <code>bottom</code>, <code>top</code>, <code>impeller</code>, and <code>shaft</code>.</p>
+
+<section class="example" id="tank-zone">
+<h3>Rotating zone (<code>meshDict.json</code>)</h3>
+<ul class="stats"><li><span data-stat="tank.cells">102,429</span> cells</li><li><span data-stat="tank.seconds">1.3</span> s</li><li>Cartesian grid with a cylindrical rotating zone</li></ul>
+<p>A cylindrical rotating zone with a radius of 70 mm surrounds the blades. The octree is cut against the cylinder, so the interface (red) follows the cylinder surface even in coarse cells.
+Refinement is concentrated on the blades (level 3), shaft (level 2), and rotating-zone interior (level 2). The tank wall stays at level 1.</p>
+<p class="cmd-label">Run the case</p>
+<pre><code>cd examples/stirred_tank
+python make_geometry.py                     # Generate tank.stl and rotor.stl (also in the repository)
+cutmesh meshDict.json                       # → case/constant/polyMesh、case/constant/MRFProperties</code></pre>
+<p class="cmd-label">Common options and inspection tools</p>
+<pre><code>cutmesh meshDict.json -case case_test       # Change the output directory (overrides "case")
+cutmesh meshDict.json -noCheck              # Skip the final quality check (about 10% faster for large meshes)
+python run.py meshDict.json                 # Generate the mesh and plot slice_z.png and slice_y.png
+python ../../benchmark/render_mesh.py case -o case_pictures    # Render overview.png and cut.png
+python -m cutmesh.diagnose meshDict.json case                  # Check for leaks through walls
+python ../../tools/edge_check.py meshDict.json                 # Measure how well the mesh captures edges and rims</code></pre>
+<p class="cmd-label">Use a sliding mesh (AMI)</p>
+<pre><code>cutmesh meshDict_ami.json                   # Split the interface into cyclicAMI patches rotor_AMI1 and rotor_AMI2,
+                                            # and write constant/dynamicMeshDict → case_ami/
+python -m cutmesh.ami case -out case_ami_later    # Convert an existing mesh
+    # For openfoam.org, set "openfoam": "org12" in meshDict and run this command in OpenFOAM:
+    # createNonConformalCouples -overwrite rotor_nonCouple1 rotor_nonCouple2</code></pre>
+<figure class="vfig">
+  <a class="img only-plain" href="../images/tank_cut.png"><img src="../images/tank_cut.png" alt="3D cutaway of the stirred tank mesh with the front half removed, plus sections along x, y, and z" loading="lazy"></a>
+    <a class="img only-layers" href="../images/tank_cut_layers.png"><img src="../images/tank_cut_layers.png" alt="3D cutaway of the stirred tank mesh with boundary layers and the front half removed, plus sections along x, y, and z" loading="lazy"></a>
+  <figcaption>3D cutaway retaining cells with x &lt; 0 (cut faces are beige), and 3 central sections<span class="only-layers">. With layers (<code>meshDict_layers.json</code>, <span data-stat="tank_layers.cells">163,629</span> cells, <span data-stat="tank_layers.seconds">3.0</span> s, target thickness at <span data-stat="tank_layers.layerFull">97.7</span>%)</span></figcaption>
+</figure>
+<figure class="vfig">
+  <a class="img only-plain" href="../images/tank_slices.png"><img src="../images/tank_slices.png" alt="Horizontal section at mid-blade height and a vertical section through the blades" loading="lazy"></a>
+    <a class="img only-layers" href="../images/tank_slices_layers.png"><img src="../images/tank_slices_layers.png" alt="Horizontal section at mid-blade height and a vertical section through the blades, with boundary layers" loading="lazy"></a>
+  <figcaption>Horizontal section at mid-blade height (z = 0.10) and vertical section through the blades (y = 0)<span class="only-layers">. With layers (<code>meshDict_layers.json</code>)</span></figcaption>
+</figure>
+<figure>
+  <a class="img" href="../images/tank_overview.png"><img src="../images/tank_overview.png" alt="Wall mesh from 2 directions, colored by patch" loading="lazy"></a>
+  <figcaption>Wall mesh colored by patch</figcaption>
+</figure>
+<details>
+  <summary>meshDict.json</summary>
+<pre><code>{
+  "domain": "tank.stl",
+  "baseCellSize": 0.0125,
+  "surfaceRefinement": { "default": 1, "impeller": 3, "shaft": 2 },
+  "featureLevel": 2,
+  "bufferLayers": 2,
+  "snapTolerance": 0.3,
+  "mergeRatio": 0.25,
+  "rotatingZones": [
+    {
+      "name": "rotor",
+      "cylinder": { "point1": [0, 0, 0.06], "point2": [0, 0, 0.14], "radius": 0.07 },
+      "surfaceLevel": 2,
+      "volumeLevel": 2,
+      "omega": 31.416
+    }
+  ],
+  "patchTypes": { "top": "wall" },
+  "case": "case"
+}</code></pre>
+</details>
+</section>
+
+<section class="example" id="tank-cyl">
+<h3>Cylindrical base mesh (<code>meshDict_cylindrical.json</code>)</h3>
+<ul class="stats"><li><span data-stat="cylindrical.cells">137,144</span> cells</li><li><span data-stat="cylindrical.seconds">6.3</span> s</li><li>Concentric blocks in the base mesh</li></ul>
+<p>The octree roots are concentric blocks around the axis. The automatic layout uses a central 2×2 square and outward concentric rings. The square is inside the hub, so nearly all fluid cells align circumferentially, following the rotating-zone interface and tank wall.
+Block faces are overlaid to create a conforming mesh even when the division counts are not integer multiples.</p>
+<p class="cmd-label">Run the case</p>
+<pre><code>cd examples/stirred_tank
+cutmesh meshDict_cylindrical.json           # → case_cylindrical/
+python run.py meshDict_cylindrical.json     # Also plot the cross-sections</code></pre>
+<figure class="vfig">
+  <a class="img only-plain" href="../images/cylindrical_slices.png"><img src="../images/cylindrical_slices.png" alt="Horizontal section of the cylindrical base mesh, with a close-up of the center" loading="lazy"></a>
+    <a class="img only-layers" href="../images/cylindrical_slices_layers.png"><img src="../images/cylindrical_slices_layers.png" alt="Horizontal section of the cylindrical base mesh with boundary layers, with a close-up of the center" loading="lazy"></a>
+  <figcaption>Horizontal section at mid-blade height, with a close-up around the rotating zone<span class="only-layers">. With layers (<span data-stat="cylindrical_layers.cells">199,076</span> cells, <span data-stat="cylindrical_layers.seconds">8.5</span> s, target thickness at <span data-stat="cylindrical_layers.layerFull">87.0</span>%)</span></figcaption>
+</figure>
+<details>
+  <summary>baseMesh settings</summary>
+<pre><code>"baseMesh": {
+  "type": "cylindrical",
+  "origin": [0, 0, 0],
+  "axis": [0, 0, 1],
+  "nz": 24
+}</code></pre>
+<p>The log shows a central 2×2 square (11.9 mm half-width), ring radii of 23.8 / 34.8 / 58.4 / 91.8 / 158.3 mm, and 8 / 16 / 24 / 36 / 64 circumferential divisions. The blade tips (50.1 mm), rotating zone (70 mm), and tank wall (150 mm) sit at the 1/3 position in the radial cells.</p>
+</details>
+</section>
+
+<section class="example" id="tank-layers">
+<h3>Boundary layers (<code>meshDict_layers.json</code>)</h3>
+<ul class="stats"><li><span data-stat="layers.cells">163,629</span> cells</li><li><span data-stat="layers.seconds">3.0</span> s</li><li>3 layers on all walls</li></ul>
+<p>This variant of the rotating-zone example adds 3 prismatic layers to every wall patch. Where the layers meet the rotating-zone interface, their side faces still follow the cylinder surface.</p>
+<p class="cmd-label">Run the case</p>
+<pre><code>cd examples/stirred_tank
+cutmesh meshDict_layers.json                # Add layers after meshing → case_layers/</code></pre>
+<p class="cmd-label">Add layers to an existing mesh</p>
+<pre><code>cutmesh meshDict.json                       # Mesh without layers → case/
+python -m cutmesh.layers case meshDict_layers.json -out case_layers_later
+    # Use "addLayers" from the second argument (default: 3 layers if omitted)
+    # -out sets the output path (omission overwrites the input mesh)
+    # -noCheck skips the quality check. -ascii and -binary override the input format.</code></pre>
+<figure>
+  <a class="img" href="../images/layers_slices.png"><img src="../images/layers_slices.png" alt="Vertical section with boundary layers and a close-up of the corner between the tank floor and side wall" loading="lazy"></a>
+  <figcaption>Vertical section (y = 0) and close-up of the corner where the tank floor meets the side wall</figcaption>
+</figure>
+<details>
+  <summary>addLayers settings</summary>
+<pre><code>"addLayers": { "nLayers": 3, "expansionRatio": 1.2, "finalLayerThickness": 0.3 }</code></pre>
+</details>
+</section>
+
+<h2 id="stator">Rotor–stator interface in a narrow gap</h2>
+<ul class="stats"><li><span data-stat="stator_1mm.cells">596,154</span> cells</li><li><span data-stat="stator_1mm.seconds">9.2</span> s</li><li>1 mm gap</li></ul>
+<p>A stationary ring (stator) sits just outside the stirred tank blades. Its inner surface is 1 mm from the blade-tip corners.
+The rotating-zone interface sits halfway across the gap, 0.5 mm from the blades. To fit cells between the interface and both walls,
+<code>wallProximity</code> refines the interface near the walls and <code>autoGapRefinement</code> refines the walls facing the gap.</p>
+<p>Generate the STL with <code>python make_geometry.py --stator 1</code>. The ring's inner surface is solid <code>statorInner</code> and the other surfaces are <code>stator</code>.</p>
+<p class="cmd-label">Run the case</p>
+<pre><code>cd examples/stirred_tank
+python make_geometry.py --stator 1          # Generate tank_stator_1mm.stl (--stator takes the gap width in mm)
+cutmesh meshDict_stator_1mm.json            # → case_stator_1mm/ (about 600,000 cells, 10 s, 1.1 GB of memory)
+python -m cutmesh.diagnose meshDict_stator_1mm.json case_stator_1mm   # Check for connections through the gap walls</code></pre>
+<p class="cmd-label">Use a 0.5 mm gap</p>
+<pre><code>python make_geometry.py --stator 0.5        # tank_stator_0.5mm.stl
+cutmesh meshDict_stator.json                # About 2 million cells (about 30 s, 3.5 GB of memory)</code></pre>
+<figure class="vfig">
+  <a class="img only-plain" href="../images/stator_gap.png"><img src="../images/stator_gap.png" alt="Horizontal section through the blades and stationary ring, a 2 mm square close-up of the tip, and a vertical section through the top tip corner" loading="lazy"></a>
+    <a class="img only-layers" href="../images/stator_gap_layers.png"><img src="../images/stator_gap_layers.png" alt="Horizontal section through the blades and stationary ring, a 2 mm square close-up of the tip, and a vertical section through the top tip corner, with boundary layers" loading="lazy"></a>
+  <figcaption>Left, a horizontal section at mid-blade height. Center, a 2 mm wide close-up of the blade tip. Right, a vertical section at the top tip corner. The rotating zone lies inside the red interface and the stationary region outside it<span class="only-layers">. With layers (<span data-stat="stator_1mm_layers.cells">982,245</span> cells, <span data-stat="stator_1mm_layers.seconds">35</span> s, target thickness at <span data-stat="stator_1mm_layers.layerFull">77.2</span>%). Few layers fit between the blade tip and the stationary ring (center)</span>.</figcaption>
+</figure>
+<div class="note">
+  <p><strong>Cell counts rise sharply as the gap narrows.</strong> Fitting at least 1 cell between the interface and the wall requires cells roughly half a gap wide around the entire interface.
+  This geometry uses about 600,000 cells at 1 mm and about 2 million cells at 0.5 mm (about 3.5 GB of memory).
+  With MRF, <code>"conforming": false</code> selects the rotating zone by cell centers, removing the need for interface refinement. AMI requires conforming zones.</p>
+</div>
+<details>
+  <summary>meshDict_stator_1mm.json</summary>
+<pre><code>{
+  "domain": "tank_stator_1mm.stl",
+  "baseCellSize": 0.0125,
+  "surfaceRefinement": { "default": 1, "impeller": 3, "shaft": 2, "stator": 3, "statorInner": 3 },
+  "featureLevel": 2,
+  "bufferLayers": 2,
+  "snapTolerance": 0.3,
+  "mergeRatio": 0.25,
+  "autoGapRefinement": { "cellsAcross": 2, "maxLevel": 5 },
+  "rotatingZones": [
+    {
+      "name": "rotor",
+      "cylinder": { "point1": [0, 0, 0.074], "point2": [0, 0, 0.126], "radius": 0.05059 },
+      "surfaceLevel": 3,
+      "volumeLevel": 2,
+      "wallProximity": { "distance": 0.001, "level": 5 },
+      "omega": 31.416
+    }
+  ],
+  "patchTypes": { "top": "wall" },
+  "case": "case_stator_1mm"
+}</code></pre>
+<p>The 0.5 mm gap settings are in <code>examples/stirred_tank/meshDict_stator.json</code>, with <code>maxLevel</code> and <code>level</code> set to 6.</p>
+</details>
+
+<h2 id="shapes">Shape tests (<code>benchmark/</code>)</h2>
+<p>These are 5 synthetic benchmark shapes generated with <code>python benchmark/make_synthetic.py</code>. Each uses a base cell size of 1/24 of the longest bounding-box edge
+and surface refinement to level 2. Every figure shows a 3D view with the front half of the cells removed and 3 central sections.</p>
+<p class="cmd-label">Run from the repository root</p>
+<pre><code>python benchmark/make_synthetic.py          # Generate synthetic STLs in benchmark/data/synthetic/
+python benchmark/run_bench.py benchmark/suites/synthetic.json --only sphere --only torus --keep --out benchmark/results/shapes
+    # --only filters by case name (supports wildcards, e.g. "thin_*"). --keep preserves passing meshes.
+    # --out sets the output directory. benchmark/results/shapes/cases/sphere/ contains case/constant/polyMesh,
+    # meshDict.json (settings), overview.png and cut.png (images), and log.txt (cutmesh log).
+    # benchmark/results/shapes/summary.md lists the results, cell counts, quality, and runtimes.</code></pre>
+<p class="cmd-label">Other options</p>
+<pre><code>python benchmark/run_bench.py benchmark/suites/synthetic.json -j 4                  # Run all 26 shapes, 4 at a time
+python benchmark/run_bench.py benchmark/suites/synthetic.json --cells-across 48 --only cube_rotated   # Double the resolution
+python benchmark/run_bench.py benchmark/suites/synthetic.json --set addLayers='{"nLayers": 3}'      # Add layers to every case
+python benchmark/run_bench.py benchmark/suites/synthetic.json --baseline benchmark/baselines/synthetic.json  # Compare with the baseline
+python benchmark/stl_check.py benchmark/data/synthetic/torus.stl                    # Inspect the STL for open edges and other issues</code></pre>
+<div class="grid two">
+  <figure class="vfig">
+    <a class="img only-plain" href="../images/shape_sphere.png"><img src="../images/shape_sphere.png" alt="Mesh inside a sphere" loading="lazy"></a>
+    <a class="img only-layers" href="../images/shape_sphere_layers.png"><img src="../images/shape_sphere_layers.png" alt="Mesh inside a sphere with boundary layers" loading="lazy"></a>
+    <figcaption><strong>sphere</strong> — Smooth convex surface (<span class="only-plain"><span data-stat="sphere.cells">75,612</span> cells, <span data-stat="sphere.seconds">1.0</span> s</span><span class="only-layers">with layers, <span data-stat="sphere_layers.cells">147,636</span> cells, <span data-stat="sphere_layers.seconds">2.3</span> s, target thickness at <span data-stat="sphere_layers.layerFull">98.9</span>%</span>)</figcaption>
+  </figure>
+  <figure class="vfig">
+    <a class="img only-plain" href="../images/shape_cube_rotated.png"><img src="../images/shape_cube_rotated.png" alt="Mesh inside a cube rotated relative to the grid" loading="lazy"></a>
+    <a class="img only-layers" href="../images/shape_cube_rotated_layers.png"><img src="../images/shape_cube_rotated_layers.png" alt="Mesh inside a cube rotated relative to the grid, with boundary layers" loading="lazy"></a>
+    <figcaption><strong>cube_rotated</strong> — Sharp edges that do not align with the grid. See <a href="#tilted-edges">Off-grid edges</a> below. The small steps along the cutaway come from displaying whole cells. (<span class="only-plain"><span data-stat="cube_rotated.cells">53,564</span> cells, <span data-stat="cube_rotated.seconds">1.0</span> s</span><span class="only-layers">with layers, <span data-stat="cube_rotated_layers.cells">112,271</span> cells, <span data-stat="cube_rotated_layers.seconds">2.7</span> s, target thickness at <span data-stat="cube_rotated_layers.layerFull">92.5</span>%</span>)</figcaption>
+  </figure>
+  <figure class="vfig">
+    <a class="img only-plain" href="../images/shape_torus.png"><img src="../images/shape_torus.png" alt="Mesh inside a torus" loading="lazy"></a>
+    <a class="img only-layers" href="../images/shape_torus_layers.png"><img src="../images/shape_torus_layers.png" alt="Mesh inside a torus with boundary layers" loading="lazy"></a>
+    <figcaption><strong>torus</strong> — A hole through the fluid region (<span class="only-plain"><span data-stat="torus.cells">39,008</span> cells, <span data-stat="torus.seconds">0.6</span> s</span><span class="only-layers">with layers, <span data-stat="torus_layers.cells">84,596</span> cells, <span data-stat="torus_layers.seconds">1.5</span> s, target thickness at <span data-stat="torus_layers.layerFull">95.3</span>%</span>)</figcaption>
+  </figure>
+  <figure class="vfig">
+    <a class="img only-plain" href="../images/shape_thin_channels.png"><img src="../images/shape_thin_channels.png" alt="Mesh inside narrow flow channels" loading="lazy"></a>
+    <a class="img only-layers" href="../images/shape_thin_channels_layers.png"><img src="../images/shape_thin_channels_layers.png" alt="Mesh inside narrow flow channels with boundary layers" loading="lazy"></a>
+    <figcaption><strong>thin_channels</strong> — Flow channels 2 cells wide (<span class="only-plain"><span data-stat="thin_channels.cells">46,244</span> cells, <span data-stat="thin_channels.seconds">1.1</span> s</span><span class="only-layers">with layers, <span data-stat="thin_channels_layers.cells">146,819</span> cells, <span data-stat="thin_channels_layers.seconds">2.6</span> s, target thickness at <span data-stat="thin_channels_layers.layerFull">98.0</span>%</span>)</figcaption>
+  </figure>
+  <figure class="vfig">
+    <a class="img only-plain" href="../images/shape_l_bracket.png"><img src="../images/shape_l_bracket.png" alt="L-shaped mesh" loading="lazy"></a>
+    <a class="img only-layers" href="../images/shape_l_bracket_layers.png"><img src="../images/shape_l_bracket_layers.png" alt="L-shaped mesh with boundary layers" loading="lazy"></a>
+    <figcaption><strong>l_bracket</strong> — Concave edges (<span class="only-plain"><span data-stat="l_bracket.cells">71,439</span> cells, <span data-stat="l_bracket.seconds">1.0</span> s</span><span class="only-layers">with layers, <span data-stat="l_bracket_layers.cells">166,617</span> cells, <span data-stat="l_bracket_layers.seconds">2.0</span> s, target thickness at <span data-stat="l_bracket_layers.layerFull">99.9</span>%</span>)</figcaption>
+  </figure>
+</div>
+<h3 id="tilted-edges">Off-grid edges (exact cuts for convex edges)</h3>
+<p>When an edge does not align with the octree grid, nearby vertices can snap to either wall, leaving a sawtooth edge where the fluid between the vertices and the edge is lost cell by cell.
+The <code>exactFeatureCut</code> option, enabled by default, cuts cells near convex edges directly with STL planes
+so the mesh follows the edge. The images show the cube_rotated walls from 2 directions.</p>
+<div class="grid two">
+  <figure>
+    <a class="img" href="../images/shape_cube_rotated_walls_plain.png"><img src="../images/shape_cube_rotated_walls_plain.png" alt="Rotated cube wall mesh without exact cuts, showing missing pieces along edges and poor-quality cells in red" loading="lazy"></a>
+    <figcaption>Without exact cuts, gaps line the edges. The maximum deviation is 0.79 times the smallest cell size and exceeds 0.2 times that size along 16.5% of the edge. Red marks poor-quality cells.</figcaption>
+  </figure>
+  <figure>
+    <a class="img" href="../images/shape_cube_rotated_walls.png"><img src="../images/shape_cube_rotated_walls.png" alt="Rotated cube wall mesh with exact cuts and straight edges" loading="lazy"></a>
+    <figcaption>With exact cuts, the mesh follows the edges. Deviation exceeds 0.2 times the smallest cell size along 0.1% of the edge. The number of faces with skewness &gt; 4 drops from 3 to 0.</figcaption>
+  </figure>
+</div>
+<p>Where convex edges meet concave edges or curved surfaces, cutmesh falls back to the standard cut if planar cuts would create invalid cells. Some chamfering can remain there.
+Edges between curved and planar surfaces, such as the rim of a cone base, are outside the scope of exact cuts.</p>
+
+<p>The full suite tracks failures, warnings, and quality regressions across 26 shapes, including thin walls and STLs with duplicate triangles, open edges, or mixed orientations.
+See <a href="https://github.com/mmer547/cutmesh/tree/main/benchmark">benchmark/README.md</a>.</p>
+
+<h2 id="showcase">Showcase geometries (<code>benchmark/suites/showcase.json</code>)</h2>
+<p>These 8 geometries represent pipe, duct, and external flow problems. Each STL has separate inlet and outlet solids (patches).
+Generate them with <code>python benchmark/make_synthetic.py</code>. All 8 cases PASS without warnings or quality flags.
+There are 0 faces above 70° non-orthogonality or 4 skewness, and volume error is within 0.3% of the STL volume. In the sections, black lines show STL walls and gray lines show cell faces.</p>
+<p class="cmd-label">Run from the repository root</p>
+<pre><code>python benchmark/make_synthetic.py          # Generate STLs such as pipe_elbow.stl in benchmark/data/synthetic/
+python benchmark/run_bench.py benchmark/suites/showcase.json -j 4 --keep --out benchmark/results/showcase
+    # → benchmark/results/showcase/cases/&lt;name&gt;/case/constant/polyMesh and meshDict.json (settings)
+python benchmark/run_bench.py benchmark/suites/showcase.json --only venturi --keep   # Run just one case</code></pre>
+<p>Find each case's <code>meshDict</code> settings, including <code>baseCellSize</code>, per-patch refinement, and <code>patchTypes</code>,
+in <code>benchmark/suites/showcase.json</code>. To run cutmesh directly, pass the generated <code>meshDict.json</code>
+to <code>cutmesh meshDict.json</code>.</p>
+<div class="grid two">
+  <figure class="vfig">
+    <a class="img only-plain" href="../images/showcase_pipe_elbow.png"><img src="../images/showcase_pipe_elbow.png" alt="Section through a 90° pipe elbow" loading="lazy"></a>
+    <a class="img only-layers" href="../images/showcase_pipe_elbow_layers.png"><img src="../images/showcase_pipe_elbow_layers.png" alt="Section through a 90° pipe elbow with boundary layers" loading="lazy"></a>
+    <figcaption><strong>pipe_elbow</strong> — A 90° bend in a pipe of diameter D with a bend radius of 1.5 D. Left, the section through the bend. Right, a cross-section of the outlet pipe. (<span class="only-plain"><span data-stat="pipe_elbow.cells">27,869</span> cells, <span data-stat="pipe_elbow.seconds">0.5</span> s, max non-orthogonality <span data-stat="pipe_elbow.nonOrtho">53</span>°</span><span class="only-layers">with layers, <span data-stat="pipe_elbow_layers.cells">59,363</span> cells, <span data-stat="pipe_elbow_layers.seconds">1.1</span> s, target thickness at <span data-stat="pipe_elbow_layers.layerFull">98.6</span>%、max non-orthogonality <span data-stat="pipe_elbow_layers.nonOrtho">64</span>°</span>)</figcaption>
+  </figure>
+  <figure class="vfig">
+    <a class="img only-plain" href="../images/showcase_helical_coil.png"><img src="../images/showcase_helical_coil.png" alt="Helical coil wall mesh" loading="lazy"></a>
+    <a class="img only-layers" href="../images/showcase_helical_coil_layers.png"><img src="../images/showcase_helical_coil_layers.png" alt="Helical coil with boundary layers, with the front half removed and showing 3 central cross-sections" loading="lazy"></a>
+    <figcaption><strong>helical_coil</strong> — A 2.5-turn helical pipe for a coil heat exchanger. <span class="only-plain">Walls are colored by patch, with a blue inlet and an orange outlet.</span><span class="only-layers">A cutaway with the front half removed and 3 central sections expose the layers inside the mesh.</span> (<span class="only-plain"><span data-stat="helical_coil.cells">98,359</span> cells, <span data-stat="helical_coil.seconds">1.9</span> s, max non-orthogonality <span data-stat="helical_coil.nonOrtho">62</span>°</span><span class="only-layers">with layers, <span data-stat="helical_coil_layers.cells">223,504</span> cells, <span data-stat="helical_coil_layers.seconds">5.6</span> s, target thickness at <span data-stat="helical_coil_layers.layerFull">90.4</span>%、max non-orthogonality <span data-stat="helical_coil_layers.nonOrtho">65</span>°</span>)</figcaption>
+  </figure>
+  <figure class="vfig">
+    <a class="img only-plain" href="../images/showcase_venturi.png"><img src="../images/showcase_venturi.png" alt="Longitudinal section of a Venturi pipe with a close-up of the throat" loading="lazy"></a>
+    <a class="img only-layers" href="../images/showcase_venturi_layers.png"><img src="../images/showcase_venturi_layers.png" alt="Longitudinal section of a Venturi pipe with boundary layers and a close-up of the throat" loading="lazy"></a>
+    <figcaption><strong>venturi</strong> — A cosine-shaped contraction narrows to the throat (0.4 D) and a 7° diffuser widens back to the pipe diameter. (<span class="only-plain"><span data-stat="venturi.cells">24,484</span> cells, <span data-stat="venturi.seconds">0.7</span> s, max non-orthogonality <span data-stat="venturi.nonOrtho">58</span>°</span><span class="only-layers">with layers, <span data-stat="venturi_layers.cells">50,311</span> cells, <span data-stat="venturi_layers.seconds">1.4</span> s, target thickness at <span data-stat="venturi_layers.layerFull">93.3</span>%、max non-orthogonality <span data-stat="venturi_layers.nonOrtho">65</span>°</span>)</figcaption>
+  </figure>
+  <figure class="vfig">
+    <a class="img only-plain" href="../images/showcase_orifice_pipe.png"><img src="../images/showcase_orifice_pipe.png" alt="Longitudinal section through an orifice plate with a close-up of the opening edge" loading="lazy"></a>
+    <a class="img only-layers" href="../images/showcase_orifice_pipe_layers.png"><img src="../images/showcase_orifice_pipe_layers.png" alt="Longitudinal section through an orifice plate with boundary layers and a close-up of the opening edge" loading="lazy"></a>
+    <figcaption><strong>orifice_pipe</strong> — Sharp-edged orifice plate in a circular pipe (opening diameter 0.5 D, plate thickness 0.1 D) (<span class="only-plain"><span data-stat="orifice_pipe.cells">19,376</span> cells, <span data-stat="orifice_pipe.seconds">0.5</span> s, max skewness <span data-stat="orifice_pipe.skew">1.4</span></span><span class="only-layers">with layers, <span data-stat="orifice_pipe_layers.cells">40,781</span> cells, <span data-stat="orifice_pipe_layers.seconds">0.8</span> s, target thickness at <span data-stat="orifice_pipe_layers.layerFull">98.8</span>%、max skewness <span data-stat="orifice_pipe_layers.skew">2.6</span></span>)</figcaption>
+  </figure>
+  <figure class="vfig">
+    <a class="img only-plain" href="../images/showcase_backward_step.png"><img src="../images/showcase_backward_step.png" alt="Section of a backward-facing step channel" loading="lazy"></a>
+    <a class="img only-layers" href="../images/showcase_backward_step_layers.png"><img src="../images/showcase_backward_step_layers.png" alt="Section of a backward-facing step channel with boundary layers" loading="lazy"></a>
+    <figcaption><strong>backward_step</strong> — Backward-facing step with an expansion ratio of 2. Side faces are <code>symmetry</code> patches. (<span class="only-plain"><span data-stat="backward_step.cells">19,440</span> cells, <span data-stat="backward_step.seconds">0.4</span> s, max non-orthogonality <span data-stat="backward_step.nonOrtho">25</span>°</span><span class="only-layers">with layers, <span data-stat="backward_step_layers.cells">40,752</span> cells, <span data-stat="backward_step_layers.seconds">0.7</span> s, target thickness at <span data-stat="backward_step_layers.layerFull">100.0</span>%、max non-orthogonality <span data-stat="backward_step_layers.nonOrtho">40</span>°</span>)</figcaption>
+  </figure>
+  <figure class="vfig">
+    <a class="img only-plain" href="../images/showcase_t_junction.png"><img src="../images/showcase_t_junction.png" alt="Section of a T-junction duct" loading="lazy"></a>
+    <a class="img only-layers" href="../images/showcase_t_junction_layers.png"><img src="../images/showcase_t_junction_layers.png" alt="Section of a T-junction duct with boundary layers" loading="lazy"></a>
+    <figcaption><strong>t_junction</strong> — T-junction of square ducts with a branch half the width of the main duct. The 2 inlet patches are <code>inletMain</code> and <code>inletBranch</code>. (<span class="only-plain"><span data-stat="t_junction.cells">15,736</span> cells, <span data-stat="t_junction.seconds">0.4</span> s, max non-orthogonality <span data-stat="t_junction.nonOrtho">25</span>°</span><span class="only-layers">with layers, <span data-stat="t_junction_layers.cells">38,392</span> cells, <span data-stat="t_junction_layers.seconds">0.8</span> s, target thickness at <span data-stat="t_junction_layers.layerFull">100.0</span>%、max non-orthogonality <span data-stat="t_junction_layers.nonOrtho">62</span>°</span>)</figcaption>
+  </figure>
+  <figure class="vfig">
+    <a class="img only-plain" href="../images/showcase_pin_fins.png"><img src="../images/showcase_pin_fins.png" alt="Horizontal section of a staggered pin array with a close-up around the pins" loading="lazy"></a>
+    <a class="img only-layers" href="../images/showcase_pin_fins_layers.png"><img src="../images/showcase_pin_fins_layers.png" alt="Horizontal section of a staggered pin array with boundary layers and a close-up around the pins" loading="lazy"></a>
+    <figcaption><strong>pin_fins</strong> — A staggered array of 13 pins spans a duct, representing pin fins or a tube bank. Only the pins are refined to level 3. (<span class="only-plain"><span data-stat="pin_fins.cells">63,287</span> cells, <span data-stat="pin_fins.seconds">1.6</span> s, max non-orthogonality <span data-stat="pin_fins.nonOrtho">39</span>°</span><span class="only-layers">with layers, <span data-stat="pin_fins_layers.cells">144,293</span> cells, <span data-stat="pin_fins_layers.seconds">3.4</span> s, target thickness at <span data-stat="pin_fins_layers.layerFull">93.4</span>%、max non-orthogonality <span data-stat="pin_fins_layers.nonOrtho">56</span>°</span>)</figcaption>
+  </figure>
+  <figure class="vfig">
+    <a class="img only-plain" href="../images/showcase_body_in_tunnel.png"><img src="../images/showcase_body_in_tunnel.png" alt="Longitudinal section of a body in a wind tunnel with a close-up around the body" loading="lazy"></a>
+    <a class="img only-layers" href="../images/showcase_body_in_tunnel_layers.png"><img src="../images/showcase_body_in_tunnel_layers.png" alt="Longitudinal section of a body in a wind tunnel with boundary layers and a close-up around the body" loading="lazy"></a>
+    <figcaption><strong>body_in_tunnel</strong> — External flow around a bluff body with a rounded nose, a 25° rear slope, and 0.05 clearance above the wind-tunnel floor. The body is at level 4, the floor at level 1, and the sides and ceiling at level 0. (<span class="only-plain"><span data-stat="body_in_tunnel.cells">92,311</span> cells, <span data-stat="body_in_tunnel.seconds">1.7</span> s, max non-orthogonality <span data-stat="body_in_tunnel.nonOrtho">58</span>°</span><span class="only-layers">with layers, <span data-stat="body_in_tunnel_layers.cells">154,852</span> cells, <span data-stat="body_in_tunnel_layers.seconds">3.3</span> s, target thickness at <span data-stat="body_in_tunnel_layers.layerFull">98.7</span>%、max non-orthogonality <span data-stat="body_in_tunnel_layers.nonOrtho">64</span>°</span>)</figcaption>
+  </figure>
+</div>
+<details>
+  <summary>Example meshDict for body_in_tunnel</summary>
+<pre><code>{
+  "domain": "body_in_tunnel.stl",
+  "baseCellSize": 0.08,
+  "surfaceRefinement": { "default": 0, "floor": 1, "body": 4 },
+  "patchTypes": { "inlet": "patch", "outlet": "patch", "walls": "symmetry" },
+  "case": "case"
+}</code></pre>
+<p>The solids are <code>inlet</code>, <code>outlet</code>, <code>floor</code>, <code>walls</code> (wind-tunnel sides and ceiling), and <code>body</code> (normals point into the body, out of the fluid).</p>
+</details>
+
+<h2 id="reproduce">Reproducing the images</h2>
+<p>Use the commands below to regenerate the images. With the Rust extension, both variants together take about 2 minutes.</p>
+<pre><code>python tools/make_docs_images.py                    # All images → docs/images/
+python tools/make_docs_images.py --only stator      # Selected cases (tank, cylindrical, stator, shapes, showcase)
+python tools/make_docs_images.py --variant plain    # Without layers (use layers for files ending in _layers)</code></pre>
+<p>For your own mesh, run <code>python benchmark/render_mesh.py CASE</code> for 3D views and sections, or see
+<code>cutmesh.viz.plot_slice</code> in <code>examples/stirred_tank/run.py</code> for sections only.</p>
+</article>
+</main>
+
+<footer class="site-footer"><div class="inner">
+  cutmesh is an independent tool that writes meshes (<code>constant/polyMesh</code>) for OpenFOAM.
+  This offering is not approved or endorsed by OpenCFD Limited, producer and distributor of the OpenFOAM software via www.openfoam.com,
+  and owner of the OPENFOAM® and OpenCFD® trade marks.
+</div></footer>
+<script src="../examples.js"></script>
+</body>
+</html>

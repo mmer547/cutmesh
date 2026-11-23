@@ -7,6 +7,148 @@
   var P = S.properties;
   var STORE = "cutmesh.meshdict.v1";
 
+  // Text for controls and messages that are built by this script.
+  var messages = {
+    required: ["必須", "Required"],
+    advanced: ["詳細", "Advanced"],
+    defaultLabel: ["既定: ", "Default: "],
+    unknownValue: ["{0}（不明な値）", "{0} (unknown value)"],
+    rowName: ["{0} の名前", "{0} name"],
+    solidName: ["solid 名", "Solid name"],
+    level: ["レベル", "Level"],
+    removeRow: ["この行を消す", "Remove this row"],
+    removeNamed: ["{0} を消す", "Remove {0}"],
+    addRow: ["＋ 行を足す", "＋ Add row"],
+    addSolids: ["＋ STL の solid をすべて足す", "＋ Add all STL solids"],
+    allWalls: ["空欄: wall のパッチすべて", "Blank selects all wall patches"],
+    commaSeparated: ["名前をカンマ区切りで", "Comma-separated names"],
+    disableNull: [" null（無効）", " null (disabled)"],
+    defaultOption: ["既定（{0}）", "Default ({0})"],
+    unused: ["使わない", "Off"],
+    useDefaults: ["true（既定値で使う）", "true (use defaults)"],
+    customValues: ["値を指定する", "Set values"],
+    enable: [" 使う", " Enable"],
+    remove: ["消す", "Remove"],
+    addZone: ["＋ 回転ゾーンを足す", "＋ Add rotating zone"],
+    addRegion: ["＋ 細分化領域を足す", "＋ Add refinement region"],
+    zoneShape: ["ゾーンの形", "Zone shape"],
+    shape: ["形:", "Shape"],
+    cylinder: [" 円筒", " Cylinder"],
+    closedSTL: [" 閉じた STL", " Closed STL"],
+    zoneName: ["ゾーン {0}{1}", "Zone {0}{1}"],
+    inParens: ["（{0}）", " ({0})"],
+    regionName: ["領域 {0}", "Region {0}"],
+    manual: ["マニュアル", "Manual"],
+    allAdvanced: [
+      "この欄の項目はすべて詳細な設定です（「詳細な設定も表示」で表示）。",
+      "This section contains advanced settings. Select “Show advanced settings” to see them."
+    ],
+    hiddenAdvanced: ["ほかに詳細な設定が {0} 項目あります。", "Hidden advanced settings ({0})."],
+    otherKeys: ["そのほかのキー", "Other keys"],
+    extraKeysHelp: [
+      "コメント（_ や // で始まるキー）と、cutmesh の知らないキーはそのまま書き出します: ",
+      "Comments (keys starting with _ or //) and unknown keys are carried over as entered. "
+    ],
+    typeNames: [
+      {"null": "null", "boolean": "true / false", "integer": "整数", "number": "数", "string": "文字列", "array": "リスト [...]", "object": "オブジェクト {...}"},
+      {"null": "null", "boolean": "true / false", "integer": "an integer", "number": "a number", "string": "a string", "array": "a list [...]", "object": "an object {...}"}
+    ],
+    or: [" か ", " or "],
+    badJSON: ["{0}: JSON として読めません", "{0} contains invalid JSON."],
+    invalidType: ["{0} は{1}にしてください（いま {2}）", "{0} must be {1} (entered {2})."],
+    invalidOption: ["{0} は {1} のどれかです（いま {2}）", "{0} must be one of {1} (entered {2})."],
+    minimum: ["{0} は {1} 以上です（いま {2}）", "{0} must be at least {1} (entered {2})."],
+    exclusiveMinimum: [
+      "{0} は {1} より大きくしてください（いま {2}）",
+      "{0} must be greater than {1} (entered {2})."
+    ],
+    maximum: ["{0} は {1} 以下です（いま {2}）", "{0} must be at most {1} (entered {2})."],
+    exclusiveMaximum: ["{0} は {1} より小さくしてください（いま {2}）", "{0} must be less than {1} (entered {2})."],
+    empty: ["{0} が空です", "{0} is empty."],
+    length: ["{0} は {1} 個の数です", "{0} must contain {1} numbers."],
+    missing: ["{0} が必要です", "{0} is required."],
+    unknownKey: ["{0} は cutmesh の知らないキーです（無視されます）", "cutmesh ignores unknown key {0}."],
+    zeroLength: [
+      "{0}: point1 と point2 が同じです（軸の長さが 0）",
+      "{0} has identical endpoints (zero-length axis)."
+    ],
+    zoneGeometry: [
+      "{0}: cylinder か stl のどちらか一方を書きます",
+      "{0} requires exactly one of cylinder and stl."
+    ],
+    duplicateZone: ["{0}: ゾーン名 {1} が重複しています", "{0} has a duplicate zone name, {1}."],
+    zeroAxis: ["{0}.axis が 0 ベクトルです", "{0}.axis must be a nonzero vector."],
+    amiNeedsConforming: [
+      "{0}: \"ami\": true は \"conforming\": false と一緒に使えません",
+      "{0} cannot use \"ami\": true with \"conforming\": false."
+    ],
+    coreAndBlocks: [
+      "baseMesh: core と blocks は両方書くか、両方書かないかです",
+      "Specify both baseMesh core and blocks, or omit both."
+    ],
+    automaticOnly: [
+      "baseMesh: rOuter と cellSize は自動配置（core と blocks なし）のときだけ使えます",
+      "baseMesh rOuter and cellSize require automatic layout. Omit core and blocks to use them."
+    ],
+    ignoredBaseMesh: [
+      "baseMesh: type が cylindrical でないので、ほかの値は使われません",
+      "The other baseMesh settings apply only when type is cylindrical."
+    ],
+    nzWins: [
+      "baseMesh: nz と dz の両方があるときは nz が使われます",
+      "baseMesh uses nz when both nz and dz are set."
+    ],
+    unknownSolid: [
+      "{0} の {1} は STL の solid にありません（無視されます）",
+      "cutmesh ignores {1} in {0} because that solid is missing from the STL."
+    ],
+    amiDialect: [
+      "スライディングメッシュ（ami）は openfoam の書き方を選べます（既定は com = openfoam.com）",
+      "Choose an openfoam dialect for sliding meshes (ami). The default is com for openfoam.com."
+    ],
+    valid: ["問題は見つかりませんでした", "No issues found"],
+    downloadWithErrors: ["エラーがありますが、書き出せます", "Download is available despite validation errors"],
+    stlHeaderMissing: ["STL ではありません（84 バイトのヘッダーがない）", "Invalid STL. The 84-byte header is missing."],
+    stlTruncated: ["バイナリ STL が途中で切れています", "The binary STL is truncated."],
+    stlNoTriangles: ["三角形がありません", "The STL contains no triangles."],
+    binary: ["バイナリ", "Binary"],
+    file: ["ファイル", "File"],
+    stlSummary: ["（{0}、{1} 三角形）", " ({0}, {1} triangles)"],
+    solids: ["solid（パッチ）", "Solids (patches)"],
+    binarySolids: ["（バイナリ STL は solid が 1 つだけ）", " (Binary STL has just one solid)"],
+    bounds: ["外接箱", "Bounding box"],
+    boundsSeparator: ["] 〜 [", "] to ["],
+    dimensions: ["大きさ", "Dimensions"],
+    levelZero: ["レベル 0 の格子", "Level 0 grid"],
+    cells: [" セル", " cells"],
+    bboxEstimate: [
+      "（外接箱いっぱいの数。STL の外は捨てられ、細分化で増えます）",
+      " (Full bounding box before STL clipping and refinement)"
+    ],
+    sizeSuggestions: ["baseCellSize の目安: ", "Suggested baseCellSize values "],
+    longestEdge: ["最長辺の 1/{0}", "1/{0} of the longest edge"],
+    loadedSTL: ["読み込んだ STL", "Loaded STL"],
+    close: ["閉じる", "Close"],
+    closeSTL: ["STL の情報を閉じる", "Close STL information"],
+    fileBadJSON: ["{0}: JSON として読めません: {1}", "Could not read {0} as JSON. {1}"],
+    fileNotObject: [
+      "{0}: meshDict は JSON のオブジェクト {...} です",
+      "{0} must contain a meshDict JSON object {...}."
+    ],
+    replaceExample: ["いまの入力を例題 {0} で置き換えますか？", "Replace your current settings with {0}?"],
+    clearConfirm: ["入力をすべて消しますか？", "Clear all settings?"],
+    copied: ["コピーしました", "Copied"],
+    copy: ["コピー", "Copy"],
+  };
+  var language = document.documentElement.lang === "en" ? 1 : 0;
+  var ui = {};
+  Object.keys(messages).forEach(function (key) { ui[key] = messages[key][language]; });
+
+  function msg(template) {
+    var args = arguments;
+    return template.replace(/\{(\d+)\}/g, function (_, index) { return args[Number(index) + 1]; });
+  }
+
   var state = {};            // the meshDict being edited (only keys the user set)
   var stl = null;            // {file, format, solids, ntri, lo, hi}
   var showAdvanced = false, withDefaults = false;
@@ -81,13 +223,17 @@
 
   // ---------------------------------------------------------------- changes
   var saveTimer = null;
+  function saveState() {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+    try { localStorage.setItem(STORE, JSON.stringify(state)); } catch (e) { /* storage off */ }
+  }
   function changed() {
     update();
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(function () {
-      try { localStorage.setItem(STORE, JSON.stringify(state)); } catch (e) { /* storage off */ }
-    }, 300);
+    saveTimer = setTimeout(saveState, 300);
   }
+  window.addEventListener("pagehide", function () { if (saveTimer !== null) saveState(); });
   function rerender() { render(); changed(); }
 
   // ---------------------------------------------------------------- form
@@ -98,8 +244,8 @@
   function label(key, p, required) {
     return el("div", { class: "mdf-label" },
       el("code", { text: key }),
-      required ? el("span", { class: "mdf-req", text: "必須" }) : null,
-      p["x-advanced"] ? el("span", { class: "mdf-adv", text: "詳細" }) : null);
+      required ? el("span", { class: "mdf-req", text: ui.required }) : null,
+      p["x-advanced"] ? el("span", { class: "mdf-adv", text: ui.advanced }) : null);
   }
   function help(p) {
     var bits = [p.description || ""];
@@ -107,7 +253,7 @@
     var t = el("div", { class: "mdf-help" }, bits.join(" "));
     if ("default" in p && !(isObj(p.default) && !Object.keys(p.default).length) &&
         !(Array.isArray(p.default) && !p.default.length)) {
-      t.appendChild(el("span", { class: "mdf-default" }, "既定: ", el("code", { text: show(p.default) })));
+      t.appendChild(el("span", { class: "mdf-default" }, ui.defaultLabel, el("code", { text: show(p.default) })));
     }
     return t;
   }
@@ -154,8 +300,8 @@
       sel.appendChild(opt);
     });
     if (!found && v !== undefined) {        // a value the list does not have (from a loaded file)
-      options.push([v, show(v) + "（不明な値）"]);
-      sel.appendChild(el("option", { text: show(v) + "（不明な値）", selected: true }));
+      options.push([v, msg(ui.unknownValue, show(v))]);
+      sel.appendChild(el("option", { text: msg(ui.unknownValue, show(v)), selected: true }));
     }
     return sel;
   }
@@ -211,8 +357,8 @@
       var keys = Object.keys(m);
       keys.forEach(function (k) {
         var name = el("input", {
-          type: "text", class: "mdf-text", value: k, "aria-label": pathName(path) + " の名前",
-          list: widget === "solidLevels" ? "mdf-solids-default" : "mdf-solids", placeholder: "solid 名",
+          type: "text", class: "mdf-text", value: k, "aria-label": msg(ui.rowName, pathName(path)),
+          list: widget === "solidLevels" ? "mdf-solids-default" : "mdf-solids", placeholder: ui.solidName,
           onchange: function (e) {
             var nk = e.target.value.trim();
             var cur = getAt(path) || {};
@@ -226,7 +372,7 @@
           type: "text", class: "mdf-text" + (widget === "solidLevels" ? " mdf-num" : ""),
           inputmode: widget === "solidLevels" ? "numeric" : null,
           list: widget === "solidTypes" ? "mdf-ptypes" : null,
-          placeholder: widget === "solidLevels" ? "レベル" : "wall",
+          placeholder: widget === "solidLevels" ? ui.level : "wall",
           value: m[k] === undefined ? "" : String(m[k]), "aria-label": pathName(path) + "." + k,
           oninput: function (e) {
             var cur = getAt(path) || {};
@@ -236,7 +382,7 @@
           }
         });
         var del = el("button", {
-          type: "button", class: "mdf-x", title: "この行を消す", "aria-label": k + " を消す",
+          type: "button", class: "mdf-x", title: ui.removeRow, "aria-label": msg(ui.removeNamed, k),
           onclick: function () {
             var cur = getAt(path) || {};
             delete cur[k];
@@ -260,7 +406,7 @@
             var ins = box.querySelectorAll(".mdf-maprow input");
             if (ins.length) ins[ins.length - 2].focus();
           }
-        }, "＋ 行を足す"));
+        }, ui.addRow));
       if (stl && stl.solids.length && widget === "solidLevels") {
         var missing = stl.solids.filter(function (s) { return !(s in m); });
         if (missing.length) {
@@ -271,7 +417,7 @@
               missing.forEach(function (s) { cur[s] = cur["default"]; });
               setAt(path, cur); draw(); changed();
             }
-          }, "＋ STL の solid をすべて足す"));
+          }, ui.addSolids));
         }
       }
       box.appendChild(add);
@@ -286,7 +432,7 @@
     var box = el("div", { class: "mdf-list" });
     var inp = el("input", {
       type: "text", class: "mdf-text", "aria-label": pathName(path),
-      placeholder: p.default === null ? "空欄: wall のパッチすべて" : "名前をカンマ区切りで",
+      placeholder: p.default === null ? ui.allWalls : ui.commaSeparated,
       value: Array.isArray(v) ? v.join(", ") : "",
       oninput: function () { sync(); }
     });
@@ -332,7 +478,7 @@
     });
     inp.disabled = v === null;
     box.appendChild(inp);
-    box.appendChild(el("label", { class: "mdf-check" }, cb, " null（無効）"));
+    box.appendChild(el("label", { class: "mdf-check" }, cb, ui.disableNull));
     return box;
   }
 
@@ -347,13 +493,13 @@
     if (w === "json") return row(key, p, path, required, jsonInput(path, p));
     if (w === "stl") return row(key, p, path, required, textInput(path, p, { placeholder: "model.stl" }));
     if (p["enum"]) {
-      var opts = [[undefined, "既定（" + show(p.default) + "）"]];
+      var opts = [[undefined, msg(ui.defaultOption, show(p.default))]];
       p["enum"].forEach(function (x) { opts.push([x, typeof x === "string" ? x : show(x)]); });
       return row(key, p, path, required, selectInput(path, p, opts));
     }
     if (t[0] === "boolean" && t.length === 1) {
       return row(key, p, path, required, selectInput(path, p, [
-        [undefined, "既定（" + show(p.default) + "）"], [true, "true"], [false, "false"]]));
+        [undefined, msg(ui.defaultOption, show(p.default))], [true, "true"], [false, "false"]]));
     }
     if (t.indexOf("number") >= 0 || t.indexOf("integer") >= 0) {
       if (t.indexOf("null") >= 0 && p.default !== null && "default" in p) {
@@ -383,21 +529,21 @@
     var wrap = el("div", { class: "mdf-field mdf-sub", "data-path": pathName(path) });
     var head = el("div", { class: "mdf-subhead" }, label(key, p, required));
     if (t.indexOf("boolean") >= 0) {        // autoGapRefinement: off / true / settings
-      var modes = [[undefined, "使わない"], [true, "true（既定値で使う）"], [{}, "値を指定する"]];
+      var modes = [[undefined, ui.unused], [true, ui.useDefaults], [{}, ui.customValues]];
       var cur = v === undefined || v === null ? 0 : v === true ? 1 : isObj(v) ? 2 : -1;
       var sel = el("select", { "aria-label": pathName(path), onchange: function (e) {
         var i = e.target.selectedIndex;
         if (i < modes.length) { setAt(path, clone(modes[i][0])); rerender(); }
       } });
       modes.forEach(function (m, i) { sel.appendChild(el("option", { text: m[1], selected: i === cur })); });
-      if (cur < 0) sel.appendChild(el("option", { text: show(v) + "（不明な値）", selected: true }));
+      if (cur < 0) sel.appendChild(el("option", { text: msg(ui.unknownValue, show(v)), selected: true }));
       head.appendChild(sel);
       on = isObj(v);
     } else if (!required) {
       head.appendChild(el("label", { class: "mdf-check" }, el("input", {
         type: "checkbox", checked: on,
         onchange: function (e) { setAt(path, e.target.checked ? {} : undefined); rerender(); }
-      }), " 使う"));
+      }), ui.enable));
     }
     wrap.appendChild(head);
     wrap.appendChild(help(p));
@@ -420,7 +566,7 @@
       var title = itemTitle(item, i);
       card.appendChild(el("div", { class: "mdf-cardhead" }, el("strong", { text: title }),
         el("button", {
-          type: "button", class: "mdf-x", title: "消す", "aria-label": title + " を消す",
+          type: "button", class: "mdf-x", title: ui.remove, "aria-label": msg(ui.removeNamed, title),
           onclick: function () {
             var a = getAt(path); a.splice(i, 1);
             setAt(path, a.length ? a : undefined); rerender();
@@ -448,7 +594,7 @@
           { cylinder: {}, level: 1 });
         setAt(path, a); rerender();
       }
-    }, key === "rotatingZones" ? "＋ 回転ゾーンを足す" : "＋ 細分化領域を足す"));
+    }, key === "rotatingZones" ? ui.addZone : ui.addRegion));
     return wrap;
   }
 
@@ -462,12 +608,12 @@
       else { delete cur.stl; delete cur.origin; delete cur.axis; if (!("cylinder" in cur)) cur.cylinder = {}; }
       setAt(ip, cur); rerender();
     }
-    return el("div", { class: "mdf-shape", role: "radiogroup", "aria-label": "ゾーンの形" },
-      el("span", { class: "mdf-shape-label", text: "形:" }),
+    return el("div", { class: "mdf-shape", role: "radiogroup", "aria-label": ui.zoneShape },
+      el("span", { class: "mdf-shape-label", text: ui.shape }),
       el("label", { class: "mdf-check" }, el("input", { type: "radio", name: name, checked: !useStl,
-        onchange: function () { pick(false); } }), " 円筒"),
+        onchange: function () { pick(false); } }), ui.cylinder),
       el("label", { class: "mdf-check" }, el("input", { type: "radio", name: name, checked: useStl,
-        onchange: function () { pick(true); } }), " 閉じた STL"));
+        onchange: function () { pick(true); } }), ui.closedSTL));
   }
 
   function field(key, p, path, required) {
@@ -475,8 +621,8 @@
     if (p["x-widget"] === "json") return scalarField(key, p, path, required);
     if (t[0] === "array" && p.items && p.items.type === "object" && p.items.properties) {
       return objectList(key, p, path, key === "rotatingZones" ?
-        function (z, i) { return "ゾーン " + (i + 1) + (isObj(z) && z.name ? "（" + z.name + "）" : ""); } :
-        function (r, i) { return "領域 " + (i + 1); });
+        function (z, i) { return msg(ui.zoneName, i + 1, isObj(z) && z.name ? msg(ui.inParens, z.name) : ""); } :
+        function (r, i) { return msg(ui.regionName, i + 1); });
     }
     if (t.indexOf("object") >= 0 && p.properties) {
       return optionalObject(key, p, path, required);
@@ -490,7 +636,7 @@
     S["x-groups"].forEach(function (g) {
       var keys = Object.keys(P).filter(function (k) { return P[k]["x-group"] === g.key; });
       var sec = el("section", { class: "mdf-group", id: "g-" + g.key },
-        el("h2", {}, g.title, " ", el("a", { class: "mdf-doc", href: "manual.html#" + g.doc, text: "マニュアル" })));
+        el("h2", {}, g.title, " ", el("a", { class: "mdf-doc", href: "manual.html#" + g.doc, text: ui.manual })));
       var shown = 0, hidden = 0;
       keys.forEach(function (k) {
         if (!visible(P[k], [k])) { hidden++; return; }
@@ -499,17 +645,17 @@
       });
       if (!shown) {
         sec.appendChild(el("p", { class: "mdf-hidden-note" },
-          "この欄の項目はすべて詳細な設定です（「詳細な設定も表示」で表示）。"));
+          ui.allAdvanced));
       } else if (hidden) {
         sec.appendChild(el("p", { class: "mdf-hidden-note" },
-          "ほかに詳細な設定が " + hidden + " 項目あります。"));
+          msg(ui.hiddenAdvanced, hidden)));
       }
       form.appendChild(sec);
     });
     var extra = Object.keys(state).filter(function (k) { return !(k in P); });
     if (extra.length) {
-      form.appendChild(el("section", { class: "mdf-group" }, el("h2", { text: "そのほかのキー" }),
-        el("p", { class: "mdf-help" }, "コメント（_ や // で始まるキー）と、cutmesh の知らないキーはそのまま書き出します: ",
+      form.appendChild(el("section", { class: "mdf-group" }, el("h2", { text: ui.otherKeys }),
+        el("p", { class: "mdf-help" }, ui.extraKeysHelp,
           extra.map(function (k) { return el("code", { text: k }); }).reduce(function (a, c) {
             if (a.length) a.push(document.createTextNode(", ")); a.push(c); return a;
           }, []))));
@@ -542,40 +688,37 @@
     }
     return true;
   }
-  var TYPE_JA = { "null": "null", "boolean": "true / false", "integer": "整数", "number": "数",
-    "string": "文字列", "array": "リスト [...]", "object": "オブジェクト {...}" };
-
   function check(v, p, path, out) {
     var name = pathName(path);
-    if (isObj(v) && "!json" in v) { out.push(["error", name + ": JSON として読めません"]); return; }
-    var t = types(p);
-    if (!t.some(function (x) { return typeOk(v, x); })) {
-      out.push(["error", name + " は" + t.map(function (x) { return TYPE_JA[x]; }).join(" か ") +
-        "にしてください（いま " + show(v) + "）"]);
+    if (isObj(v) && "!json" in v) { out.push(["error", msg(ui.badJSON, name)]); return; }
+    var allowed = types(p);
+    if (!allowed.some(function (x) { return typeOk(v, x); })) {
+      var expected = allowed.map(function (x) { return ui.typeNames[x]; }).join(ui.or);
+      out.push(["error", msg(ui.invalidType, name, expected, show(v))]);
       return;
     }
     if (p["enum"] && !p["enum"].some(function (x) { return same(x, v); })) {
-      out.push(["error", name + " は " + p["enum"].map(show).join(", ") + " のどれかです（いま " + show(v) + "）"]);
+      out.push(["error", msg(ui.invalidOption, name, p["enum"].map(show).join(", "), show(v))]);
     }
     if (typeof v === "number") {
-      if ("minimum" in p && v < p.minimum) out.push(["error", name + " は " + p.minimum + " 以上です（いま " + v + "）"]);
-      if ("exclusiveMinimum" in p && v <= p.exclusiveMinimum) out.push(["error", name + " は " + p.exclusiveMinimum + " より大きくしてください（いま " + v + "）"]);
-      if ("maximum" in p && v > p.maximum) out.push(["error", name + " は " + p.maximum + " 以下です（いま " + v + "）"]);
-      if ("exclusiveMaximum" in p && v >= p.exclusiveMaximum) out.push(["error", name + " は " + p.exclusiveMaximum + " より小さくしてください（いま " + v + "）"]);
+      if ("minimum" in p && v < p.minimum) out.push(["error", msg(ui.minimum, name, p.minimum, v)]);
+      if ("exclusiveMinimum" in p && v <= p.exclusiveMinimum) out.push(["error", msg(ui.exclusiveMinimum, name, p.exclusiveMinimum, v)]);
+      if ("maximum" in p && v > p.maximum) out.push(["error", msg(ui.maximum, name, p.maximum, v)]);
+      if ("exclusiveMaximum" in p && v >= p.exclusiveMaximum) out.push(["error", msg(ui.exclusiveMaximum, name, p.exclusiveMaximum, v)]);
     }
-    if (typeof v === "string" && p.minLength && v.length < p.minLength) out.push(["error", name + " が空です"]);
+    if (typeof v === "string" && p.minLength && v.length < p.minLength) out.push(["error", msg(ui.empty, name)]);
     if (Array.isArray(v)) {
       if (p.minItems === p.maxItems && p.minItems !== undefined && v.length !== p.minItems) {
-        out.push(["error", name + " は " + p.minItems + " 個の数です"]);
+        out.push(["error", msg(ui.length, name, p.minItems)]);
       }
       if (p.items) v.forEach(function (x, i) {
-        if (x === null && p.items.type === "number") out.push(["error", name + "[" + i + "] が空です"]);
+        if (x === null && p.items.type === "number") out.push(["error", msg(ui.empty, name + "[" + i + "]")]);
         else check(x, p.items, path.concat([i]), out);
       });
     }
     if (isObj(v)) {
       (p.required || []).forEach(function (k) {
-        if (!(k in v)) out.push(["error", (name ? name + ": " : "") + k + " が必要です"]);
+        if (!(k in v)) out.push(["error", msg(ui.missing, (name ? name + ": " : "") + k)]);
       });
       Object.keys(v).forEach(function (k) {
         var sub = path.concat([k]);
@@ -583,7 +726,7 @@
         else if (isComment(k)) { /* comment */ }
         else if (isObj(p.additionalProperties)) check(v[k], p.additionalProperties, sub, out);
         else if (p.additionalProperties === false) {
-          out.push(["warn", pathName(sub) + " は cutmesh の知らないキーです（無視されます）"]);
+          out.push(["warn", msg(ui.unknownKey, pathName(sub))]);
         }
       });
     }
@@ -593,7 +736,7 @@
   function crossChecks(cfg, out) {
     function cyl(c, name) {
       if (isObj(c) && Array.isArray(c.point1) && Array.isArray(c.point2) && same(c.point1, c.point2)) {
-        out.push(["error", name + ": point1 と point2 が同じです（軸の長さが 0）"]);
+        out.push(["error", msg(ui.zeroLength, name)]);
       }
     }
     (Array.isArray(cfg.refinementRegions) ? cfg.refinementRegions : []).forEach(function (r, i) {
@@ -603,36 +746,36 @@
     (Array.isArray(cfg.rotatingZones) ? cfg.rotatingZones : []).forEach(function (z, i) {
       if (!isObj(z)) return;
       var nm = "rotatingZones[" + i + "]";
-      if (("cylinder" in z) === ("stl" in z)) out.push(["error", nm + ": cylinder か stl のどちらか一方を書きます"]);
+      if (("cylinder" in z) === ("stl" in z)) out.push(["error", msg(ui.zoneGeometry, nm)]);
       if (typeof z.name === "string" && z.name) {
-        if (seen[z.name]) out.push(["error", nm + ": ゾーン名 " + show(z.name) + " が重複しています"]);
+        if (seen[z.name]) out.push(["error", msg(ui.duplicateZone, nm, show(z.name))]);
         seen[z.name] = true;
       }
       cyl(z.cylinder, nm + ".cylinder");
       if (Array.isArray(z.axis) && z.axis.every(function (x) { return x === 0; })) {
-        out.push(["error", nm + ".axis が 0 ベクトルです"]);
+        out.push(["error", msg(ui.zeroAxis, nm)]);
       }
       if (z.ami === true && z.conforming === false) {
-        out.push(["error", nm + ": \"ami\": true は \"conforming\": false と一緒に使えません"]);
+        out.push(["error", msg(ui.amiNeedsConforming, nm)]);
       }
     });
     var bm = cfg.baseMesh;
     if (isObj(bm) && bm.type === "cylindrical") {
-      if (("core" in bm) !== ("blocks" in bm)) out.push(["error", "baseMesh: core と blocks は両方書くか、両方書かないかです"]);
+      if (("core" in bm) !== ("blocks" in bm)) out.push(["error", ui.coreAndBlocks]);
       if ("core" in bm && ("rOuter" in bm || "cellSize" in bm)) {
-        out.push(["error", "baseMesh: rOuter と cellSize は自動配置（core と blocks なし）のときだけ使えます"]);
+        out.push(["error", ui.automaticOnly]);
       }
     }
     if (isObj(bm) && bm.type !== "cylindrical" && Object.keys(bm).some(function (k) { return k !== "type"; })) {
-      out.push(["warn", "baseMesh: type が cylindrical でないので、ほかの値は使われません"]);
+      out.push(["warn", ui.ignoredBaseMesh]);
     }
-    if (isObj(bm) && "nz" in bm && "dz" in bm) out.push(["warn", "baseMesh: nz と dz の両方があるときは nz が使われます"]);
+    if (isObj(bm) && "nz" in bm && "dz" in bm) out.push(["warn", ui.nzWins]);
     if (stl && stl.solids.length) {       // config.check_names
       var have = {};
       stl.solids.forEach(function (s) { have[s] = true; });
       function names(list, where) {
         list.forEach(function (k) {
-          if (!isComment(k) && !have[k]) out.push(["warn", where + " の " + show(k) + " は STL の solid にありません（無視されます）"]);
+          if (!isComment(k) && !have[k]) out.push(["warn", msg(ui.unknownSolid, where, show(k))]);
         });
       }
       if (isObj(cfg.surfaceRefinement)) names(Object.keys(cfg.surfaceRefinement).filter(function (k) { return k !== "default"; }), "surfaceRefinement");
@@ -644,7 +787,7 @@
     }
     var zs = Array.isArray(cfg.rotatingZones) ? cfg.rotatingZones : [];
     if (zs.some(function (z) { return isObj(z) && z.ami === true; }) && !("openfoam" in cfg)) {
-      out.push(["info", "スライディングメッシュ（ami）は openfoam の書き方を選べます（既定は com = openfoam.com）"]);
+      out.push(["info", ui.amiDialect]);
     }
   }
 
@@ -709,9 +852,9 @@
     var ul = document.getElementById("mdf-issues");
     ul.textContent = "";
     var nerr = out.filter(function (x) { return x[0] === "error"; }).length;
-    if (!out.length) ul.appendChild(el("li", { class: "mdf-ok", text: "問題は見つかりませんでした" }));
+    if (!out.length) ul.appendChild(el("li", { class: "mdf-ok", text: ui.valid }));
     out.forEach(function (x) { ul.appendChild(el("li", { class: "mdf-" + x[0], text: x[1] })); });
-    document.getElementById("mdf-download").title = nerr ? "エラーがありますが、書き出せます" : "";
+    document.getElementById("mdf-download").title = nerr ? ui.downloadWithErrors : "";
     stlInfo();
   }
 
@@ -734,9 +877,9 @@
       if (z < lo[2]) lo[2] = z; if (z > hi[2]) hi[2] = z;
     }
     if (binary) {
-      if (bytes.length < 84) throw new Error("STL ではありません（84 バイトのヘッダーがない）");
+      if (bytes.length < 84) throw new Error(ui.stlHeaderMissing);
       var dv = new DataView(buf), n = dv.getUint32(80, true);
-      if (84 + 50 * n > bytes.length) throw new Error("バイナリ STL が途中で切れています");
+      if (84 + 50 * n > bytes.length) throw new Error(ui.stlTruncated);
       for (var i = 0; i < n; i++) {
         var o = 84 + 50 * i + 12;
         for (var j = 0; j < 3; j++, o += 12) pt(dv.getFloat32(o, true), dv.getFloat32(o + 4, true), dv.getFloat32(o + 8, true));
@@ -759,8 +902,8 @@
       }
       ntri = Math.floor(nv / 3);
     }
-    if (!ntri) throw new Error("三角形がありません");
-    return { file: fileName, format: binary ? "バイナリ" : "ASCII", solids: solids, ntri: ntri, lo: lo, hi: hi };
+    if (!ntri) throw new Error(ui.stlNoTriangles);
+    return { file: fileName, format: binary ? ui.binary : "ASCII", solids: solids, ntri: ntri, lo: lo, hi: hi };
   }
 
   function stlInfo() {
@@ -773,29 +916,29 @@
     var h = typeof state.baseCellSize === "number" && state.baseCellSize > 0 ? state.baseCellSize : null;
     var pad = typeof state.padding === "number" ? state.padding : P.padding["default"];
     var dl = el("dl", { class: "mdf-facts" },
-      el("dt", { text: "ファイル" }), el("dd", {}, el("code", { text: stl.file }), "（" + stl.format + "、" + stl.ntri.toLocaleString() + " 三角形）"),
-      el("dt", { text: "solid（パッチ）" }), el("dd", {}, stl.solids.map(function (s, i) {
+      el("dt", { text: ui.file }), el("dd", {}, el("code", { text: stl.file }), msg(ui.stlSummary, stl.format, stl.ntri.toLocaleString())),
+      el("dt", { text: ui.solids }), el("dd", {}, stl.solids.map(function (s, i) {
         return el("span", {}, i ? ", " : "", el("code", { text: s }));
-      }), stl.format === "バイナリ" ? el("span", { class: "mdf-muted", text: "（バイナリ STL は solid が 1 つだけ）" }) : null),
-      el("dt", { text: "外接箱" }), el("dd", { text: "[" + stl.lo.map(fmtNum).join(", ") + "] 〜 [" + stl.hi.map(fmtNum).join(", ") + "]" }),
-      el("dt", { text: "大きさ" }), el("dd", { text: size.map(fmtNum).join(" × ") }));
+      }), stl.format === ui.binary ? el("span", { class: "mdf-muted", text: ui.binarySolids }) : null),
+      el("dt", { text: ui.bounds }), el("dd", { text: "[" + stl.lo.map(fmtNum).join(", ") + ui.boundsSeparator + stl.hi.map(fmtNum).join(", ") + "]" }),
+      el("dt", { text: ui.dimensions }), el("dd", { text: size.map(fmtNum).join(" × ") }));
     if (h) {
       var n = size.map(function (s) { return Math.ceil(s / h) + 2 * pad; });
       var cells = n[0] * n[1] * n[2];
-      dl.appendChild(el("dt", { text: "レベル 0 の格子" }));
-      dl.appendChild(el("dd", {}, n.join(" × ") + " = " + cells.toLocaleString() + " セル",
-        el("span", { class: "mdf-muted", text: "（外接箱いっぱいの数。STL の外は捨てられ、細分化で増えます）" })));
+      dl.appendChild(el("dt", { text: ui.levelZero }));
+      dl.appendChild(el("dd", {}, n.join(" × ") + " = " + cells.toLocaleString() + ui.cells,
+        el("span", { class: "mdf-muted", text: ui.bboxEstimate })));
     }
-    var sugg = el("div", { class: "mdf-sugg" }, el("span", { text: "baseCellSize の目安: " }));
+    var sugg = el("div", { class: "mdf-sugg" }, el("span", { text: ui.sizeSuggestions }));
     [20, 40, 80].forEach(function (k) {
       var v = +(L / k).toPrecision(2);
       sugg.appendChild(el("button", {
         type: "button", class: "mdf-chip", "aria-pressed": h === v ? "true" : "false",
-        title: "最長辺の 1/" + k, onclick: function () { state.baseCellSize = v; rerender(); }
-      }, fmtNum(v) + "（1/" + k + "）"));
+        title: msg(ui.longestEdge, k), onclick: function () { state.baseCellSize = v; rerender(); }
+      }, fmtNum(v) + msg(ui.inParens, "1/" + k)));
     });
-    box.appendChild(el("div", { class: "mdf-stlhead" }, el("strong", { text: "読み込んだ STL" }),
-      el("button", { type: "button", class: "mdf-x", title: "閉じる", "aria-label": "STL の情報を閉じる",
+    box.appendChild(el("div", { class: "mdf-stlhead" }, el("strong", { text: ui.loadedSTL }),
+      el("button", { type: "button", class: "mdf-x", title: ui.close, "aria-label": ui.closeSTL,
         onclick: function () { stl = null; rerender(); } }, "×")));
     box.appendChild(dl);
     box.appendChild(sugg);
@@ -818,8 +961,8 @@
   function loadJSON(text, what) {
     var cfg;
     try { cfg = JSON.parse(text.replace(/^﻿/, "")); }
-    catch (e) { alert(what + ": JSON として読めません: " + e.message); return; }
-    if (!isObj(cfg)) { alert(what + ": meshDict は JSON のオブジェクト {...} です"); return; }
+    catch (e) { alert(msg(ui.fileBadJSON, what, e.message)); return; }
+    if (!isObj(cfg)) { alert(msg(ui.fileNotObject, what)); return; }
     state = cfg;
     rerender();
   }
@@ -835,7 +978,7 @@
     Object.keys(EXAMPLES).forEach(function (k) { exSel.appendChild(el("option", { value: k, text: k })); });
     exSel.addEventListener("change", function () {
       if (!exSel.value) return;
-      if (Object.keys(state).length && !confirm("いまの入力を例題 " + exSel.value + " で置き換えますか？")) {
+      if (Object.keys(state).length && !confirm(msg(ui.replaceExample, exSel.value))) {
         exSel.value = ""; return;
       }
       state = clone(EXAMPLES[exSel.value]);
@@ -853,7 +996,7 @@
       e.target.value = "";
     });
     document.getElementById("mdf-clear").addEventListener("click", function () {
-      if (Object.keys(state).length && !confirm("入力をすべて消しますか？")) return;
+      if (Object.keys(state).length && !confirm(ui.clearConfirm)) return;
       state = {}; rerender();
     });
     document.getElementById("mdf-advanced").addEventListener("change", function (e) {
@@ -864,7 +1007,7 @@
     });
     document.getElementById("mdf-copy").addEventListener("click", function (e) {
       var btn = e.target, text = jsonText();
-      function done() { btn.textContent = "コピーしました"; setTimeout(function () { btn.textContent = "コピー"; }, 1500); }
+      function done() { btn.textContent = ui.copied; setTimeout(function () { btn.textContent = ui.copy; }, 1500); }
       if (navigator.clipboard && window.isSecureContext) {
         navigator.clipboard.writeText(text).then(done, function () { fallbackCopy(text); done(); });
       } else { fallbackCopy(text); done(); }

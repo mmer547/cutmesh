@@ -146,9 +146,11 @@ class DocsCopies(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
     def test_schema_is_json(self):
-        with open(os.path.join(ROOT, "docs", "meshdict.schema.json"), encoding="utf-8") as f:
-            s = json.load(f)
-        self.assertEqual(s["required"], ["domain", "baseCellSize"])
+        for directory in ("docs", os.path.join("docs", "en")):
+            with self.subTest(directory=directory):
+                with open(os.path.join(ROOT, directory, "meshdict.schema.json"), encoding="utf-8") as f:
+                    s = json.load(f)
+                self.assertEqual(s["required"], ["domain", "baseCellSize"])
 
 
 if __name__ == "__main__":
