@@ -165,6 +165,26 @@ class SlidingMesh(unittest.TestCase):
         pa = {p["name"]: p for p in m["patches"]}
         self.assertEqual(pa["rotor_AMI1"]["nFaces"], pa["rotor_AMI2"]["nFaces"])
 
+    def test_rims_deterministic(self):
+        """the rim cuts give the same mesh from run to run (string hashes are salted per
+        process, so a set of cut-edge tokens is ordered differently every time)"""
+        import subprocess
+        root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+        code = ("import hashlib, os, sys; sys.path.insert(0, sys.argv[1]); from cutmesh.mesher import run; "
+                "run(sys.argv[2], log=lambda s: None, check=False); d = os.path.join(sys.argv[3], 'constant', 'polyMesh'); "
+                "h = hashlib.sha256(); [h.update(open(os.path.join(d, n), 'rb').read()) for n in sorted(os.listdir(d))]; "
+                "print(h.hexdigest())")
+        with tempfile.TemporaryDirectory() as d:
+            p = make_case(d, "det")
+            digests = set()
+            for seed in ("1", "2", "3"):
+                env = dict(os.environ, PYTHONHASHSEED=seed)
+                r = subprocess.run([sys.executable, "-c", code, root, p, os.path.join(d, "det")], env=env, cwd=d,
+                                   capture_output=True, text=True)
+                self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+                digests.add(r.stdout.strip().splitlines()[-1])
+            self.assertEqual(len(digests), 1, digests)
+
     def test_org12_patches_and_hint(self):
         with tempfile.TemporaryDirectory() as d:
             logs = []
