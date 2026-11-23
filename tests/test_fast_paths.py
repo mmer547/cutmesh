@@ -290,10 +290,32 @@ class RustOctree(unittest.TestCase):
                     np.testing.assert_array_equal(a, b)
 
 
+def _numpy_uses_fma():
+    """whether NumPy adds 3-term dot products as fma(a2, b2, fma(a1, b1, a0 b0)) on this
+    machine (np.dot and (n, 1, 3) @ (n, 3, 1)).  The Rust kernels follow that order; where
+    NumPy's BLAS rounds otherwise (another CPU / build), they cannot match it bit for bit."""
+    from fractions import Fraction as F
+    rng = np.random.default_rng(11)
+    a = rng.normal(size=(300, 3)) * rng.uniform(0, 10, (300, 1))
+    b = rng.normal(size=(300, 3))
+
+    def fma(x, y, z):
+        return float(F(x) * F(y) + F(z))
+    ref = [fma(x[2], y[2], fma(x[1], y[1], x[0] * y[0])) for x, y in zip(a, b)]
+    dots = [float(np.dot(x, y)) for x, y in zip(a, b)]
+    mm = (a[:, None, :] @ b[:, :, None])[:, 0, 0].tolist()
+    return dots == ref and mm == ref
+
+
+NUMPY_FMA = _numpy_uses_fma()
+NO_FMA = "NumPy on this machine does not add dot products in the FMA order the Rust kernels follow"
+
+
 class NumpyOrder(unittest.TestCase):
     """the Rust ports repeat NumPy's summation order and CPython's set order; fails if
     NumPy / CPython (or the CPU's FMA path) changes them"""
 
+    @unittest.skipUnless(NUMPY_FMA, NO_FMA)
     def test_matmul_rows(self):
         # (n, 1, 3) @ (n, 3, 1) adds the products as fma(a2, b2, fma(a1, b1, a0 b0));
         # checked here through exact rational arithmetic
@@ -357,6 +379,7 @@ class NumpyOrder(unittest.TestCase):
                                else fma(a[2], b[2], fma(a[0], b[0], a[1] * b[1])))
                         self.assertEqual(Y[i, j], ref, (m, k))
 
+    @unittest.skipUnless(NUMPY_FMA, NO_FMA)
     def test_vector_products(self):
         # 1-D np.dot (and np.linalg.norm = its square root) is fma(a2,b2, fma(a1,b1, a0 b0));
         # a row of an (m, 3) @ (3,) product with m >= 2 is fma(a2,b2, fma(a0,b0, a1 b1))
@@ -458,6 +481,7 @@ class RustCutKernel(unittest.TestCase):
             self.assertEqual((cr.pos[v], cr.phi[v], cr.new_parents[len(cr.new_parents) - 1]),
                              (cp.pos[v], cp.phi[v], cp.new_parents[len(cp.new_parents) - 1]))
 
+    @unittest.skipUnless(NUMPY_FMA, NO_FMA)
     def test_turned_cube(self):
         # convex feature edges: chord points, split caps, the exact feature cut
         from test_exact_cut import turned_cube
@@ -701,6 +725,7 @@ class RustFaceOps(unittest.TestCase):
             geometry._core.nearest_kept(P, np.zeros(500, bool), P)
 
     @unittest.skipUnless(hasattr(geometry._core, "pieces_volume_bad"), "Rust extension not built")
+    @unittest.skipUnless(NUMPY_FMA, NO_FMA)
     def test_pieces_volume_bad(self):
         # mesher._piece_volume / _piece_bad of the clipped cells' pieces, the points read
         # from a _PosList (its array, its array block and its list of added rows)
@@ -819,6 +844,7 @@ class RustFaceOps(unittest.TestCase):
 class RustPlaneClip(unittest.TestCase):
     """featclip.PlaneClip in Rust (attach_rust) answers as the Python code"""
 
+    @unittest.skipUnless(NUMPY_FMA, NO_FMA)
     def test_same_as_python(self):
         from test_exact_cut import turned_cube
         from cutmesh.featclip import PlaneClip
@@ -938,6 +964,7 @@ class RustPlaneClip(unittest.TestCase):
 
     @unittest.skipUnless(hasattr(geometry._core, "PlaneClipRs") and hasattr(geometry._core.PlaneClipRs, "select_cells"),
                          "Rust extension not built")
+    @unittest.skipUnless(NUMPY_FMA, NO_FMA)
     def test_select_cells(self):
         """mesher.select_clip_cells in Rust (PlaneClipRs.select_cells): the same cells,
         mixed faces, drops and shared faces, and the clip caches as the Python code

@@ -286,7 +286,9 @@ def _plane_split(pts, polys, x0, n, tol):
         if b in nxt:
             return None
         nxt[b] = a
-    v0 = next(iter(nxt))
+    # the loop starts at its smallest vertex (original vertices before the cut-edge tokens,
+    # which hold a string: the order of a set of them changes from run to run)
+    v0 = min(nxt, key=lambda v: (1, v[1], v[2]) if isinstance(v, tuple) else (0, v, 0))
     loop, v = [v0], nxt[v0]
     while v != v0 and v in nxt and len(loop) <= len(ol):
         loop.append(v); v = nxt[v]
