@@ -2240,6 +2240,11 @@ def generate(cfg, log=print):
     # broken cells and the stage is repeated.
     pts0 = pts.copy(); phi_d0 = phi_d.copy()
     hp2 = np.where(hanging[:, None], hang_par, -1)
+    # the hanging vertices by constraint size, coarsest first (ascending ids within a size)
+    h_idx = np.flatnonzero(hanging)
+    h_idx = h_idx[np.argsort(-hang_size[h_idx], kind="stable")]
+    h_lev = np.flatnonzero(np.diff(hang_size[h_idx])) + 1
+    h_lev = np.concatenate([[0], h_lev, [len(h_idx)]]).tolist() if len(h_idx) else [0]
     for attempt in range(5):
         if attempt:
             pts[:] = pts0; phi_d = phi_d0.copy()
@@ -2351,11 +2356,16 @@ def generate(cfg, log=print):
         geoms = [(dom, phi_d, None)] + [(z["geom"], phi_z[i], i) for i, z in enumerate(zones)
                                          if z["conforming"]]
         nslide = nvirt = nfree = 0
-        for hsz in sorted(set(hang_size[hanging].tolist()), reverse=True):
-            idx = np.nonzero(hanging & (hang_size == hsz))[0]
+        for l0, l1 in zip(h_lev[:-1], h_lev[1:]):
+            idx = h_idx[l0:l1]
             par = hang_par[idx]
             isface = par[:, 2] != par[:, 0]
-            newx = np.where(isface[:, None], pts[par].mean(1), 0.5 * (pts[par[:, 0]] + pts[par[:, 1]]))
+            # face centres / edge midpoints (each row as np.where of both would give it)
+            newx = np.empty((len(idx), 3))
+            fi = np.flatnonzero(isface)
+            ei = np.flatnonzero(~isface)
+            newx[fi] = pts[par[fi]].mean(1)
+            newx[ei] = 0.5 * (pts[par[ei, 0]] + pts[par[ei, 1]])
             ch = np.linalg.norm(newx - pts[idx], axis=1) > 0
             pts[idx] = newx
             ci = idx[ch]
@@ -2363,21 +2373,35 @@ def generate(cfg, log=print):
                 phi_d[ci] = dom.sdf(pts[ci])
                 for i, z in enumerate(zones):
                     phi_z[i][ci] = z["geom"].sdf(pts[ci])
-            # constraint basis
-            A = pts[par[:, 1]] - pts[par[:, 0]]
-            B = np.where(isface[:, None], pts[par[:, 2]] - pts[par[:, 1]], 0.0)  # other direction
+            # constraint basis, for the vertices that may slide only (near a surface, not
+            # snapped: the loop below snaps or zeroes the level set of each it treats, so no
+            # vertex joins this set during it)
+            tv = tol_v[idx]
+            cand = np.zeros(len(idx), bool)
+            for geom, phi, zi in geoms:
+                ph_ = phi[idx]
+                cand |= (np.abs(ph_) < tv) & (ph_ != 0)
+            cand &= ~snapped[idx]
+            cr = np.flatnonzero(cand)
+            pos = np.full(len(idx), -1)
+            pos[cr] = np.arange(len(cr))
+            pc, fc = par[cr], isface[cr]
+            A = pts[pc[:, 1]] - pts[pc[:, 0]]
+            B = np.where(fc[:, None], pts[pc[:, 2]] - pts[pc[:, 1]], 0.0)  # other direction
             e1 = A / np.maximum(np.linalg.norm(A, axis=1), 1e-300)[:, None]
             B = B - (B * e1).sum(1)[:, None] * e1
             nb = np.linalg.norm(B, axis=1)
             e2 = np.where((nb > 1e-12 * h0)[:, None], B / np.maximum(nb, 1e-300)[:, None], 0.0)
             for geom, phi, zi in geoms:
                 excl = snapped[idx] | ((phi_d[idx] == 0) if zi is not None else False)
-                sel = np.nonzero(~excl & (np.abs(phi[idx]) < tol_v[idx]) & (phi[idx] != 0))[0]
+                sel = np.nonzero(~excl & (np.abs(phi[idx]) < tv) & (phi[idx] != 0))[0]
                 if len(sel) == 0:
                     continue
                 j = idx[sel]
                 x = pts[j].copy(); ph = phi[j].copy()
-                E1, E2 = e1[sel], e2[sel]
+                ps = pos[sel]
+                assert (ps >= 0).all()
+                E1, E2 = e1[ps], e2[ps]
                 ok = np.ones(len(j), bool)
                 for _ in range(4):
                     cp, d, _ = geom.closest(x)
