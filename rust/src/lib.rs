@@ -737,6 +737,54 @@ impl TriMesh {
         Ok((vec3_array(py, cp)?, d.into_pyarray(py), id.into_pyarray(py)))
     }
 
+    /// mesher's side_width for the points p (cell sizes hk): the nearest surface point cp at
+    /// distance d; where d > 0.01 hk (off), the unit direction (p - cp) / d and the first
+    /// t * hk of ts where cp + (t hk) dir has inside() != inside_side (else inf).
+    /// Returns (off, cp, dir, width) for all the points, as the NumPy code rounds them.
+    fn side_width<'py>(
+        &self,
+        py: Python<'py>,
+        p: PyReadonlyArray2<'py, f64>,
+        hk: PyReadonlyArray1<'py, f64>,
+        ts: Vec<f64>,
+        inside_side: bool,
+    ) -> PyResult<(Bound<'py, PyArray1<bool>>, Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<f64>>)> {
+        let pts = points_ref(&p)?;
+        let hk = hk.as_slice()?;
+        if hk.len() != pts.len() {
+            return Err(pyo3::exceptions::PyValueError::new_err("p and hk differ in length"));
+        }
+        let res: Vec<(bool, V3, V3, f64)> = py.detach(|| {
+            pts.par_iter()
+                .zip(hk.par_iter())
+                .map(|(&q, &h)| {
+                    let (d2, cp, _) = self.closest_one(q);
+                    let d = d2.sqrt();
+                    if !(d > 0.01 * h) {
+                        return (false, cp, [0.0; 3], f64::INFINITY);
+                    }
+                    let m = if d >= 1e-300 { d } else { 1e-300 };
+                    let dir = [(q[0] - cp[0]) / m, (q[1] - cp[1]) / m, (q[2] - cp[2]) / m];
+                    let mut w = f64::INFINITY;
+                    for &t in &ts {
+                        let s = t * h;
+                        let x = [cp[0] + s * dir[0], cp[1] + s * dir[1], cp[2] + s * dir[2]];
+                        if self.inside_one(x) != inside_side {
+                            w = s;
+                            break;
+                        }
+                    }
+                    (true, cp, dir, w)
+                })
+                .collect()
+        });
+        let off: Vec<bool> = res.iter().map(|r| r.0).collect();
+        let w: Vec<f64> = res.iter().map(|r| r.3).collect();
+        let cp: Vec<V3> = res.iter().map(|r| r.1).collect();
+        let dir: Vec<V3> = res.into_iter().map(|r| r.2).collect();
+        Ok((off.into_pyarray(py), vec3_array(py, cp)?, vec3_array(py, dir)?, w.into_pyarray(py)))
+    }
+
     /// whether inside() uses the (y, z) grid (else the BVH traversal)
     fn inside_grid(&self) -> bool {
         self.yz.n[0] > 0

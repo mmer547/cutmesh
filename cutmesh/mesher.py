@@ -876,6 +876,34 @@ def _unique_points(p):
     return p[o[keep]]
 
 
+def _side_width(dom, p, hk, side, use_rs=True):
+    """Thickness of the fluid (side -1) / solid (side 1) at the points p (cell sizes hk),
+    from the nearest wall through the point to the opposite wall if within 1.5 cells
+    (else inf).  Only for the points off the wall (mask off); returns (off, nearest wall
+    point, direction away from it, width) for those."""
+    rs = getattr(dom, "_rs", None) if use_rs else None
+    if rs is not None and hasattr(rs, "side_width"):
+        off, cpk, dirk, width = rs.side_width(np.ascontiguousarray(p, float), np.ascontiguousarray(hk, float),
+                                              np.linspace(0.05, 1.5, 30).tolist(), side < 0)
+        return off, cpk[off], dirk[off], width[off]
+    cpk, dk, _ = dom.closest(p)
+    # points already on the wall (phi a rounding error off zero) carry nothing and give
+    # no direction
+    off = dk > 0.01 * hk
+    p, cpk, dk, hk = p[off], cpk[off], dk[off], hk[off]
+    dirk = (p - cpk) / np.maximum(dk, 1e-300)[:, None]
+    width = np.full(len(p), np.inf)
+    for t in np.linspace(0.05, 1.5, 30):
+        # only the points still without a width are tested (inside() is per point)
+        u = np.flatnonzero(np.isinf(width))
+        if not len(u):
+            break
+        q = cpk[u] + (t * hk[u])[:, None] * dirk[u]
+        hit = dom.inside(q) != (side < 0)
+        width[u[hit]] = t * hk[u[hit]]
+    return off, cpk, dirk, width
+
+
 def _nearest_in(pts, keep, q, cache=None):
     """cKDTree(pts).query(q) over the points of the mask keep only: (distance, index into
     pts).  A tree over all the vertices costs more than the few queries it answers; the
@@ -2123,27 +2151,10 @@ def generate(cfg, log=print):
         return unique(v if vmask is None else v[vmask[v]])
 
     def side_width(kv, side):
-        """Thickness of the fluid (side -1) / solid (side 1) at the vertices kv, from the
-        nearest wall through the vertex to the opposite wall if within 1.5 cells (else inf).
-        Only for the vertices off the wall (mask off); returns (off, nearest wall point,
-        direction away from it, width) for those."""
-        cpk, dk, _ = dom.closest(pts[kv])
-        # vertices already on the wall (phi a rounding error off zero) carry nothing and
-        # give no direction
-        off = dk > 0.01 * vh_min[kv]
-        kv, cpk, dk = kv[off], cpk[off], dk[off]
-        dirk = (pts[kv] - cpk) / np.maximum(dk, 1e-300)[:, None]
-        width = np.full(len(kv), np.inf)
-        hk = vh_min[kv]
-        for t in np.linspace(0.05, 1.5, 30):
-            # only the vertices still without a width are tested (inside() is per point)
-            u = np.flatnonzero(np.isinf(width))
-            if not len(u):
-                break
-            q = cpk[u] + (t * hk[u])[:, None] * dirk[u]
-            hit = dom.inside(q) != (side < 0)
-            width[u[hit]] = t * hk[u[hit]]
-        return off, cpk, dirk, width
+        """the thickness of the fluid (side -1) / solid (side 1) at the vertices kv
+        (_side_width); returns (off, nearest wall point, direction, width) for the
+        vertices off the wall"""
+        return _side_width(dom, pts[kv], vh_min[kv], side)
 
     near_cache = []       # _nearest_in answers, shared by the snapping attempts
 

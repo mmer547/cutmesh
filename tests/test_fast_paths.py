@@ -1123,6 +1123,25 @@ class RustCylinder(unittest.TestCase):
             np.testing.assert_array_equal(d0, d1)
 
 
+class RustSideWidth(unittest.TestCase):
+    """TriMesh.side_width against mesher._side_width's NumPy code"""
+
+    def test_same_as_numpy(self):
+        dom = geometry.Surface([("walls", l_prism())])
+        self.assertTrue(hasattr(dom._rs, "side_width"))
+        rng = np.random.default_rng(5)
+        lo, hi = dom.tris.reshape(-1, 3).min(0), dom.tris.reshape(-1, 3).max(0)
+        p = lo - 0.01 + rng.uniform(size=(4000, 3)) * (hi - lo + 0.02)
+        p[:len(dom.tris)] = dom.tris[:, 0]            # on the wall: not off
+        hk = rng.uniform(0.005, 0.03, len(p))
+        for side in (-1.0, 1.0):
+            a = mesher._side_width(dom, p, hk, side, use_rs=False)
+            b = mesher._side_width(dom, p, hk, side)
+            for x, y in zip(a, b):
+                np.testing.assert_array_equal(x, y)
+            self.assertTrue(np.isfinite(a[3]).any() and np.isinf(a[3]).any() and not a[0].all())
+
+
 def l_prism(c=0.037, L=0.1, H=0.03, ang=(7.0, 5.0, 11.0)):
     """L-shaped channel [0, L]^2 minus [0, c]^2 times [0, H], turned: outward triangles"""
     P = [(c, 0), (L, 0), (L, L), (c, L), (0, L), (0, c), (c, c)]
