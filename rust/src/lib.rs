@@ -151,6 +151,46 @@ impl Bvh {
     }
 }
 
+impl Bvh {
+    /// squared distance to the closest primitive if below r2 (else infinity): closest()
+    /// with r2 as the first bound, so the nodes farther than that are never opened
+    fn closest_below<F: Fn(usize) -> f64>(&self, p: V3, r2: f64, f: F) -> f64 {
+        let mut best = r2;
+        let mut found = false;
+        if self.nodes.is_empty() {
+            return f64::INFINITY;
+        }
+        let mut stack: Stk<(u32, f64)> = Stk::new();
+        stack.push((0, box_d2(&self.nodes[0], p)));
+        while let Some((ni, bd)) = stack.pop() {
+            if bd >= best {
+                continue;
+            }
+            let nd = &self.nodes[ni as usize];
+            if nd.count > 0 {
+                for &q in &self.prims[nd.start as usize..(nd.start + nd.count) as usize] {
+                    let d2 = f(q as usize);
+                    if d2 < best {
+                        best = d2;
+                        found = true;
+                    }
+                }
+            } else {
+                let (a, b) = (nd.start, nd.right);
+                let (da, db) = (box_d2(&self.nodes[a as usize], p), box_d2(&self.nodes[b as usize], p));
+                if da <= db {
+                    stack.push((b, db));
+                    stack.push((a, da));
+                } else {
+                    stack.push((a, da));
+                    stack.push((b, db));
+                }
+            }
+        }
+        if found { best } else { f64::INFINITY }
+    }
+}
+
 /// a LIFO stack for tree traversals: 64 entries inline (no allocation per query), the
 /// rest (deeper trees) in a vector
 pub(crate) struct Stk<T: Copy> {
@@ -798,6 +838,27 @@ impl TriMesh {
         Ok(r.into_pyarray(py))
     }
 
+    /// distance_below(p[n, 3], r) -> d[n]: the distance to the surface where it is below
+    /// r, infinity elsewhere (a KD-tree query of points on the surface with
+    /// distance_upper_bound = r, without the points)
+    fn distance_below<'py>(&self, py: Python<'py>, p: PyReadonlyArray2<'py, f64>, r: f64) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let pts = points_ref(&p)?;
+        let r2 = r * r;
+        let d: Vec<f64> = py.detach(|| {
+            pts.par_iter()
+                .map(|&q| {
+                    self.bvh
+                        .closest_below(q, r2, |i| {
+                            let [a, b, c] = self.t[i];
+                            dist2(q, closest_tri(q, a, b, c))
+                        })
+                        .sqrt()
+                })
+                .collect()
+        });
+        Ok(d.into_pyarray(py))
+    }
+
     /// sdf() through a PointCache: points asked before (the same bits) are not computed again
     fn sdf_cached<'py>(
         &self,
@@ -1112,6 +1173,19 @@ impl SegSet {
         let mid: Vec<V3> = s.iter().map(|e| [0.5 * (e[0][0] + e[1][0]), 0.5 * (e[0][1] + e[1][1]), 0.5 * (e[0][2] + e[1][2])]).collect();
         let half = s.iter().map(|e| 0.5 * dist2(e[0], e[1]).sqrt()).fold(0.0, f64::max);
         Ok(SegSet { s, bvh, mid, half })
+    }
+
+    /// distance_below(p[n, 3], r) -> d[n]: the distance to the segments where it is
+    /// below r, infinity elsewhere
+    fn distance_below<'py>(&self, py: Python<'py>, p: PyReadonlyArray2<'py, f64>, r: f64) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let pts = points_ref(&p)?;
+        let r2 = r * r;
+        let d: Vec<f64> = py.detach(|| {
+            pts.par_iter()
+                .map(|&q| self.bvh.closest_below(q, r2, |i| dist2(q, closest_seg(q, self.s[i][0], self.s[i][1]))).sqrt())
+                .collect()
+        });
+        Ok(d.into_pyarray(py))
     }
 
     /// (closest points[n, 3], distances[n]) - exact

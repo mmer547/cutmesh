@@ -406,7 +406,8 @@ def gate(r, o):
     the mesh edges (share over 0.2 hmin and 95th percentile)"""
     qa, qb = o.get("quality") or {}, r.get("quality") or {}
     if not qb:
-        return ["no quality report"]
+        # no mesh in either (an input that is rejected on purpose): the status decides
+        return ["no quality report"] if qa else []
     out = []
     x, y = int(qa.get("nNonOrth70", 0)), int(qb.get("nNonOrth70", 0))
     if y > 0 and y > x:

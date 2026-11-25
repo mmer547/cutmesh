@@ -93,6 +93,12 @@ class QualityGate(unittest.TestCase):
         self.assertEqual(run_bench.gate(gres(quality={"nNonOrth70": 4}), o), [])
         self.assertEqual(len(run_bench.gate(gres(quality={"nNonOrth70": 5}), o)), 1)
 
+    def test_no_mesh(self):
+        # an input rejected in both runs (no quality report): the status decides
+        err = {"name": "x", "status": "ERROR", "error": "STLError"}
+        self.assertEqual(run_bench.gate(err, err), [])
+        self.assertEqual(run_bench.gate(err, gres()), ["no quality report"])
+
     def test_compare(self):
         base = {"platform": "another machine", "results": [gres("a"), gres("b")]}
         lines = run_bench.compare([gres("a"), gres("b", quality={"nSkew4": 9}), gres("c")], base, use_gate=True)

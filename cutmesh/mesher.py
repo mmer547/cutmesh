@@ -958,6 +958,40 @@ def _nearest_in(pts, keep, q, cache=None):
     return d, gj
 
 
+def _exact_sources():
+    """whether refine's surface sources can be the surfaces themselves (Rust)"""
+    return (_core is not None and hasattr(getattr(_core, "TriMesh", None), "distance_below")
+            and hasattr(getattr(_core, "SegSet", None), "distance_below"))
+
+
+class _NearSource:
+    """A surface source of the refinement without sample points: query(c,
+    distance_upper_bound=r) gives the distance to the geometry where it is below r and
+    infinity elsewhere, as the query of a KD-tree of points on the geometry would
+    (whose distances are those to the nearest sample: up to about half the sample
+    spacing longer).  dist_below(c, r) -> distances."""
+
+    def __init__(self, dist_below):
+        self._f = dist_below
+
+    def query(self, c, distance_upper_bound=np.inf, workers=-1):
+        c = np.ascontiguousarray(c, float)
+        if len(c) == 0:
+            return np.zeros(0), None
+        return self._f(c, float(distance_upper_bound)), None
+
+
+def _zone_distance_below(g):
+    """dist_below(c, r) of a rotating zone's surface (cylinder or STL)"""
+    if isinstance(g, SurfaceZone):
+        return g.s._rs.distance_below
+
+    def f(c, r):
+        d = np.abs(g.sdf(c))
+        return np.where(d < r, d, np.inf)
+    return f
+
+
 def _samples_set(geom, spacing):
     """geom.samples(spacing) for a point set only (the order does not matter)"""
     if isinstance(geom, (Surface, SurfaceZone)):
@@ -1922,10 +1956,15 @@ def generate(cfg, log=print):
     check_zone_overlap(zones, 2 * hmin)
     nbuf = int(cfg["bufferLayers"])
     ssrc, vsrc = [], []
+    exact_src = _exact_sources()
     for r, name in enumerate(dom.names):
         if region_level[r] > 0:
-            p, _ = dom.samples(h0 / 2 ** region_level[r] / 2, regions=[r], ordered=False)
-            ssrc.append((_points_kd(p), int(region_level[r]), nbuf))
+            if exact_src:
+                src = _NearSource(_core.TriMesh(np.ascontiguousarray(dom.tris[dom.region == r])).distance_below)
+            else:
+                p, _ = dom.samples(h0 / 2 ** region_level[r] / 2, regions=[r], ordered=False)
+                src = _points_kd(p)
+            ssrc.append((src, int(region_level[r]), nbuf))
     if cfg.get("autoGapRefinement"):
         nacross, lag = _auto_gap_spec(cfg, sref)
         groups, nun = _auto_gap_samples(dom, h0, region_level, nacross, lag)
@@ -1966,13 +2005,19 @@ def generate(cfg, log=print):
         if float(cfg["concaveSnapMax"]) > float(cfg["featureSnapMax"]) else None
     if flevel > 0:
         if len(seg):
-            fp = sample_segments(seg, h0 / 2 ** flevel / 2)
-            ssrc.append((_points_kd(fp), int(flevel), nbuf))
+            if exact_src:
+                src = _NearSource(_core.SegSet(np.ascontiguousarray(seg, float)).distance_below)
+            else:
+                src = _points_kd(sample_segments(seg, h0 / 2 ** flevel / 2))
+            ssrc.append((src, int(flevel), nbuf))
             log(f"feature edges: {len(seg)} segments -> level {flevel}")
     for z in zones:
         if z["surfaceLevel"] > 0:
-            p, _ = _samples_set(z["geom"], h0 / 2 ** z["surfaceLevel"] / 2)
-            ssrc.append((_points_kd(p), z["surfaceLevel"], nbuf))
+            if exact_src:
+                src = _NearSource(_zone_distance_below(z["geom"]))
+            else:
+                src = _points_kd(_samples_set(z["geom"], h0 / 2 ** z["surfaceLevel"] / 2)[0])
+            ssrc.append((src, z["surfaceLevel"], nbuf))
         wp = z["wallProximity"]
         if wp:
             # the zone surface closer than `distance` to the STL: refine to `level` there only
