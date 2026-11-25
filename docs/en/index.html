@@ -40,6 +40,10 @@
 
 <h2 id="news">News</h2>
 <ul class="news">
+  <li><time datetime="2026-11-26">2026-11-26</time><span class="ver">v0.7.0</span>
+    <p><strong>Performance improvements, step 3.</strong> Speed-ups that may change the mesh slightly, each checked by a quality gate. Octree refinement tests the exact distance to the surfaces, feature edges and cylinders instead of sample points. The <code>gapRefinement</code> test looks at every wall coarsely first and samples finely only where it finds a thin gap. A snap that breaks a cell is redone only around that cell. The octree tests, cell assembly and leak check also do less work.
+    On the public tilted stirred-tank benchmark (about 1 million cells, 4 cores), runtime fell from 28.3 to about 20 seconds. The cylindrical base mesh example went from 74.6 to 24.4 seconds, and geometry preparation for a gap example with <code>gapRefinement</code> from 50.6 to 8.8 seconds (memory 6.2 to 1.4 GB).
+    Every benchmark case meets the gate for the changes that alter the mesh: no faces over 70 degrees non-orthogonality, no more faces with skewness over 4, no non-positive volumes, cell count within 3%, and no worse boundary layers or feature edges (<code>run_bench.py --gate</code>).</p></li>
   <li><time datetime="2026-11-26">2026-11-26</time><span class="ver">v0.6.0</span>
     <p><strong>Performance improvements, step 2.</strong> The remaining serial steps now run in parallel or in the Rust extension, with the same meshes as before. These include snapping, merging of small cut cells, the octree 2:1 balance and cell assembly, rotating-zone cuts, face pairing, and cell geometry.
     On a real-world geometry with about 8.5 million cells, runtime fell from about 100 seconds to about 70 seconds, and peak memory stays at about 13 GB. The meshes of this geometry, the public benchmarks, and the examples were verified byte for byte.

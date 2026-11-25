@@ -86,7 +86,7 @@ Remove `rotatingZones` to mesh the same geometry without a rotating zone.
 | `baseCellSize` | Level 0 cell edge length [m] | Required |
 | `surfaceRefinement` | Solid name → refinement level. Set `default` for other solids. | `{}` |
 | `featureLevel` | Refinement level near feature edges (`null` uses the maximum surface level) | `null` |
-| `gapRefinement` | With `{"thickness": t, "level": L}`, refine walls to `L` where fluid is thinner than `t`, as at sharp slot tips or in narrow channels. This helps retain fluid thinner than a cell. | None |
+| `gapRefinement` | With `{"thickness": t, "level": L}`, refine walls to `L` where fluid is thinner than `t`, as at sharp slot tips or in narrow channels. This helps retain fluid thinner than a cell. A first look samples every wall every `2t` (counting gaps narrower than `3t`); only the triangles it finds and their neighbours are then tested at the spacing of level `L`. | None |
 | `autoGapRefinement` | With `{"cellsAcross": n, "maxLevel": L}` (or `true` for defaults), measure the gap width w along the wall normal to the opposing wall. Refine the wall to fit `n` cells in the gap (`baseCellSize / 2^level ≤ w / n`, up to level `L`). This helps preserve grooves, slits, and narrow gaps without a prescribed thickness. Faces whose surface level already fits `n` cells are skipped. The log counts locations that still fall short at the maximum level. Each wall is first sampled at half its cell size, and only triangles with narrow gaps are resampled at the finest spacing. | Off (`n` = 3, `L` = maximum surface level + 2) |
 | `featureAngle` | Angle threshold for detecting feature edges [deg] | 30 |
 | `bufferLayers` | Number of buffer cells per level transition | 2 |
@@ -346,7 +346,9 @@ python -m unittest discover -s tests  # Check that Rust and Python agree
 | Stirred tank with a 1 mm gap (`meshDict_stator_1mm.json`, about 600,000 cells) | 2080 s (about 35 min) | 7.3 s |
 
 Measured with v0.6.0 (2026-11-26) on a 16-core machine, including quality checks. A real-world geometry of about 8.5 million
-cells takes about 70 seconds and about 13 GB of memory.
+cells takes about 70 seconds and about 13 GB of memory. In v0.7.0 the public benchmark `tilted_1m` (about 1 million cells)
+went from 28.3 to about 20 seconds on a 4-core machine. Its mesh changes slightly and every benchmark case passes the
+quality gate (see `benchmark/README.md`).
 
 ### Export format (`writeFormat`)
 
@@ -533,8 +535,9 @@ orientation is inconsistent.
 1. **Boundary layers.** Improve the initial implementation's coverage, particularly thickness allocation in narrow gaps
    and at sharp edges. Smooth normals and report layer quality metrics such as aspect ratio.
 2. **Mesh quality.** Add refinement where cuts meet level transitions and improve merge criteria for thin, flat cells.
-3. **Performance.** v0.5.0 moved nearly every meshing stage to Rust. Next are remaining serial steps such as retrying
-   snaps and testing gaps, plus reducing memory use. The target is 10 million cells in 1 minute.
+3. **Performance.** v0.5.0 moved nearly every meshing stage to Rust. v0.7.0 removed the refinement's sample points, the
+   fine sampling of every wall for gap tests and the full repeats of the snapping. Next are reducing memory use and checks
+   on large real cases. The target is 10 million cells in 1 minute.
 4. **Sliding meshes.** Interfaces can already be split into AMI or non-conformal coupling patches. Next are more checks
    in OpenFOAM and `dynamicMeshDict` support for the openfoam.org development version.
 
