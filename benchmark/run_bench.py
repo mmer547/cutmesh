@@ -95,6 +95,23 @@ def probe_cells(R, probes, n=400):
 
 
 
+def measure(res, R, lines, meshdict_path):
+    """the measures of the quality gate that the quality check does not give: the smallest
+    cell, the layer coverage (with addLayers) and the feature-edge deviation"""
+    import mesh_metrics as mm
+    h = mm.smallest_cell(lines)
+    if h:
+        res["hmin"] = h
+    lc = mm.layer_coverage(lines)
+    if lc:
+        res["layers"] = lc
+    if h:
+        fe = mm.feature_edge_deviation(R["points"], R["faces"], len(R["neighbour"]),
+                                       mm.domain_feature_segments(meshdict_path), h)
+        if fe:
+            res["featureEdges"] = fe
+
+
 def _peak_memory_mb():
     try:
         import resource
@@ -149,6 +166,13 @@ def worker(job_path):
             res["meshHashError"] = f"{type(e).__name__}: {e}"
         if job.get("probes"):
             res["probes"] = probe_cells(R, job["probes"])
+        if job.get("metrics", True):
+            t1 = time.time()
+            try:                          # measures for --gate; never an ERROR of the case
+                measure(res, R, lines, os.path.join(wd, "meshDict.json"))
+            except Exception as e:        # noqa: BLE001
+                res["metricsError"] = f"{type(e).__name__}: {e}"
+            res["metricsTime"] = round(time.time() - t1, 2)
         if job.get("images", True):
             try:                          # pictures must never turn a good case into an ERROR
                 from render_mesh import render
@@ -161,7 +185,7 @@ def worker(job_path):
         res["error"] = f"{type(e).__name__}: {e}"
         res["traceback"] = traceback.format_exc()
         log(res["traceback"])
-    res["time"] = round(time.time() - t0 - res.get("renderTime", 0), 3)
+    res["time"] = round(time.time() - t0 - res.get("renderTime", 0) - res.get("metricsTime", 0), 3)
     res["peakMemMB"] = _peak_memory_mb()
     res["warnings"] = [s.strip() for s in lines if "WARNING" in s]
     res["repairs"] = [s.strip() for s in lines if s.startswith("REPAIR:")]
@@ -287,7 +311,8 @@ def run_case(c, outdir, args, overrides):
     md["case"] = "case"
     with open(os.path.join(wd, "meshDict.json"), "w", encoding="utf-8") as f:
         json.dump(md, f, indent=1)
-    job = {"name": c["name"], "workdir": wd, "images": not args.no_images, "probes": c.get("probes")}
+    job = {"name": c["name"], "workdir": wd, "images": not args.no_images, "probes": c.get("probes"),
+           "metrics": not getattr(args, "no_metrics", False)}
     jp = os.path.join(wd, "job.json")
     with open(jp, "w", encoding="utf-8") as f:
         json.dump(job, f)
@@ -331,7 +356,8 @@ def input_summary(inp):
 
 
 CSV_COLS = ["name", "status", "verdict", "expect", "time", "cells", "maxNonOrth", "nNonOrth70",
-            "maxSkewness", "nSkew4", "nBadTetDecomp", "volErr", "peakMemMB", "input", "notes"]
+            "maxSkewness", "nSkew4", "nBadTetDecomp", "volErr", "edgeOver02", "edgeP95", "layersFull",
+            "peakMemMB", "input", "notes"]
 
 
 def row(r):
@@ -345,6 +371,9 @@ def row(r):
         "nNonOrth70": q.get("nNonOrth70", ""), "nSkew4": q.get("nSkew4", ""),
         "nBadTetDecomp": q.get("nBadTetDecomp", ""),
         "volErr": f"{r['volErr']:+.3%}" if r.get("volErr") is not None else "",
+        "edgeOver02": f"{r['featureEdges']['over02']:.2%}" if r.get("featureEdges") else "",
+        "edgeP95": f"{r['featureEdges']['p95']:.3f}" if r.get("featureEdges") else "",
+        "layersFull": f"{r['layers']['full']:.1f}%" if r.get("layers") else "",
         "peakMemMB": round(r["peakMemMB"]) if r.get("peakMemMB") else "",
         "input": input_summary(r.get("input")),
         "notes": "; ".join(r.get("notes", [])),
@@ -359,6 +388,54 @@ COUNT_TOL, COUNT_MIN = 0.10, 5
 # time: slower than SLOW_LONG (cases over LONG_CASE s) or SLOW_SHORT (cases over 2 s)
 LONG_CASE, SLOW_LONG, SLOW_SHORT = 30.0, 1.05, 1.3
 STEP_MIN, STEP_SLOW = 1.0, 1.2          # steps of at least STEP_MIN s, slower by STEP_SLOW
+
+
+# quality gate (--gate, roadmap v0.7.0): a change that may change the mesh is accepted when
+# every case meets all of these against the baseline
+GATE_CELLS = 0.03                       # cell count within +-3 %
+GATE_LAYERS = 1.0                       # full layer thickness: not down by 1 point or more
+GATE_EDGE_OVER = 0.005                  # feature-edge samples farther than 0.2 hmin: +0.5 points at most
+GATE_EDGE_P95 = 0.02                    # their 95th percentile: +0.02 hmin at most
+
+
+def gate(r, o):
+    """reasons why result r fails the quality gate against the baseline result o ([] = passes):
+    no faces with non-orthogonality > 70 (if the baseline has some: no more of them), no more
+    faces with skewness > 4, no non-positive volumes, cells within 3 %, the share of wall points
+    with full layer thickness not down by 1 point or more, the feature edges not farther from
+    the mesh edges (share over 0.2 hmin and 95th percentile)"""
+    qa, qb = o.get("quality") or {}, r.get("quality") or {}
+    if not qb:
+        return ["no quality report"]
+    out = []
+    x, y = int(qa.get("nNonOrth70", 0)), int(qb.get("nNonOrth70", 0))
+    if y > 0 and y > x:
+        out.append(f"faces non-orth > 70 {x} -> {y}")
+    x, y = int(qa.get("nSkew4", 0)), int(qb.get("nSkew4", 0))
+    if y > x:
+        out.append(f"faces skewness > 4 {x} -> {y}")
+    if int(qb.get("nNegVol", 0)) > 0:
+        out.append(f"{qb['nNegVol']} non-positive volumes")
+    if qa.get("nCells") and qb.get("nCells"):
+        dc = qb["nCells"] / qa["nCells"] - 1.0
+        if abs(dc) > GATE_CELLS:
+            out.append(f"cells {qa['nCells']} -> {qb['nCells']} ({dc:+.1%})")
+    la, lb = o.get("layers"), r.get("layers")
+    if la:
+        if not lb:
+            out.append("no layer coverage")
+        elif la["full"] - lb["full"] >= GATE_LAYERS:
+            out.append(f"full layer thickness {la['full']:.1f}% -> {lb['full']:.1f}%")
+    ea, eb = o.get("featureEdges"), r.get("featureEdges")
+    if ea:
+        if not eb:
+            out.append("no feature-edge deviation")
+        else:
+            if eb["over02"] > ea["over02"] + GATE_EDGE_OVER:
+                out.append(f"feature edges over 0.2 hmin {ea['over02']:.1%} -> {eb['over02']:.1%}")
+            if eb["p95"] > ea["p95"] + GATE_EDGE_P95:
+                out.append(f"feature edges p95 {ea['p95']:.3f} -> {eb['p95']:.3f} hmin")
+    return out
 
 
 def step_name(name):
@@ -385,10 +462,12 @@ def platform_id():
             f"Python {platform.python_version()} | NumPy {npv}")
 
 
-def compare(results, baseline, same_mesh=False):
+def compare(results, baseline, same_mesh=False, use_gate=False):
     """Lines describing cases that got worse (or better) than the baseline.
     Lines starting with WORSE are regressions (exit code 1); the others are information.
-    same_mesh: a mesh whose hash differs from the baseline's is a regression too."""
+    same_mesh: a mesh whose hash differs from the baseline's is a regression too.
+    use_gate: apply the quality gate (gate()) to every case: a case that fails it, or that
+    has no result to judge, is a regression."""
     from mesh_hash import diff
     old = {r["name"]: r for r in baseline.get("results", [])}
     out = []
@@ -399,8 +478,13 @@ def compare(results, baseline, same_mesh=False):
                    f"this run on {here}")
     for r in results:
         o = old.get(r["name"])
+        if use_gate and r["status"] != "SKIP" and (not o or o["status"] == "SKIP"):
+            out.append(f"WORSE  {r['name']}: gate: not in the baseline")
         if not o or r["status"] == "SKIP" or o["status"] == "SKIP":
             continue
+        if use_gate:
+            g = gate(r, o)
+            out.append(f"WORSE  {r['name']}: gate: {'; '.join(g)}" if g else f"gate   {r['name']}: ok")
         a, b = RANK[o["status"]], RANK[r["status"]]
         if b > a:
             out.append(f"WORSE  {r['name']}: {o['status']} -> {r['status']}  ({'; '.join(r.get('notes', []))})")
@@ -483,12 +567,12 @@ def write_reports(outdir, suite, results, args, cmp_lines):
     if cmp_lines:
         md += ["## vs baseline", ""] + [f"- {s}" for s in cmp_lines] + [""]
     md += ["| case | status | verdict | cells | time [s] | max non-orth | non-orth > 70 | max skew | skew > 4 "
-           "| vol err | input | notes |",
-           "|---|---|---|---|---|---|---|---|---|---|---|---|"]
+           "| vol err | edges > 0.2 hmin | edges p95 | full layers | input | notes |",
+           "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for x in rows:
         md.append(f"| {x['name']} | {x['status']} | {x['verdict']} | {x['cells']} | {x['time']} | "
                   f"{x['maxNonOrth']} | {x['nNonOrth70']} | {x['maxSkewness']} | {x['nSkew4']} | "
-                  f"{x['volErr']} | {x['input']} | "
+                  f"{x['volErr']} | {x['edgeOver02']} | {x['edgeP95']} | {x['layersFull']} | {x['input']} | "
                   f"{x['notes'].replace('|', '/')} |")
     md += [""] + steps_table(results)
     with open(os.path.join(outdir, "summary.md"), "w", encoding="utf-8") as f:
@@ -516,7 +600,13 @@ def main(argv=None):
     ap.add_argument("--save-baseline", action="store_true", help="also write baselines/<suite>.json")
     ap.add_argument("--same-mesh", action="store_true",
                     help="with --baseline: a mesh that differs from the baseline's is a regression")
+    ap.add_argument("--gate", action="store_true",
+                    help="with --baseline: apply the quality gate to every case (a change that may change the mesh)")
+    ap.add_argument("--no-metrics", action="store_true",
+                    help="skip the feature-edge and layer measures of the quality gate")
     args = ap.parse_args(argv)
+    if args.gate and not args.baseline:
+        ap.error("--gate needs --baseline")
     if args.worker:
         return worker(args.worker)
     if not args.suite:
@@ -560,7 +650,7 @@ def main(argv=None):
     cmp_lines = []
     if args.baseline:
         with open(args.baseline, encoding="utf-8") as f:
-            cmp_lines = compare(results, json.load(f), args.same_mesh)
+            cmp_lines = compare(results, json.load(f), args.same_mesh, args.gate)
     payload, counts, unexpected = write_reports(outdir, suite, results, args, cmp_lines)
     if args.save_baseline:
         bdir = os.path.join(HERE, "baselines")
