@@ -57,6 +57,7 @@ run_bench.py SUITE --set addLayers='{"nLayers": 3}'     # 全ケースの meshDi
 run_bench.py SUITE --baseline benchmark/baselines/synthetic.json   # 基準との差分（悪化があれば終了コード 1）
 run_bench.py SUITE --save-baseline                      # 基準を更新
 run_bench.py SUITE --baseline OLD/results.json --same-mesh   # メッシュが変わったら悪化として扱う（高速化の確認）
+run_bench.py SUITE --baseline OLD/results.json --gate        # 品質ゲート（メッシュが変わってよい変更の確認）
 ```
 
 ### 基準との比較（`--baseline`）
@@ -75,6 +76,27 @@ run_bench.py SUITE --baseline OLD/results.json --same-mesh   # メッシュが�
 
 時間は他のケースと並列に走らせると 10〜30% ぶれるので、時間を比べるときは `-j 1` にします。
 `summary.md` の末尾に、段階ごとの時間の表が出ます。
+
+### 品質ゲート（`--gate`）
+
+メッシュが変わってよい変更（ロードマップの v0.7.0 以降）を入れるかどうかの判定です。`--baseline` と一緒に使い、
+**全ケースが次をすべて満たす**ときだけ合格です。満たさないケースは `WORSE <case>: gate: ...`、満たすケースは
+`gate <case>: ok` と出ます。基準は変更前のコードを同じマシンで回した `results.json` にします（メッシュの細部は
+マシンごとに違うため）。
+
+| 項目 | 条件 |
+|---|---|
+| 非直交性 | 70° を超える面が 0（基準ですでにあるケースは、増えないこと） |
+| 歪度 | 4 を超える面が増えない |
+| 体積 | 0 以下のセルが 0 |
+| セル数 | 基準の ±3% 以内 |
+| 境界層 | 全厚の層が付いた壁の点の割合（ログの `wall points with full thickness`）が 1 ポイント以上下がらない |
+| 特徴線 | STL の特徴線のずれが悪くならない: 最小セルの 0.2 倍より離れた点の割合が +0.5 ポイント以内、95 パーセンタイルが +0.02 hmin 以内 |
+
+特徴線のずれは `tools/edge_check.py` と同じ測り方です（特徴線の上に最小セルの 1/4 ごとに点を置き、境界面の辺までの
+距離を最小セルで割る。`mesh_metrics.py`）。結果の `featureEdges`・`layers` に記録され、`summary.md` の表にも出ます
+（測るのは 1 ケース 1 秒未満。`--no-metrics` で省けます）。基準と同じく判定状態が悪くなったケース（`PASS -> WARN` など）も
+`WORSE` になります。両方で拒否される入力（`dirty_open_box_strict` など）は判定状態の比較に任せます。
 
 `baseCellSize` を指定しないケースは「外接箱の最長辺 / `cellsAcross`」（既定 24）で決めます。
 Thingi10K などは単位や大きさがばらばらなので、この方法で揃えます。
@@ -125,9 +147,10 @@ Thingi10K などは単位や大きさがばらばらなので、この方法で�
 | `tank_cylindrical` | 円筒ベースメッシュ |
 | `tank_tilted` | 攪拌槽全体を傾け、格子に沿うエッジをなくした形（`python make_geometry.py --tilt`）。実際の形状と同じく凸エッジの厳密カットが働くので、その品質と時間の悪化を見張る |
 | `tank_stator_1mm` | ローター・ステーター: 翼の外側 1 mm に固定リング、回転ゾーンの界面は隙間の中央（実際に計算したい問題に近い形） |
+| `tank_stator_gap` | 同じ形で、`autoGapRefinement` の代わりに `gapRefinement`（流体が 2 mm より薄い所の壁をレベル 5 に）。隙間の判定の時間を見張る |
 | `tank_stator_0p5mm` | 同、隙間 0.5 mm（約 200 万セル。15 GB のメモリでは足りず、今は ERROR になる。メモリ削減の目標） |
 
-ステーターの 2 ケースには `probes` を付けています。翼の先端の正面で隙間を横切る線分を内側半分と外側半分に分け、
+ステーターのケースには `probes` を付けています。翼の先端の正面で隙間を横切る線分を内側半分と外側半分に分け、
 内側半分にセルがあって回転ゾーンに入っていること、外側半分にセルがあってゾーンに入っていないことを確かめます
 （隙間がつぶれても体積の差はわずかで、リーク検査にも出ないため）。足りなければ WARN になります。
 
