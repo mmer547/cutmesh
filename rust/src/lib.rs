@@ -1664,6 +1664,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(faceops::leaf_mean, m)?)?;
     m.add_function(wrap_pyfunction!(faceops::piece_geometry, m)?)?;
     m.add_function(wrap_pyfunction!(faceops::take_ranges, m)?)?;
+    m.add_function(wrap_pyfunction!(faceops::assemble_occurrences, m)?)?;
     m.add_function(wrap_pyfunction!(dcut::pieces_volume_bad, m)?)?;
     m.add_function(wrap_pyfunction!(fhook::feature_hook_py, m)?)?;
     Ok(())

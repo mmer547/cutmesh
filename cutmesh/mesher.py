@@ -1226,6 +1226,20 @@ def _argsort_stable(a):
     return np.argsort(a, kind="stable")
 
 
+def _assemble_occurrences_py(fn, fptr, fverts, bsel, p_n, p_verts, leaf_cid, f_cell, piece_cid, py_cell,
+                             f_key, py_key):
+    """the face occurrences of the uncut leaves (octree faces bsel), then those of the cut
+    pieces: (sizes, offsets, vertices, final cell, face key); _core.assemble_occurrences"""
+    bn = fn[bsel]
+    o_n = np.concatenate([bn, p_n])
+    o_ptr = np.concatenate([[0], np.cumsum(o_n)])
+    b_off = np.repeat(fptr[bsel] - np.concatenate([[0], np.cumsum(bn)[:-1]]), bn)
+    o_verts = np.concatenate([fverts[np.arange(int(bn.sum())) + b_off], p_verts])
+    o_cell = np.concatenate([leaf_cid[f_cell[bsel]], piece_cid[py_cell]])
+    o_key = np.concatenate([f_key[bsel], py_key])
+    return o_n, o_ptr, o_verts, o_cell, o_key
+
+
 def _pair_faces_py(o_key, o_cell, log):
     """internal faces (a key held by two different cells: the lower cell's occurrence,
     sorted by owner and neighbour) and boundary faces (a key held once) of the face
@@ -3374,25 +3388,19 @@ def generate(cfg, log=print):
     small = removed = ids = order = alive = bad_piece = zone_of = parent = members = None
     bulk_members = cptr = p = None
 
-    # ------------------------------------------------------------ assembly (all numpy)
-    bn = fn[bsel]
-    pn = p_n                                  # the pieces' faces, flattened above
-    o_n = np.concatenate([bn, pn])
-    o_ptr = np.concatenate([[0], np.cumsum(o_n)])
-    if _core is not None and hasattr(_core, "take_ranges"):
-        # the bulk faces' vertices, then the pieces': one array (no index arrays)
-        o_verts = _core.take_ranges(np.ascontiguousarray(fverts, np.int64), np.ascontiguousarray(fptr[bsel], np.int64),
-                                    np.ascontiguousarray(fptr[bsel + 1], np.int64), np.ascontiguousarray(p_verts, np.int64))
+    # ------------------------------------------------------------ assembly
+    if _core is not None and hasattr(_core, "assemble_occurrences"):
+        # the arrays of _assemble_occurrences_py, in parallel (faceops.rs)
+        i64 = lambda a: np.ascontiguousarray(a, np.int64)            # noqa: E731
+        o_n, o_ptr, o_verts, o_cell, o_key = _core.assemble_occurrences(
+            i64(fn), i64(fptr), i64(fverts), i64(bsel), i64(p_n), i64(p_verts), i64(leaf_cid), i64(f_cell),
+            i64(piece_cid), i64(py_cell), i64(f_key), i64(py_key))
     else:
-        b_off = np.repeat(fptr[bsel] - np.concatenate([[0], np.cumsum(bn)[:-1]]), bn)
-        b_verts = fverts[np.arange(int(bn.sum())) + b_off]
-        o_verts = np.concatenate([b_verts, p_verts])
-        del b_off, b_verts
-    o_cell = np.concatenate([leaf_cid[f_cell[bsel]], piece_cid[py_cell]])
-    o_key = np.concatenate([f_key[bsel], py_key])
+        o_n, o_ptr, o_verts, o_cell, o_key = _assemble_occurrences_py(
+            fn, fptr, fverts, bsel, p_n, p_verts, leaf_cid, f_cell, piece_cid, py_cell, f_key, py_key)
     del p_verts
     # the octree's faces and the cut pieces are in o_* now
-    fverts = fptr = fn = f_key = f_cell = pieces = bsel = bn = pn = p_n = None
+    fverts = fptr = fn = f_key = f_cell = pieces = bsel = p_n = None
     leaf_cid = piece_cid = py_key = py_cell = None
     if _core is not None and hasattr(_core, "pair_faces"):
         # the same pairing and order in Rust (sortutil.rs)
