@@ -418,7 +418,7 @@ class RustCutKernel(unittest.TestCase):
             def __getattr__(self, k):
                 if k in ("merge_wall_faces", "contact_candidates", "surface_contact_samples",
                          "split_samples", "cut_batch_csr", "face_sign_counts", "vertex_min",
-                         "leaf_any", "leaf_vertices", "finer_face_neighbour", "leaf_min", "leaf_mean", "feature_hook", "piece_geometry", "pair_faces", "first_two",
+                         "leaf_any", "leaf_lost", "hang_follow", "leaf_vertices", "finer_face_neighbour", "leaf_min", "leaf_mean", "feature_hook", "piece_geometry", "pair_faces", "first_two",
                          "pieces_volume_bad", "PlaneClipRs"):
                     raise AttributeError(k)
                 return getattr(real, k)
@@ -820,6 +820,11 @@ class RustFaceOps(unittest.TestCase):
                 m = rng.random(nv) < p
                 np.testing.assert_array_equal(geometry._core.leaf_any(m, vptr, fverts),
                                               np.logical_or.reduceat(m[fverts], vptr[:-1]))
+                b, c = rng.random(nv) < p, rng.random(nv) < 0.5
+                ra = np.logical_or.reduceat
+                np.testing.assert_array_equal(geometry._core.leaf_lost(m, b, c, vptr, fverts),
+                                              ra(m[fverts], vptr[:-1]) & ~ra(b[fverts], vptr[:-1])
+                                              & ra(c[fverts], vptr[:-1]))
                 lost = rng.random(len(cptr) - 1) < p
                 v = fverts[lost[np.repeat(f_cell, fn)]]
                 np.testing.assert_array_equal(geometry._core.leaf_vertices(lost, vptr, fverts), geometry.unique(v))
@@ -1090,6 +1095,29 @@ class RustArgsort(unittest.TestCase):
             a = rng.integers(-hi, hi, n).astype(np.int64)
             np.testing.assert_array_equal(mesher._argsort_stable(a), np.argsort(a, kind="stable"))
             np.testing.assert_array_equal(geometry._core.argsort_stable(a), np.argsort(a, kind="stable"))
+
+
+class RustHangFollow(unittest.TestCase):
+    """_core.hang_follow against mesher._hang_follow's NumPy code"""
+
+    def test_same_as_numpy(self):
+        rng = np.random.default_rng(31)
+        for n, m in ((10, 1), (1000, 300), (50000, 20000)):
+            P = rng.normal(size=(n, 3)) * rng.uniform(0.1, 100.0)
+            P[rng.random(n) < 0.05] = 0.0
+            idx = np.sort(rng.choice(n, m, replace=False)).astype(np.int64)
+            par = rng.integers(0, n, (m, 4)).astype(np.int64)
+            edge = rng.random(m) < 0.5
+            par[edge, 2] = par[edge, 3] = par[edge, 0]
+            # some already at their centre (no move)
+            k = idx[: m // 4]
+            P[k] = np.where((par[: m // 4, 2] != par[: m // 4, 0])[:, None], P[par[: m // 4]].mean(1),
+                            0.5 * (P[par[: m // 4, 0]] + P[par[: m // 4, 1]]))
+            A, B = P.copy(), P.copy()
+            ca = mesher._hang_follow(A, idx, par, use_rs=False)
+            cb = mesher._hang_follow(B, idx, par)
+            np.testing.assert_array_equal(A.view(np.uint64), B.view(np.uint64))
+            np.testing.assert_array_equal(ca, cb)
 
 
 class RustCylinder(unittest.TestCase):

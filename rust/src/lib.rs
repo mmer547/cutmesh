@@ -1438,6 +1438,8 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(faceops::face_sign_counts, m)?)?;
     m.add_function(wrap_pyfunction!(faceops::vertex_min, m)?)?;
     m.add_function(wrap_pyfunction!(faceops::leaf_any, m)?)?;
+    m.add_function(wrap_pyfunction!(faceops::leaf_lost, m)?)?;
+    m.add_function(wrap_pyfunction!(faceops::hang_follow, m)?)?;
     m.add_function(wrap_pyfunction!(faceops::leaf_vertices, m)?)?;
     m.add_function(wrap_pyfunction!(faceops::leaf_min, m)?)?;
     m.add_function(wrap_pyfunction!(faceops::leaf_mean, m)?)?;

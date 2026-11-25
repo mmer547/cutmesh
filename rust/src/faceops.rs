@@ -73,6 +73,35 @@ pub fn vertex_min<'py>(
     Ok(out.into_pyarray(py))
 }
 
+/// per leaf: the OR of flag(v) over the vertex occurrences of its faces
+/// (vptr[i]..vptr[i+1] the leaf's occurrences, all non-empty); one read of fverts, the
+/// vertex ids checked as they are read (an id >= n or < 0: an error)
+fn leaf_or(py: Python<'_>, n: usize, vp: &[i64], fv: &[i64], flag: impl Fn(usize) -> u8 + Sync) -> PyResult<Vec<u8>> {
+    let bad = || pyo3::exceptions::PyValueError::new_err("inconsistent leaf arrays");
+    if vp.is_empty() || vp[0] < 0 || *vp.last().unwrap() as usize > fv.len() || vp.par_windows(2).any(|w| w[1] <= w[0]) {
+        return Err(bad());
+    }
+    let r: Vec<u8> = py.detach(|| {
+        (0..vp.len() - 1)
+            .into_par_iter()
+            .map(|c| {
+                let mut f = 0u8;
+                for &v in &fv[vp[c] as usize..vp[c + 1] as usize] {
+                    if v < 0 || v as usize >= n {
+                        return 0xff;
+                    }
+                    f |= flag(v as usize);
+                }
+                f & 0x7f
+            })
+            .collect()
+    });
+    if r.par_iter().any(|&f| f == 0xff) {
+        return Err(bad());
+    }
+    Ok(r)
+}
+
 /// per leaf: some vertex occurrence of its faces in the mask
 /// (np.logical_or.reduceat(mask[fverts], vptr[:-1]) with vptr[i]..vptr[i+1] the leaf's
 /// occurrences, all non-empty)
@@ -84,26 +113,72 @@ pub fn leaf_any<'py>(
     fverts: PyReadonlyArray1<'py, i64>,
 ) -> PyResult<Bound<'py, PyArray1<bool>>> {
     let (m, vp, fv) = (mask.as_slice()?, vptr.as_slice()?, fverts.as_slice()?);
-    let bad = || pyo3::exceptions::PyValueError::new_err("inconsistent leaf arrays");
-    if vp.is_empty() || vp[0] < 0 || *vp.last().unwrap() as usize > fv.len() || vp.par_windows(2).any(|w| w[1] <= w[0]) {
-        return Err(bad());
+    let r = leaf_or(py, m.len(), vp, fv, |v| m[v] as u8)?;
+    Ok(r.into_par_iter().map(|f| f != 0).collect::<Vec<bool>>().into_pyarray(py))
+}
+
+/// per leaf: leaf_any(a) & ~leaf_any(b) & leaf_any(c), in one pass
+#[pyfunction]
+pub fn leaf_lost<'py>(
+    py: Python<'py>,
+    a: PyReadonlyArray1<'py, bool>,
+    b: PyReadonlyArray1<'py, bool>,
+    c: PyReadonlyArray1<'py, bool>,
+    vptr: PyReadonlyArray1<'py, i64>,
+    fverts: PyReadonlyArray1<'py, i64>,
+) -> PyResult<Bound<'py, PyArray1<bool>>> {
+    let (a, b, c, vp, fv) = (a.as_slice()?, b.as_slice()?, c.as_slice()?, vptr.as_slice()?, fverts.as_slice()?);
+    if a.len() != b.len() || a.len() != c.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("masks differ in length"));
     }
-    // the vertex ids are checked as they are read (one pass over fverts): a leaf with
-    // an id out of range is None
-    let r: Vec<Option<bool>> = py.detach(|| {
-        (0..vp.len() - 1)
+    let r = leaf_or(py, a.len(), vp, fv, |v| a[v] as u8 | (b[v] as u8) << 1 | (c[v] as u8) << 2)?;
+    Ok(r.into_par_iter().map(|f| f & 1 != 0 && f & 2 == 0 && f & 4 != 0).collect::<Vec<bool>>().into_pyarray(py))
+}
+
+/// The hanging vertices idx follow their parents par[i] (four ids, the face corners;
+/// par[i, 2] == par[i, 0] on an edge): pts[idx] = the face centre
+/// (((p0 + p1) + p2) + p3) / 4 or the edge midpoint 0.5 * (p0 + p1), all read before any
+/// is written, as NumPy rounds them (mean(1) / 0.5 * (a + b)).  Returns where the vertex moved (np.linalg.norm(new - old) > 0).
+#[pyfunction]
+pub fn hang_follow<'py>(
+    py: Python<'py>,
+    mut pts: numpy::PyReadwriteArray2<'py, f64>,
+    idx: PyReadonlyArray1<'py, i64>,
+    par: numpy::PyReadonlyArray2<'py, i64>,
+) -> PyResult<Bound<'py, PyArray1<bool>>> {
+    let idx = idx.as_slice()?;
+    let par = par.as_slice()?;
+    let bad = |m: &str| pyo3::exceptions::PyValueError::new_err(m.to_string());
+    if pts.as_array().shape()[1] != 3 {
+        return Err(bad("pts must have shape (n, 3)"));
+    }
+    let p = pts.as_slice_mut().map_err(|_| bad("pts must be C-contiguous"))?;
+    let n = p.len() / 3;
+    if par.len() != 4 * idx.len() || idx.iter().chain(par.iter()).any(|&v| v < 0 || v as usize >= n) {
+        return Err(bad("inconsistent hanging arrays"));
+    }
+    let (new, ch): (Vec<[f64; 3]>, Vec<bool>) = py.detach(|| {
+        let p: &[f64] = p;
+        (0..idx.len())
             .into_par_iter()
-            .map(|c| {
-                let occ = &fv[vp[c] as usize..vp[c + 1] as usize];
-                if occ.iter().any(|&v| v < 0 || v as usize >= m.len()) {
-                    return None;
-                }
-                Some(occ.iter().any(|&v| m[v as usize]))
+            .map(|i| {
+                let q = |v: i64, k: usize| p[3 * v as usize + k];
+                let (a, b, c, e) = (par[4 * i], par[4 * i + 1], par[4 * i + 2], par[4 * i + 3]);
+                let x: [f64; 3] = if c != a {
+                    std::array::from_fn(|k| (((q(a, k) + q(b, k)) + q(c, k)) + q(e, k)) / 4.0)
+                } else {
+                    std::array::from_fn(|k| 0.5 * (q(a, k) + q(b, k)))
+                };
+                let j = idx[i];
+                let d: [f64; 3] = std::array::from_fn(|k| x[k] - q(j, k));
+                (x, (d[0] * d[0] + d[1] * d[1]) + d[2] * d[2] > 0.0)
             })
-            .collect()
+            .unzip()
     });
-    let r: Vec<bool> = r.into_iter().collect::<Option<_>>().ok_or_else(bad)?;
-    Ok(r.into_pyarray(py))
+    for (i, &j) in idx.iter().enumerate() {
+        p[3 * j as usize..3 * j as usize + 3].copy_from_slice(&new[i]);
+    }
+    Ok(ch.into_pyarray(py))
 }
 
 /// the vertices (sorted, once each) of the leaves in leaf_mask that are in vmask (all

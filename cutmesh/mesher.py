@@ -876,6 +876,19 @@ def _unique_points(p):
     return p[o[keep]]
 
 
+def _hang_follow(pts, idx, par, use_rs=True):
+    """hanging vertices idx to the centres of their parents par (face: the four corners,
+    edge: par[:, 2] == par[:, 0]), in place; returns where they moved"""
+    if (use_rs and _core is not None and hasattr(_core, "hang_follow") and pts.flags.c_contiguous
+            and pts.dtype == np.float64 and par.shape[1:] == (4,) and (par >= 0).all()):
+        return _core.hang_follow(pts, np.ascontiguousarray(idx, np.int64), np.ascontiguousarray(par, np.int64))
+    isface = par[:, 2] != par[:, 0]
+    newx = np.where(isface[:, None], pts[par].mean(1), 0.5 * (pts[par[:, 0]] + pts[par[:, 1]]))
+    ch = np.linalg.norm(newx - pts[idx], axis=1) > 0
+    pts[idx] = newx
+    return ch
+
+
 def _side_width(dom, p, hk, side, use_rs=True):
     """Thickness of the fluid (side -1) / solid (side 1) at the points p (cell sizes hk),
     from the nearest wall through the point to the opposite wall if within 1.5 cells
@@ -2142,6 +2155,13 @@ def generate(cfg, log=print):
             return _core.leaf_any(np.ascontiguousarray(m, bool), leaf_vptr_full, fverts)
         return np.logical_or.reduceat(m[fverts], leaf_vptr)
 
+    def leaf_lost(a, b, c):
+        """leaf_any(a) & ~leaf_any(b) & leaf_any(c)"""
+        if _core is not None and hasattr(_core, "leaf_lost"):
+            return _core.leaf_lost(np.ascontiguousarray(a, bool), np.ascontiguousarray(b, bool),
+                                   np.ascontiguousarray(c, bool), leaf_vptr_full, fverts)
+        return leaf_any(a) & ~leaf_any(b) & leaf_any(c)
+
     def leaf_verts(lost, vmask=None):
         """the vertices of the leaves in lost (those in vmask), sorted, once each"""
         if _core is not None and hasattr(_core, "leaf_vertices"):
@@ -2202,9 +2222,10 @@ def generate(cfg, log=print):
             ok = d < lim[sel]
             if ok.any():
                 dn, _ = cKDTree(pts[sel[ok]]).query(cp[ok])       # nearest solid candidate
-                d0, _ = _nearest_in(np.concatenate([pts, c_X]),               # a vertex there already
-                                    np.concatenate([np.abs(phi) < hmin, np.ones(len(c_X), bool)]), cp[ok],
-                                    near_cache)
+                # a vertex there already (or a corner snap of this pass): the nearer of the two
+                d0, _ = _nearest_in(pts, np.abs(phi) < hmin, cp[ok], near_cache)
+                if len(c_X):
+                    d0 = np.minimum(d0, cKDTree(c_X).query(cp[ok])[0])
                 ok[ok] = (d[ok] <= dn * (1 + 1e-9)) & (d0 > 1e-6 * hmin)
             sel, cp, d = sel[ok], cp[ok], d[ok]
             _, first = np.unique(np.round(cp / (1e-6 * hmin)).astype(np.int64), axis=0, return_index=True)
@@ -2217,7 +2238,7 @@ def generate(cfg, log=print):
             # or fin narrower than ~1.5 cells) would vanish there.  Those are not snapped.
             gone = (phi0 > 0) & (phi <= 0)
             gone[sel] = True
-            lost = leaf_any(gone) & ~leaf_any((phi0 > 0) & ~gone) & leaf_any(phi0 < 0)
+            lost = leaf_lost(gone, (phi0 > 0) & ~gone, phi0 < 0)
             nthin = 0
             if lost.any():
                 at = np.isin(sel, leaf_verts(lost))
@@ -2260,7 +2281,7 @@ def generate(cfg, log=print):
         for side, label in ((-1.0, "fluid vertices to the middle of thin gaps"),
                             (1.0, "solid vertices to the middle of thin walls")):
             on = side * phi_d > 0
-            lost = leaf_any(on) & ~leaf_any(on & ~snap) & leaf_any(-side * phi_d > 0)
+            lost = leaf_lost(on, on & ~snap, -side * phi_d > 0)
             if not lost.any():
                 continue
             kv = leaf_verts(lost, on)
@@ -2360,14 +2381,8 @@ def generate(cfg, log=print):
             idx = h_idx[l0:l1]
             par = hang_par[idx]
             isface = par[:, 2] != par[:, 0]
-            # face centres / edge midpoints (each row as np.where of both would give it)
-            newx = np.empty((len(idx), 3))
-            fi = np.flatnonzero(isface)
-            ei = np.flatnonzero(~isface)
-            newx[fi] = pts[par[fi]].mean(1)
-            newx[ei] = 0.5 * (pts[par[ei, 0]] + pts[par[ei, 1]])
-            ch = np.linalg.norm(newx - pts[idx], axis=1) > 0
-            pts[idx] = newx
+            # to the face centres / edge midpoints
+            ch = _hang_follow(pts, idx, par)
             ci = idx[ch]
             if len(ci):
                 phi_d[ci] = dom.sdf(pts[ci])
