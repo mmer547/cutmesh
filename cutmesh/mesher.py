@@ -1678,18 +1678,38 @@ def _finer_nearby(oc, cand):
     return fine
 
 
+def _signed_distance_signs(dom, q):
+    """(sdf(q) < 0, sdf(q) > 0) without the distances: the side by inside(), and a
+    point exactly on the STL (distance 0, neither) by a search that stops at once"""
+    ins = dom.inside(q)
+    on = dom._rs.distance_below(np.ascontiguousarray(q, float), 1e-12 * dom.L) == 0.0
+    return ins & ~on, ~ins & ~on
+
+
 def _fluid_fraction(dom, c, h, n=6, cache=None):
     """Fluid fraction of cells (centres c, sizes h) from the trilinear interpolation of
     the signed distance at their corners, and whether the wall cuts them.
-    cache: dom.point_cache() for the corner distances"""
+    cache: dom.point_cache() for the corner distances.  With the Rust extension only
+    the cut cells' corners get their distances (a cell the wall does not cut is all
+    fluid, 1, or none, 0)."""
     corners = np.array(list(itertools.product((-1, 1), repeat=3)), float)
     q = (c[:, None, :] + 0.5 * h[:, None, None] * corners[None]).reshape(-1, 3)
-    sd = (dom.sdf(q) if cache is None else dom.sdf(q, cache=cache)).reshape(len(c), 8)
     t = (np.arange(n) + 0.5) / n
     T = np.array(list(itertools.product(t, t, t)))                       # sample points in [0,1]^3
     # trilinear weights of the 8 corners (corner k at (-1|1)^3 -> (0|1)^3)
     cw = (corners + 1) / 2
     W = np.prod(np.where(cw[None, :, :] > 0, T[:, None, :], 1 - T[:, None, :]), axis=2)   # (n^3, 8)
+    if cache is not None and hasattr(getattr(dom, "_rs", None), "distance_below"):
+        neg, pos = _signed_distance_signs(dom, q)
+        neg, pos = neg.reshape(len(c), 8), pos.reshape(len(c), 8)
+        cut = neg.any(1) & pos.any(1)
+        fr = neg.any(1).astype(float)          # not cut: phi < 0 everywhere iff a corner is
+        ic = np.flatnonzero(cut)
+        if len(ic):
+            sd = dom.sdf(q.reshape(len(c), 8, 3)[ic].reshape(-1, 3), cache=cache).reshape(len(ic), 8)
+            fr[ic] = (sd @ W.T < 0).mean(1)
+        return fr, cut
+    sd = (dom.sdf(q) if cache is None else dom.sdf(q, cache=cache)).reshape(len(c), 8)
     phi = sd @ W.T
     return (phi < 0).mean(1), (sd.min(1) < 0) & (sd.max(1) > 0)
 
@@ -1704,8 +1724,18 @@ def _thin_wall_cells(dom, c, h, cache=None):
                   if any(d) and next(x for x in d if x) > 0], float)            # 13
     corners = np.array(list(itertools.product((-1, 1), repeat=3)), float)
     q = (c[:, None, :] + 0.5 * h[:, None, None] * corners[None]).reshape(-1, 3)
-    sd = dom.sdf(q) if cache is None else dom.sdf(q, cache=cache)
-    no_solid = ~(sd.reshape(len(c), 8) > 1e-3 * h[:, None]).any(1)
+    thr = np.repeat(1e-3 * h, 8)
+    if hasattr(getattr(dom, "_rs", None), "distance_below_each"):
+        # a corner in the solid (sdf > thr): outside, and no wall within thr (a search
+        # that stops at thr; the distance itself is not needed)
+        solid = ~dom.inside(q)
+        io = np.flatnonzero(solid)
+        d = dom._rs.distance_below_each(np.ascontiguousarray(q[io], float), np.ascontiguousarray(thr[io], float))
+        solid[io] = d > thr[io]
+    else:
+        sd = dom.sdf(q) if cache is None else dom.sdf(q, cache=cache)
+        solid = sd > thr
+    no_solid = ~solid.reshape(len(c), 8).any(1)
     idx = np.nonzero(no_solid)[0]
     out = np.zeros(len(c), bool)
     if len(idx) and dom._rs is not None:
@@ -2135,7 +2165,7 @@ def generate(cfg, log=print):
                 # a solid wall inside the cell with no corner in the solid vanishes: the
                 # fluid on both sides joins (a bypass).  Split until a corner lands in it.
                 cand = np.nonzero(near)[0]
-                wall = _thin_wall_cells(dom, oc.centers(cand), oc.leaf_sizes(cand), cache=sd_cache)
+                wall = _thin_wall_cells(dom, oc.centers(cand), oc.leaf_sizes(cand))
                 mark[cand[wall]] = True
                 nw = int(wall.sum())
             if not mark.any():
