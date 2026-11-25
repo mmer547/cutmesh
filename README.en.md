@@ -341,12 +341,12 @@ python -m unittest discover -s tests  # Check that Rust and Python agree
 
 | Example | Python | With Rust extension |
 |---|---|---|
-| examples/stirred_tank (`meshDict.json`, about 100,000 cells) | 142 s | 1.3 s |
-| Stirred tank with layers (`meshDict_layers.json`) | 148 s | 2.8 s |
-| Stirred tank with a 1 mm gap (`meshDict_stator_1mm.json`, about 600,000 cells) | 2080 s (about 35 min) | 9.0 s |
+| examples/stirred_tank (`meshDict.json`, about 100,000 cells) | 142 s | 1.0 s |
+| Stirred tank with layers (`meshDict_layers.json`) | 148 s | 2.6 s |
+| Stirred tank with a 1 mm gap (`meshDict_stator_1mm.json`, about 600,000 cells) | 2080 s (about 35 min) | 7.3 s |
 
-Measured with v0.5.0 (2026-11-22) on a 16-core machine, including quality checks. A real-world geometry of about 8.5 million
-cells takes about 95 seconds and about 13 GB of memory under v0.5.1.
+Measured with v0.6.0 (2026-11-26) on a 16-core machine, including quality checks. A real-world geometry of about 8.5 million
+cells takes about 70 seconds and about 13 GB of memory.
 
 ### Export format (`writeFormat`)
 
