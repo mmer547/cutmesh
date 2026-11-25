@@ -811,8 +811,15 @@ class Cylinder:
         dirv = np.where(safe[:, None], rv / np.where(safe, r, 1)[:, None], self.e1)
         return t, r, dirv
 
+    def _rs_args(self):
+        return ([float(v) for v in self.p1], [float(v) for v in self.a], [float(v) for v in self.e1],
+                float(self.R), float(self.H), float(self.L))
+
     def sdf(self, p, exact_mask=None, far_value=None):
         p = np.atleast_2d(p)
+        if _core is not None and hasattr(_core, "cylinder_sdf") and len(p):
+            # the same arithmetic in Rust, in parallel
+            return _core.cylinder_sdf(np.ascontiguousarray(p, float), *self._rs_args())
         t, r, _ = self._local(p)
         dr = r - self.R
         da = np.maximum(-t, t - self.H)
@@ -823,6 +830,9 @@ class Cylinder:
 
     def closest(self, p):
         p = np.atleast_2d(p)
+        if _core is not None and hasattr(_core, "cylinder_closest") and len(p):
+            cp, d = _core.cylinder_closest(np.ascontiguousarray(p, float), *self._rs_args())
+            return cp, d, np.zeros(len(p), int)
         t, r, dv = self._local(p)
         dr = r - self.R
         da = np.maximum(-t, t - self.H)

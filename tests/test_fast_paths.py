@@ -418,7 +418,7 @@ class RustCutKernel(unittest.TestCase):
             def __getattr__(self, k):
                 if k in ("merge_wall_faces", "contact_candidates", "surface_contact_samples",
                          "split_samples", "cut_batch_csr", "face_sign_counts", "vertex_min",
-                         "leaf_any", "leaf_vertices", "finer_face_neighbour", "leaf_min", "leaf_mean", "feature_hook", "piece_geometry", "pair_faces", "first_two",
+                         "leaf_any", "leaf_lost", "hang_follow", "leaf_vertices", "finer_face_neighbour", "leaf_min", "leaf_mean", "feature_hook", "piece_geometry", "pair_faces", "first_two",
                          "pieces_volume_bad", "PlaneClipRs"):
                     raise AttributeError(k)
                 return getattr(real, k)
@@ -820,6 +820,11 @@ class RustFaceOps(unittest.TestCase):
                 m = rng.random(nv) < p
                 np.testing.assert_array_equal(geometry._core.leaf_any(m, vptr, fverts),
                                               np.logical_or.reduceat(m[fverts], vptr[:-1]))
+                b, c = rng.random(nv) < p, rng.random(nv) < 0.5
+                ra = np.logical_or.reduceat
+                np.testing.assert_array_equal(geometry._core.leaf_lost(m, b, c, vptr, fverts),
+                                              ra(m[fverts], vptr[:-1]) & ~ra(b[fverts], vptr[:-1])
+                                              & ra(c[fverts], vptr[:-1]))
                 lost = rng.random(len(cptr) - 1) < p
                 v = fverts[lost[np.repeat(f_cell, fn)]]
                 np.testing.assert_array_equal(geometry._core.leaf_vertices(lost, vptr, fverts), geometry.unique(v))
@@ -1090,6 +1095,124 @@ class RustArgsort(unittest.TestCase):
             a = rng.integers(-hi, hi, n).astype(np.int64)
             np.testing.assert_array_equal(mesher._argsort_stable(a), np.argsort(a, kind="stable"))
             np.testing.assert_array_equal(geometry._core.argsort_stable(a), np.argsort(a, kind="stable"))
+
+
+class RustSegAny(unittest.TestCase):
+    def test_same_as_numpy(self):
+        rng = np.random.default_rng(9)
+        for n in (1, 7, 5000):
+            ptr = np.concatenate([[0], np.cumsum(rng.integers(1, 30, n))]).astype(np.int64)
+            for p in (0.001, 0.1, 0.9):
+                m = rng.random(ptr[-1]) < p
+                np.testing.assert_array_equal(geometry._core.seg_any(m, ptr), np.logical_or.reduceat(m, ptr[:-1]))
+
+
+class RustCornerMinMax(unittest.TestCase):
+    def test_same_as_numpy(self):
+        rng = np.random.default_rng(3)
+        for n, m in ((5, 1), (1000, 300), (20000, 5000)):
+            cv = rng.integers(0, n, (m, 8)).astype(np.int64)
+            h = rng.uniform(0.1, 2.0, m)
+            lo = np.full(n, np.inf); hi = np.zeros(n)
+            np.minimum.at(lo, cv.ravel(), np.repeat(h, 8))
+            np.maximum.at(hi, cv.ravel(), np.repeat(h, 8))
+            a, b = geometry._core.corner_minmax(n, cv, h)
+            np.testing.assert_array_equal(a, lo)
+            np.testing.assert_array_equal(b, hi)
+
+
+class RustHangFollow(unittest.TestCase):
+    """_core.hang_follow against mesher._hang_follow's NumPy code"""
+
+    def test_same_as_numpy(self):
+        rng = np.random.default_rng(31)
+        for n, m in ((10, 1), (1000, 300), (50000, 20000)):
+            P = rng.normal(size=(n, 3)) * rng.uniform(0.1, 100.0)
+            P[rng.random(n) < 0.05] = 0.0
+            idx = np.sort(rng.choice(n, m, replace=False)).astype(np.int64)
+            par = rng.integers(0, n, (m, 4)).astype(np.int64)
+            edge = rng.random(m) < 0.5
+            par[edge, 2] = par[edge, 3] = par[edge, 0]
+            # some already at their centre (no move)
+            k = idx[: m // 4]
+            P[k] = np.where((par[: m // 4, 2] != par[: m // 4, 0])[:, None], P[par[: m // 4]].mean(1),
+                            0.5 * (P[par[: m // 4, 0]] + P[par[: m // 4, 1]]))
+            A, B = P.copy(), P.copy()
+            ca = mesher._hang_follow(A, idx, par, use_rs=False)
+            cb = mesher._hang_follow(B, idx, par)
+            np.testing.assert_array_equal(A.view(np.uint64), B.view(np.uint64))
+            np.testing.assert_array_equal(ca, cb)
+
+
+class RustTetsOk(unittest.TestCase):
+    """_core.tets_ok against mesher._tets_ok's NumPy code"""
+
+    @unittest.skipUnless(NUMPY_FMA, NO_FMA)
+    def test_same_as_numpy(self):
+        rng = np.random.default_rng(41)
+        P = rng.normal(size=(400, 3))
+        agree = {True: 0, False: 0}
+        for t in range(400):
+            faces = [(0, rng.choice(400, int(rng.integers(3, 7)), replace=False).tolist())
+                     for _ in range(int(rng.integers(1, 8)))]
+            cf = np.array([P[p].mean(0) for _, p in faces]) + rng.normal(size=(len(faces), 3)) * 0.01
+            cc = rng.normal(size=3) * 0.1
+            vmin = float(rng.choice([-1.0, 0.0, 1e-3, 1e-2]))
+            a = mesher._tets_ok(P, faces, cf, cc, vmin, use_rs=False)
+            b = mesher._tets_ok(P, faces, cf, cc, vmin)
+            self.assertEqual(bool(a), b)
+            agree[b] += 1
+        self.assertTrue(agree[True] and agree[False])
+
+
+class RustCylinder(unittest.TestCase):
+    """_core.cylinder_sdf / cylinder_closest against geometry.Cylinder's NumPy code"""
+
+    @unittest.skipUnless(NUMPY_FMA, NO_FMA)
+    def test_same_as_numpy(self):
+        rng = np.random.default_rng(23)
+        core = geometry._core
+        for t in range(60):
+            c = geometry.Cylinder(rng.normal(size=3), rng.normal(size=3) * 3,
+                                  float(rng.uniform(0.01, 2)))
+            n = (1, 2, 7, 1500)[t % 4]
+            p = rng.normal(size=(n, 3)) * 2
+            if t % 3 == 0:          # on the axis, inside, beyond the caps
+                k = max(1, n // 3)
+                p[:k] = c.p1 + np.outer(rng.uniform(-0.5, 1.5, k) * c.H, c.a)
+            if t % 5 == 0:          # near the side and the caps
+                p[n // 2:] = c.p1 + np.outer(rng.choice([0.0, 1.0, 0.5], n - n // 2) * c.H, c.a) \
+                    + c.R * c.e1 * rng.choice([0.0, 1.0, 1 - 1e-12], (n - n // 2, 1))
+            try:
+                geometry._core = None
+                s0 = c.sdf(p)
+                cp0, d0, _ = c.closest(p)
+            finally:
+                geometry._core = core
+            s1 = c.sdf(p)
+            cp1, d1, _ = c.closest(p)
+            np.testing.assert_array_equal(s0, s1)
+            np.testing.assert_array_equal(cp0, cp1)
+            np.testing.assert_array_equal(d0, d1)
+
+
+class RustSideWidth(unittest.TestCase):
+    """TriMesh.side_width against mesher._side_width's NumPy code"""
+
+    def test_same_as_numpy(self):
+        dom = geometry.Surface([("walls", l_prism())])
+        self.assertTrue(hasattr(dom._rs, "side_width"))
+        rng = np.random.default_rng(5)
+        lo, hi = dom.tris.reshape(-1, 3).min(0), dom.tris.reshape(-1, 3).max(0)
+        p = lo - 0.01 + rng.uniform(size=(4000, 3)) * (hi - lo + 0.02)
+        p[:len(dom.tris)] = dom.tris[:, 0]            # on the wall: not off
+        hk = rng.uniform(0.005, 0.03, len(p))
+        for side in (-1.0, 1.0):
+            a = mesher._side_width(dom, p, hk, side, use_rs=False)
+            b = mesher._side_width(dom, p, hk, side)
+            for x, y in zip(a, b):
+                np.testing.assert_array_equal(x, y)
+            self.assertTrue(np.isfinite(a[3]).any() and np.isinf(a[3]).any() and not a[0].all())
 
 
 def l_prism(c=0.037, L=0.1, H=0.03, ang=(7.0, 5.0, 11.0)):

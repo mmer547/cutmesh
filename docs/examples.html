@@ -60,7 +60,7 @@ STL は <code>python make_geometry.py</code> で作ります（solid: <code>tank
 
 <section class="example" id="tank-zone">
 <h3>回転ゾーン（<code>meshDict.json</code>）</h3>
-<ul class="stats"><li><span data-stat="tank.cells">102,429</span> セル</li><li><span data-stat="tank.seconds">1.3</span> 秒</li><li>直交格子 + 円筒の回転ゾーン</li></ul>
+<ul class="stats"><li><span data-stat="tank.cells">102,429</span> セル</li><li><span data-stat="tank.seconds">1.0</span> 秒</li><li>直交格子 + 円筒の回転ゾーン</li></ul>
 <p>翼のまわりに半径 70 mm の円筒の回転ゾーンを置いた例です。円筒は八分木のカットで切断されるので、界面（赤）は粗いセルの所でも円筒面にぴったり乗ります。
 翼（レベル 3）・シャフト（レベル 2）・回転ゾーンの内部（レベル 2）だけを細かくし、槽の壁はレベル 1 です。</p>
 <p class="cmd-label">実行コマンド</p>
@@ -83,7 +83,7 @@ python -m cutmesh.ami case -out case_ami_later    # 作ったメッシュを後�
 <figure class="vfig">
   <a class="img only-plain" href="images/tank_cut.png"><img src="images/tank_cut.png" alt="攪拌槽のメッシュ。手前半分のセルを取り除いた 3D 図と、x・y・z の断面" loading="lazy"></a>
     <a class="img only-layers" href="images/tank_cut_layers.png"><img src="images/tank_cut_layers.png" alt="攪拌槽のメッシュ。手前半分のセルを取り除いた 3D 図と、x・y・z の断面（境界層あり）" loading="lazy"></a>
-  <figcaption>x &lt; 0 のセルだけを残した 3D 図（切り口はベージュ）と、中央の 3 断面<span class="only-layers">。境界層あり（<code>meshDict_layers.json</code>、<span data-stat="tank_layers.cells">163,629</span> セル、<span data-stat="tank_layers.seconds">3.0</span> 秒、目標の厚さ <span data-stat="tank_layers.layerFull">97.7</span>%）</span></figcaption>
+  <figcaption>x &lt; 0 のセルだけを残した 3D 図（切り口はベージュ）と、中央の 3 断面<span class="only-layers">。境界層あり（<code>meshDict_layers.json</code>、<span data-stat="tank_layers.cells">163,629</span> セル、<span data-stat="tank_layers.seconds">2.6</span> 秒、目標の厚さ <span data-stat="tank_layers.layerFull">97.7</span>%）</span></figcaption>
 </figure>
 <figure class="vfig">
   <a class="img only-plain" href="images/tank_slices.png"><img src="images/tank_slices.png" alt="翼の中央の高さの水平断面と、翼を通る鉛直断面" loading="lazy"></a>
@@ -121,7 +121,7 @@ python -m cutmesh.ami case -out case_ami_later    # 作ったメッシュを後�
 
 <section class="example" id="tank-cyl">
 <h3>円筒ベースメッシュ（<code>meshDict_cylindrical.json</code>）</h3>
-<ul class="stats"><li><span data-stat="cylindrical.cells">137,144</span> セル</li><li><span data-stat="cylindrical.seconds">6.3</span> 秒</li><li>同心ブロックのベースメッシュ</li></ul>
+<ul class="stats"><li><span data-stat="cylindrical.cells">137,144</span> セル</li><li><span data-stat="cylindrical.seconds">6.0</span> 秒</li><li>同心ブロックのベースメッシュ</li></ul>
 <p>八分木の根を、軸まわりの同心ブロックにした例です。ブロックの配置は自動（中心の 2×2 の正方形と、外へ広がる同心リング）で、正方形はハブの中に入るので、流体側のセルはほぼすべて周方向に並びます。回転ゾーンの界面や槽の壁に沿ったメッシュになります。
 ブロックの境界では分割数の比が整数でなくても、面を重ね合わせて適合したメッシュにします。</p>
 <p class="cmd-label">実行コマンド</p>
@@ -131,7 +131,7 @@ python run.py meshDict_cylindrical.json     # 断面図も描く場合</code></p
 <figure class="vfig">
   <a class="img only-plain" href="images/cylindrical_slices.png"><img src="images/cylindrical_slices.png" alt="円筒ベースメッシュの水平断面と、その中央の拡大" loading="lazy"></a>
     <a class="img only-layers" href="images/cylindrical_slices_layers.png"><img src="images/cylindrical_slices_layers.png" alt="円筒ベースメッシュの水平断面と、その中央の拡大（境界層あり）" loading="lazy"></a>
-  <figcaption>翼の中央の高さの水平断面と、回転ゾーンのまわりの拡大<span class="only-layers">。境界層あり（<span data-stat="cylindrical_layers.cells">199,076</span> セル、<span data-stat="cylindrical_layers.seconds">8.5</span> 秒、目標の厚さ <span data-stat="cylindrical_layers.layerFull">87.0</span>%）</span></figcaption>
+  <figcaption>翼の中央の高さの水平断面と、回転ゾーンのまわりの拡大<span class="only-layers">。境界層あり（<span data-stat="cylindrical_layers.cells">199,076</span> セル、<span data-stat="cylindrical_layers.seconds">7.9</span> 秒、目標の厚さ <span data-stat="cylindrical_layers.layerFull">87.0</span>%）</span></figcaption>
 </figure>
 <details>
   <summary>baseMesh の設定</summary>
@@ -147,7 +147,7 @@ python run.py meshDict_cylindrical.json     # 断面図も描く場合</code></p
 
 <section class="example" id="tank-layers">
 <h3>境界層（<code>meshDict_layers.json</code>）</h3>
-<ul class="stats"><li><span data-stat="layers.cells">163,629</span> セル</li><li><span data-stat="layers.seconds">3.0</span> 秒</li><li>全壁に 3 層</li></ul>
+<ul class="stats"><li><span data-stat="layers.cells">163,629</span> セル</li><li><span data-stat="layers.seconds">2.6</span> 秒</li><li>全壁に 3 層</li></ul>
 <p>回転ゾーンの例に、すべての壁パッチへ 3 層のプリズム層を加えた例です。回転ゾーンの界面にかかる所では、層の側面も界面の円筒面に乗ったままです。</p>
 <p class="cmd-label">実行コマンド</p>
 <pre><code>cd examples/stirred_tank
@@ -169,7 +169,7 @@ python -m cutmesh.layers case meshDict_layers.json -out case_layers_later
 </section>
 
 <h2 id="stator">ローター・ステーター（狭い隙間の中の界面）</h2>
-<ul class="stats"><li><span data-stat="stator_1mm.cells">596,154</span> セル</li><li><span data-stat="stator_1mm.seconds">9.2</span> 秒</li><li>隙間 1 mm</li></ul>
+<ul class="stats"><li><span data-stat="stator_1mm.cells">596,154</span> セル</li><li><span data-stat="stator_1mm.seconds">7.3</span> 秒</li><li>隙間 1 mm</li></ul>
 <p>攪拌槽の翼のすぐ外側に、固定リング（ステーター）を置いた形状です。リングの内面は翼の先端の角から 1 mm 外にあり、
 回転ゾーンの界面はその隙間の中央（翼から 0.5 mm）に置きます。界面と両側の壁の間にそれぞれセルが入るように、
 <code>wallProximity</code> で壁に近い部分の界面だけを細かくし、<code>autoGapRefinement</code> で隙間に面した壁を細かくします。</p>
@@ -185,7 +185,7 @@ cutmesh meshDict_stator.json                # 約 200 万セル（約 30 秒、�
 <figure class="vfig">
   <a class="img only-plain" href="images/stator_gap.png"><img src="images/stator_gap.png" alt="翼と固定リングの水平断面、翼の先端の 2 mm 角の拡大、翼の上端の角の鉛直断面" loading="lazy"></a>
     <a class="img only-layers" href="images/stator_gap_layers.png"><img src="images/stator_gap_layers.png" alt="翼と固定リングの水平断面、翼の先端の 2 mm 角の拡大、翼の上端の角の鉛直断面（境界層あり）" loading="lazy"></a>
-  <figcaption>左: 翼の中央の高さの水平断面。中: 翼の先端の拡大（幅 2 mm）。右: 翼の先端の上端の角（鉛直断面）。界面（赤）の内側は回転ゾーン、外側は静止側<span class="only-layers">。境界層あり（<span data-stat="stator_1mm_layers.cells">982,245</span> セル、<span data-stat="stator_1mm_layers.seconds">35</span> 秒、目標の厚さ <span data-stat="stator_1mm_layers.layerFull">77.2</span>%）。翼の先端と固定リングの間の隙間（中の図）には、層がほとんど付かない</span></figcaption>
+  <figcaption>左: 翼の中央の高さの水平断面。中: 翼の先端の拡大（幅 2 mm）。右: 翼の先端の上端の角（鉛直断面）。界面（赤）の内側は回転ゾーン、外側は静止側<span class="only-layers">。境界層あり（<span data-stat="stator_1mm_layers.cells">982,245</span> セル、<span data-stat="stator_1mm_layers.seconds">34</span> 秒、目標の厚さ <span data-stat="stator_1mm_layers.layerFull">77.2</span>%）。翼の先端と固定リングの間の隙間（中の図）には、層がほとんど付かない</span></figcaption>
 </figure>
 <div class="note">
   <p><strong>隙間が狭いほどセル数が急に増えます。</strong>界面と壁の間（隙間の半分）に 1 セル以上入れるため、隙間の半分程度のセルが界面の全周に並びます。
@@ -239,27 +239,27 @@ python benchmark/stl_check.py benchmark/data/synthetic/torus.stl                
   <figure class="vfig">
     <a class="img only-plain" href="images/shape_sphere.png"><img src="images/shape_sphere.png" alt="球の内部のメッシュ" loading="lazy"></a>
     <a class="img only-layers" href="images/shape_sphere_layers.png"><img src="images/shape_sphere_layers.png" alt="球の内部のメッシュ（境界層あり）" loading="lazy"></a>
-    <figcaption><strong>sphere</strong> — 滑らかな凸の曲面（<span class="only-plain"><span data-stat="sphere.cells">75,612</span> セル、<span data-stat="sphere.seconds">1.0</span> 秒</span><span class="only-layers">境界層あり、<span data-stat="sphere_layers.cells">147,636</span> セル、<span data-stat="sphere_layers.seconds">2.3</span> 秒、目標の厚さ <span data-stat="sphere_layers.layerFull">98.9</span>%</span>）</figcaption>
+    <figcaption><strong>sphere</strong> — 滑らかな凸の曲面（<span class="only-plain"><span data-stat="sphere.cells">75,612</span> セル、<span data-stat="sphere.seconds">0.8</span> 秒</span><span class="only-layers">境界層あり、<span data-stat="sphere_layers.cells">147,636</span> セル、<span data-stat="sphere_layers.seconds">2.1</span> 秒、目標の厚さ <span data-stat="sphere_layers.layerFull">98.9</span>%</span>）</figcaption>
   </figure>
   <figure class="vfig">
     <a class="img only-plain" href="images/shape_cube_rotated.png"><img src="images/shape_cube_rotated.png" alt="格子に対して傾いた立方体の内部のメッシュ" loading="lazy"></a>
     <a class="img only-layers" href="images/shape_cube_rotated_layers.png"><img src="images/shape_cube_rotated_layers.png" alt="格子に対して傾いた立方体の内部のメッシュ（境界層あり）" loading="lazy"></a>
-    <figcaption><strong>cube_rotated</strong> — 格子に沿わない鋭いエッジ（下の「格子に沿わないエッジ」）。切り口の縁の小さな段は、セルを丸ごと残す描き方によるもので、壁の形ではない（<span class="only-plain"><span data-stat="cube_rotated.cells">53,564</span> セル、<span data-stat="cube_rotated.seconds">1.0</span> 秒</span><span class="only-layers">境界層あり、<span data-stat="cube_rotated_layers.cells">112,271</span> セル、<span data-stat="cube_rotated_layers.seconds">2.7</span> 秒、目標の厚さ <span data-stat="cube_rotated_layers.layerFull">92.5</span>%</span>）</figcaption>
+    <figcaption><strong>cube_rotated</strong> — 格子に沿わない鋭いエッジ（下の「格子に沿わないエッジ」）。切り口の縁の小さな段は、セルを丸ごと残す描き方によるもので、壁の形ではない（<span class="only-plain"><span data-stat="cube_rotated.cells">53,564</span> セル、<span data-stat="cube_rotated.seconds">0.8</span> 秒</span><span class="only-layers">境界層あり、<span data-stat="cube_rotated_layers.cells">112,271</span> セル、<span data-stat="cube_rotated_layers.seconds">2.4</span> 秒、目標の厚さ <span data-stat="cube_rotated_layers.layerFull">92.5</span>%</span>）</figcaption>
   </figure>
   <figure class="vfig">
     <a class="img only-plain" href="images/shape_torus.png"><img src="images/shape_torus.png" alt="トーラスの内部のメッシュ" loading="lazy"></a>
     <a class="img only-layers" href="images/shape_torus_layers.png"><img src="images/shape_torus_layers.png" alt="トーラスの内部のメッシュ（境界層あり）" loading="lazy"></a>
-    <figcaption><strong>torus</strong> — 流体を貫く穴（<span class="only-plain"><span data-stat="torus.cells">39,008</span> セル、<span data-stat="torus.seconds">0.6</span> 秒</span><span class="only-layers">境界層あり、<span data-stat="torus_layers.cells">84,596</span> セル、<span data-stat="torus_layers.seconds">1.5</span> 秒、目標の厚さ <span data-stat="torus_layers.layerFull">95.3</span>%</span>）</figcaption>
+    <figcaption><strong>torus</strong> — 流体を貫く穴（<span class="only-plain"><span data-stat="torus.cells">39,008</span> セル、<span data-stat="torus.seconds">0.5</span> 秒</span><span class="only-layers">境界層あり、<span data-stat="torus_layers.cells">84,596</span> セル、<span data-stat="torus_layers.seconds">1.4</span> 秒、目標の厚さ <span data-stat="torus_layers.layerFull">95.3</span>%</span>）</figcaption>
   </figure>
   <figure class="vfig">
     <a class="img only-plain" href="images/shape_thin_channels.png"><img src="images/shape_thin_channels.png" alt="幅の狭い流路のメッシュ" loading="lazy"></a>
     <a class="img only-layers" href="images/shape_thin_channels_layers.png"><img src="images/shape_thin_channels_layers.png" alt="幅の狭い流路のメッシュ（境界層あり）" loading="lazy"></a>
-    <figcaption><strong>thin_channels</strong> — セル 2 個分の幅の流路（<span class="only-plain"><span data-stat="thin_channels.cells">46,244</span> セル、<span data-stat="thin_channels.seconds">1.1</span> 秒</span><span class="only-layers">境界層あり、<span data-stat="thin_channels_layers.cells">146,819</span> セル、<span data-stat="thin_channels_layers.seconds">2.6</span> 秒、目標の厚さ <span data-stat="thin_channels_layers.layerFull">98.0</span>%</span>）</figcaption>
+    <figcaption><strong>thin_channels</strong> — セル 2 個分の幅の流路（<span class="only-plain"><span data-stat="thin_channels.cells">46,244</span> セル、<span data-stat="thin_channels.seconds">1.0</span> 秒</span><span class="only-layers">境界層あり、<span data-stat="thin_channels_layers.cells">146,819</span> セル、<span data-stat="thin_channels_layers.seconds">2.5</span> 秒、目標の厚さ <span data-stat="thin_channels_layers.layerFull">98.0</span>%</span>）</figcaption>
   </figure>
   <figure class="vfig">
     <a class="img only-plain" href="images/shape_l_bracket.png"><img src="images/shape_l_bracket.png" alt="L 字形のメッシュ" loading="lazy"></a>
     <a class="img only-layers" href="images/shape_l_bracket_layers.png"><img src="images/shape_l_bracket_layers.png" alt="L 字形のメッシュ（境界層あり）" loading="lazy"></a>
-    <figcaption><strong>l_bracket</strong> — 凹のエッジ（<span class="only-plain"><span data-stat="l_bracket.cells">71,439</span> セル、<span data-stat="l_bracket.seconds">1.0</span> 秒</span><span class="only-layers">境界層あり、<span data-stat="l_bracket_layers.cells">166,617</span> セル、<span data-stat="l_bracket_layers.seconds">2.0</span> 秒、目標の厚さ <span data-stat="l_bracket_layers.layerFull">99.9</span>%</span>）</figcaption>
+    <figcaption><strong>l_bracket</strong> — 凹のエッジ（<span class="only-plain"><span data-stat="l_bracket.cells">71,439</span> セル、<span data-stat="l_bracket.seconds">0.8</span> 秒</span><span class="only-layers">境界層あり、<span data-stat="l_bracket_layers.cells">166,617</span> セル、<span data-stat="l_bracket_layers.seconds">1.8</span> 秒、目標の厚さ <span data-stat="l_bracket_layers.layerFull">99.9</span>%</span>）</figcaption>
   </figure>
 </div>
 <h3 id="tilted-edges">格子に沿わないエッジ（凸エッジの厳密カット）</h3>
@@ -298,42 +298,42 @@ python benchmark/run_bench.py benchmark/suites/showcase.json --only venturi --ke
   <figure class="vfig">
     <a class="img only-plain" href="images/showcase_pipe_elbow.png"><img src="images/showcase_pipe_elbow.png" alt="円管の 90 度エルボの断面" loading="lazy"></a>
     <a class="img only-layers" href="images/showcase_pipe_elbow_layers.png"><img src="images/showcase_pipe_elbow_layers.png" alt="円管の 90 度エルボの断面（境界層あり）" loading="lazy"></a>
-    <figcaption><strong>pipe_elbow</strong> — 直径 D の円管の 90° 曲がり（曲率半径 1.5 D）。左は曲がりを通る断面、右は出口側の管の横断面（<span class="only-plain"><span data-stat="pipe_elbow.cells">27,869</span> セル、<span data-stat="pipe_elbow.seconds">0.5</span> 秒、最大非直交 <span data-stat="pipe_elbow.nonOrtho">53</span>°</span><span class="only-layers">境界層あり、<span data-stat="pipe_elbow_layers.cells">59,363</span> セル、<span data-stat="pipe_elbow_layers.seconds">1.1</span> 秒、目標の厚さ <span data-stat="pipe_elbow_layers.layerFull">98.6</span>%、最大非直交 <span data-stat="pipe_elbow_layers.nonOrtho">64</span>°</span>）</figcaption>
+    <figcaption><strong>pipe_elbow</strong> — 直径 D の円管の 90° 曲がり（曲率半径 1.5 D）。左は曲がりを通る断面、右は出口側の管の横断面（<span class="only-plain"><span data-stat="pipe_elbow.cells">27,869</span> セル、<span data-stat="pipe_elbow.seconds">0.5</span> 秒、最大非直交 <span data-stat="pipe_elbow.nonOrtho">53</span>°</span><span class="only-layers">境界層あり、<span data-stat="pipe_elbow_layers.cells">59,363</span> セル、<span data-stat="pipe_elbow_layers.seconds">1.0</span> 秒、目標の厚さ <span data-stat="pipe_elbow_layers.layerFull">98.6</span>%、最大非直交 <span data-stat="pipe_elbow_layers.nonOrtho">64</span>°</span>）</figcaption>
   </figure>
   <figure class="vfig">
     <a class="img only-plain" href="images/showcase_helical_coil.png"><img src="images/showcase_helical_coil.png" alt="らせん管の壁面メッシュ" loading="lazy"></a>
     <a class="img only-layers" href="images/showcase_helical_coil_layers.png"><img src="images/showcase_helical_coil_layers.png" alt="境界層つきのらせん管。手前半分のセルを取り除いた 3D 図と 3 断面" loading="lazy"></a>
-    <figcaption><strong>helical_coil</strong> — 2.5 巻きのらせん管（コイル式熱交換器）。<span class="only-plain">壁面をパッチごとに色分け（青: inlet、橙: outlet）</span><span class="only-layers">壁面では層が見えないので、手前半分のセルを取り除いた 3D 図と中央の 3 断面</span>（<span class="only-plain"><span data-stat="helical_coil.cells">98,359</span> セル、<span data-stat="helical_coil.seconds">1.9</span> 秒、最大非直交 <span data-stat="helical_coil.nonOrtho">62</span>°</span><span class="only-layers">境界層あり、<span data-stat="helical_coil_layers.cells">223,504</span> セル、<span data-stat="helical_coil_layers.seconds">5.6</span> 秒、目標の厚さ <span data-stat="helical_coil_layers.layerFull">90.4</span>%、最大非直交 <span data-stat="helical_coil_layers.nonOrtho">65</span>°</span>）</figcaption>
+    <figcaption><strong>helical_coil</strong> — 2.5 巻きのらせん管（コイル式熱交換器）。<span class="only-plain">壁面をパッチごとに色分け（青: inlet、橙: outlet）</span><span class="only-layers">壁面では層が見えないので、手前半分のセルを取り除いた 3D 図と中央の 3 断面</span>（<span class="only-plain"><span data-stat="helical_coil.cells">98,359</span> セル、<span data-stat="helical_coil.seconds">1.5</span> 秒、最大非直交 <span data-stat="helical_coil.nonOrtho">62</span>°</span><span class="only-layers">境界層あり、<span data-stat="helical_coil_layers.cells">223,504</span> セル、<span data-stat="helical_coil_layers.seconds">4.7</span> 秒、目標の厚さ <span data-stat="helical_coil_layers.layerFull">90.4</span>%、最大非直交 <span data-stat="helical_coil_layers.nonOrtho">65</span>°</span>）</figcaption>
   </figure>
   <figure class="vfig">
     <a class="img only-plain" href="images/showcase_venturi.png"><img src="images/showcase_venturi.png" alt="ベンチュリ管の縦断面とのどの拡大" loading="lazy"></a>
     <a class="img only-layers" href="images/showcase_venturi_layers.png"><img src="images/showcase_venturi_layers.png" alt="ベンチュリ管の縦断面とのどの拡大（境界層あり）" loading="lazy"></a>
-    <figcaption><strong>venturi</strong> — ベンチュリ管: 余弦形の縮流でのど（0.4 D）へ、7° のディフューザーで戻る（<span class="only-plain"><span data-stat="venturi.cells">24,484</span> セル、<span data-stat="venturi.seconds">0.7</span> 秒、最大非直交 <span data-stat="venturi.nonOrtho">58</span>°</span><span class="only-layers">境界層あり、<span data-stat="venturi_layers.cells">50,311</span> セル、<span data-stat="venturi_layers.seconds">1.4</span> 秒、目標の厚さ <span data-stat="venturi_layers.layerFull">93.3</span>%、最大非直交 <span data-stat="venturi_layers.nonOrtho">65</span>°</span>）</figcaption>
+    <figcaption><strong>venturi</strong> — ベンチュリ管: 余弦形の縮流でのど（0.4 D）へ、7° のディフューザーで戻る（<span class="only-plain"><span data-stat="venturi.cells">24,484</span> セル、<span data-stat="venturi.seconds">0.4</span> 秒、最大非直交 <span data-stat="venturi.nonOrtho">58</span>°</span><span class="only-layers">境界層あり、<span data-stat="venturi_layers.cells">50,311</span> セル、<span data-stat="venturi_layers.seconds">1.2</span> 秒、目標の厚さ <span data-stat="venturi_layers.layerFull">93.3</span>%、最大非直交 <span data-stat="venturi_layers.nonOrtho">65</span>°</span>）</figcaption>
   </figure>
   <figure class="vfig">
     <a class="img only-plain" href="images/showcase_orifice_pipe.png"><img src="images/showcase_orifice_pipe.png" alt="オリフィス板の縦断面と開口のエッジの拡大" loading="lazy"></a>
     <a class="img only-layers" href="images/showcase_orifice_pipe_layers.png"><img src="images/showcase_orifice_pipe_layers.png" alt="オリフィス板の縦断面と開口のエッジの拡大（境界層あり）" loading="lazy"></a>
-    <figcaption><strong>orifice_pipe</strong> — 円管の中の鋭いエッジのオリフィス板（開口径 0.5 D、板厚 0.1 D）（<span class="only-plain"><span data-stat="orifice_pipe.cells">19,376</span> セル、<span data-stat="orifice_pipe.seconds">0.5</span> 秒、最大歪度 <span data-stat="orifice_pipe.skew">1.4</span></span><span class="only-layers">境界層あり、<span data-stat="orifice_pipe_layers.cells">40,781</span> セル、<span data-stat="orifice_pipe_layers.seconds">0.8</span> 秒、目標の厚さ <span data-stat="orifice_pipe_layers.layerFull">98.8</span>%、最大歪度 <span data-stat="orifice_pipe_layers.skew">2.6</span></span>）</figcaption>
+    <figcaption><strong>orifice_pipe</strong> — 円管の中の鋭いエッジのオリフィス板（開口径 0.5 D、板厚 0.1 D）（<span class="only-plain"><span data-stat="orifice_pipe.cells">19,376</span> セル、<span data-stat="orifice_pipe.seconds">0.4</span> 秒、最大歪度 <span data-stat="orifice_pipe.skew">1.4</span></span><span class="only-layers">境界層あり、<span data-stat="orifice_pipe_layers.cells">40,781</span> セル、<span data-stat="orifice_pipe_layers.seconds">0.7</span> 秒、目標の厚さ <span data-stat="orifice_pipe_layers.layerFull">98.8</span>%、最大歪度 <span data-stat="orifice_pipe_layers.skew">2.6</span></span>）</figcaption>
   </figure>
   <figure class="vfig">
     <a class="img only-plain" href="images/showcase_backward_step.png"><img src="images/showcase_backward_step.png" alt="バックステップ流路の断面" loading="lazy"></a>
     <a class="img only-layers" href="images/showcase_backward_step_layers.png"><img src="images/showcase_backward_step_layers.png" alt="バックステップ流路の断面（境界層あり）" loading="lazy"></a>
-    <figcaption><strong>backward_step</strong> — バックステップ流れ（拡大比 2）。側面は <code>symmetry</code> パッチ（<span class="only-plain"><span data-stat="backward_step.cells">19,440</span> セル、<span data-stat="backward_step.seconds">0.4</span> 秒、最大非直交 <span data-stat="backward_step.nonOrtho">25</span>°</span><span class="only-layers">境界層あり、<span data-stat="backward_step_layers.cells">40,752</span> セル、<span data-stat="backward_step_layers.seconds">0.7</span> 秒、目標の厚さ <span data-stat="backward_step_layers.layerFull">100.0</span>%、最大非直交 <span data-stat="backward_step_layers.nonOrtho">40</span>°</span>）</figcaption>
+    <figcaption><strong>backward_step</strong> — バックステップ流れ（拡大比 2）。側面は <code>symmetry</code> パッチ（<span class="only-plain"><span data-stat="backward_step.cells">19,440</span> セル、<span data-stat="backward_step.seconds">0.3</span> 秒、最大非直交 <span data-stat="backward_step.nonOrtho">25</span>°</span><span class="only-layers">境界層あり、<span data-stat="backward_step_layers.cells">40,752</span> セル、<span data-stat="backward_step_layers.seconds">0.6</span> 秒、目標の厚さ <span data-stat="backward_step_layers.layerFull">100.0</span>%、最大非直交 <span data-stat="backward_step_layers.nonOrtho">40</span>°</span>）</figcaption>
   </figure>
   <figure class="vfig">
     <a class="img only-plain" href="images/showcase_t_junction.png"><img src="images/showcase_t_junction.png" alt="T 字合流ダクトの断面" loading="lazy"></a>
     <a class="img only-layers" href="images/showcase_t_junction_layers.png"><img src="images/showcase_t_junction_layers.png" alt="T 字合流ダクトの断面（境界層あり）" loading="lazy"></a>
-    <figcaption><strong>t_junction</strong> — 正方形ダクトの T 字合流（枝管の幅は主管の半分）。入口は <code>inletMain</code>・<code>inletBranch</code> の 2 つ（<span class="only-plain"><span data-stat="t_junction.cells">15,736</span> セル、<span data-stat="t_junction.seconds">0.4</span> 秒、最大非直交 <span data-stat="t_junction.nonOrtho">25</span>°</span><span class="only-layers">境界層あり、<span data-stat="t_junction_layers.cells">38,392</span> セル、<span data-stat="t_junction_layers.seconds">0.8</span> 秒、目標の厚さ <span data-stat="t_junction_layers.layerFull">100.0</span>%、最大非直交 <span data-stat="t_junction_layers.nonOrtho">62</span>°</span>）</figcaption>
+    <figcaption><strong>t_junction</strong> — 正方形ダクトの T 字合流（枝管の幅は主管の半分）。入口は <code>inletMain</code>・<code>inletBranch</code> の 2 つ（<span class="only-plain"><span data-stat="t_junction.cells">15,736</span> セル、<span data-stat="t_junction.seconds">0.3</span> 秒、最大非直交 <span data-stat="t_junction.nonOrtho">25</span>°</span><span class="only-layers">境界層あり、<span data-stat="t_junction_layers.cells">38,392</span> セル、<span data-stat="t_junction_layers.seconds">0.6</span> 秒、目標の厚さ <span data-stat="t_junction_layers.layerFull">100.0</span>%、最大非直交 <span data-stat="t_junction_layers.nonOrtho">62</span>°</span>）</figcaption>
   </figure>
   <figure class="vfig">
     <a class="img only-plain" href="images/showcase_pin_fins.png"><img src="images/showcase_pin_fins.png" alt="ピンの千鳥配列の水平断面と、ピンのまわりの拡大" loading="lazy"></a>
     <a class="img only-layers" href="images/showcase_pin_fins_layers.png"><img src="images/showcase_pin_fins_layers.png" alt="ピンの千鳥配列の水平断面と、ピンのまわりの拡大（境界層あり）" loading="lazy"></a>
-    <figcaption><strong>pin_fins</strong> — ダクトを横切る 13 本のピンの千鳥配列（ピンフィン・管群）。ピンだけをレベル 3 に（<span class="only-plain"><span data-stat="pin_fins.cells">63,287</span> セル、<span data-stat="pin_fins.seconds">1.6</span> 秒、最大非直交 <span data-stat="pin_fins.nonOrtho">39</span>°</span><span class="only-layers">境界層あり、<span data-stat="pin_fins_layers.cells">144,293</span> セル、<span data-stat="pin_fins_layers.seconds">3.4</span> 秒、目標の厚さ <span data-stat="pin_fins_layers.layerFull">93.4</span>%、最大非直交 <span data-stat="pin_fins_layers.nonOrtho">56</span>°</span>）</figcaption>
+    <figcaption><strong>pin_fins</strong> — ダクトを横切る 13 本のピンの千鳥配列（ピンフィン・管群）。ピンだけをレベル 3 に（<span class="only-plain"><span data-stat="pin_fins.cells">63,287</span> セル、<span data-stat="pin_fins.seconds">1.3</span> 秒、最大非直交 <span data-stat="pin_fins.nonOrtho">39</span>°</span><span class="only-layers">境界層あり、<span data-stat="pin_fins_layers.cells">144,293</span> セル、<span data-stat="pin_fins_layers.seconds">2.7</span> 秒、目標の厚さ <span data-stat="pin_fins_layers.layerFull">93.4</span>%、最大非直交 <span data-stat="pin_fins_layers.nonOrtho">56</span>°</span>）</figcaption>
   </figure>
   <figure class="vfig">
     <a class="img only-plain" href="images/showcase_body_in_tunnel.png"><img src="images/showcase_body_in_tunnel.png" alt="風洞の中の物体の縦断面と、物体まわりの拡大" loading="lazy"></a>
     <a class="img only-layers" href="images/showcase_body_in_tunnel_layers.png"><img src="images/showcase_body_in_tunnel_layers.png" alt="風洞の中の物体の縦断面と、物体まわりの拡大（境界層あり）" loading="lazy"></a>
-    <figcaption><strong>body_in_tunnel</strong> — 風洞の中の鈍頭物体（丸めた先端、後端に 25° の傾斜、床からのすき間 0.05）。外部流れの例: 物体はレベル 4、床はレベル 1、風洞の側面と天井はレベル 0（<span class="only-plain"><span data-stat="body_in_tunnel.cells">92,311</span> セル、<span data-stat="body_in_tunnel.seconds">1.7</span> 秒、最大非直交 <span data-stat="body_in_tunnel.nonOrtho">58</span>°</span><span class="only-layers">境界層あり、<span data-stat="body_in_tunnel_layers.cells">154,852</span> セル、<span data-stat="body_in_tunnel_layers.seconds">3.3</span> 秒、目標の厚さ <span data-stat="body_in_tunnel_layers.layerFull">98.7</span>%、最大非直交 <span data-stat="body_in_tunnel_layers.nonOrtho">64</span>°</span>）</figcaption>
+    <figcaption><strong>body_in_tunnel</strong> — 風洞の中の鈍頭物体（丸めた先端、後端に 25° の傾斜、床からのすき間 0.05）。外部流れの例: 物体はレベル 4、床はレベル 1、風洞の側面と天井はレベル 0（<span class="only-plain"><span data-stat="body_in_tunnel.cells">92,311</span> セル、<span data-stat="body_in_tunnel.seconds">1.4</span> 秒、最大非直交 <span data-stat="body_in_tunnel.nonOrtho">58</span>°</span><span class="only-layers">境界層あり、<span data-stat="body_in_tunnel_layers.cells">154,852</span> セル、<span data-stat="body_in_tunnel_layers.seconds">2.8</span> 秒、目標の厚さ <span data-stat="body_in_tunnel_layers.layerFull">98.7</span>%、最大非直交 <span data-stat="body_in_tunnel_layers.nonOrtho">64</span>°</span>）</figcaption>
   </figure>
 </div>
 <details>

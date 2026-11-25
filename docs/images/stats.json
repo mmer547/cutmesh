@@ -1,56 +1,56 @@
 {
  "tank": {
   "cells": 102429,
-  "seconds": 1.3,
+  "seconds": 1.0,
   "nonOrtho": 61.7,
   "skew": 3.07
  },
  "cylindrical": {
   "cells": 137144,
-  "seconds": 6.3,
+  "seconds": 6.0,
   "nonOrtho": 53.8,
   "skew": 2.82
  },
  "layers": {
   "cells": 163629,
-  "seconds": 3.0,
+  "seconds": 2.6,
   "nonOrtho": 64.3,
   "skew": 3.55,
   "layerFull": 97.7
  },
  "stator_1mm": {
   "cells": 596154,
-  "seconds": 9.2,
+  "seconds": 7.3,
   "nonOrtho": 64.3,
   "skew": 4.97
  },
  "sphere": {
   "cells": 75612,
-  "seconds": 1.0,
+  "seconds": 0.8,
   "nonOrtho": 54.7,
   "skew": 2.37
  },
  "cube_rotated": {
   "cells": 53564,
-  "seconds": 1.0,
+  "seconds": 0.8,
   "nonOrtho": 64.6,
   "skew": 3.47
  },
  "torus": {
   "cells": 39008,
-  "seconds": 0.6,
+  "seconds": 0.5,
   "nonOrtho": 55.5,
   "skew": 2.44
  },
  "thin_channels": {
   "cells": 46244,
-  "seconds": 1.1,
+  "seconds": 1.0,
   "nonOrtho": 40.5,
   "skew": 2.88
  },
  "l_bracket": {
   "cells": 71439,
-  "seconds": 1.0,
+  "seconds": 0.8,
   "nonOrtho": 27.8,
   "skew": 0.33
  },
@@ -62,154 +62,154 @@
  },
  "helical_coil": {
   "cells": 98359,
-  "seconds": 1.9,
+  "seconds": 1.5,
   "nonOrtho": 62.1,
   "skew": 2.9
  },
  "venturi": {
   "cells": 24484,
-  "seconds": 0.7,
+  "seconds": 0.4,
   "nonOrtho": 57.9,
   "skew": 2.5
  },
  "orifice_pipe": {
   "cells": 19376,
-  "seconds": 0.5,
+  "seconds": 0.4,
   "nonOrtho": 57.9,
   "skew": 1.41
  },
  "backward_step": {
   "cells": 19440,
-  "seconds": 0.4,
+  "seconds": 0.3,
   "nonOrtho": 25.2,
   "skew": 0.33
  },
  "t_junction": {
   "cells": 15736,
-  "seconds": 0.4,
+  "seconds": 0.3,
   "nonOrtho": 25.2,
   "skew": 0.33
  },
  "pin_fins": {
   "cells": 63287,
-  "seconds": 1.6,
+  "seconds": 1.3,
   "nonOrtho": 39.2,
   "skew": 1.59
  },
  "body_in_tunnel": {
   "cells": 92311,
-  "seconds": 1.7,
+  "seconds": 1.4,
   "nonOrtho": 58.1,
   "skew": 1.61
  },
  "tank_layers": {
   "cells": 163629,
-  "seconds": 3.0,
+  "seconds": 2.6,
   "nonOrtho": 64.3,
   "skew": 3.55,
   "layerFull": 97.7
  },
  "cylindrical_layers": {
   "cells": 199076,
-  "seconds": 8.5,
+  "seconds": 7.9,
   "nonOrtho": 63.4,
   "skew": 3.46,
   "layerFull": 87.0
  },
  "sphere_layers": {
   "cells": 147636,
-  "seconds": 2.3,
+  "seconds": 2.1,
   "nonOrtho": 61.2,
   "skew": 1.97,
   "layerFull": 98.9
  },
  "cube_rotated_layers": {
   "cells": 112271,
-  "seconds": 2.7,
+  "seconds": 2.4,
   "nonOrtho": 64.9,
   "skew": 3.87,
   "layerFull": 92.5
  },
  "torus_layers": {
   "cells": 84596,
-  "seconds": 1.5,
+  "seconds": 1.4,
   "nonOrtho": 64.6,
   "skew": 2.43,
   "layerFull": 95.3
  },
  "thin_channels_layers": {
   "cells": 146819,
-  "seconds": 2.6,
+  "seconds": 2.5,
   "nonOrtho": 64.7,
   "skew": 3.34,
   "layerFull": 98.0
  },
  "l_bracket_layers": {
   "cells": 166617,
-  "seconds": 2.0,
+  "seconds": 1.8,
   "nonOrtho": 61.7,
   "skew": 2.77,
   "layerFull": 99.9
  },
  "pipe_elbow_layers": {
   "cells": 59363,
-  "seconds": 1.1,
+  "seconds": 1.0,
   "nonOrtho": 63.9,
   "skew": 2.17,
   "layerFull": 98.6
  },
  "helical_coil_layers": {
   "cells": 223504,
-  "seconds": 5.6,
+  "seconds": 4.7,
   "nonOrtho": 65.0,
   "skew": 3.37,
   "layerFull": 90.4
  },
  "venturi_layers": {
   "cells": 50311,
-  "seconds": 1.4,
+  "seconds": 1.2,
   "nonOrtho": 65.0,
   "skew": 2.45,
   "layerFull": 93.3
  },
  "orifice_pipe_layers": {
   "cells": 40781,
-  "seconds": 0.8,
+  "seconds": 0.7,
   "nonOrtho": 63.3,
   "skew": 2.65,
   "layerFull": 98.8
  },
  "backward_step_layers": {
   "cells": 40752,
-  "seconds": 0.7,
+  "seconds": 0.6,
   "nonOrtho": 40.2,
   "skew": 2.47,
   "layerFull": 100.0
  },
  "t_junction_layers": {
   "cells": 38392,
-  "seconds": 0.8,
+  "seconds": 0.6,
   "nonOrtho": 62.3,
   "skew": 2.47,
   "layerFull": 100.0
  },
  "pin_fins_layers": {
   "cells": 144293,
-  "seconds": 3.4,
+  "seconds": 2.7,
   "nonOrtho": 55.5,
   "skew": 2.4,
   "layerFull": 93.4
  },
  "body_in_tunnel_layers": {
   "cells": 154852,
-  "seconds": 3.3,
+  "seconds": 2.8,
   "nonOrtho": 64.3,
   "skew": 2.69,
   "layerFull": 98.7
  },
  "stator_1mm_layers": {
   "cells": 982245,
-  "seconds": 35.2,
+  "seconds": 33.7,
   "nonOrtho": 65.0,
   "skew": 5.07,
   "layerFull": 77.2

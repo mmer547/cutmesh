@@ -39,39 +39,63 @@ pub fn pair_faces<'py>(
     if k.len() != c.len() {
         return Err(pyo3::exceptions::PyValueError::new_err("one cell per face occurrence"));
     }
+    if k.len() >= u32::MAX as usize {
+        return Err(pyo3::exceptions::PyValueError::new_err("too many face occurrences"));
+    }
     let (io, iown, inei, bo, bown, nm) = py.detach(|| {
-        let mut srt: Vec<i64> = (0..k.len() as i64).filter(|&i| c[i as usize] >= 0).collect();
-        srt.par_sort_by_key(|&i| k[i as usize]);
-        let mut pairs: Vec<(i64, i64, i64)> = Vec::new(); // (occ, own, nei)
+        // (key, occurrence) sorted: the order of the stable sort by key.  Packed into one
+        // u64 where the keys fit in 32 bits (the memory of the index array it replaces).
+        let small = k.par_iter().all(|&x| (0..u32::MAX as i64).contains(&x));
+        let (packed, wide): (Vec<u64>, Vec<(i64, i64)>) = if small {
+            let mut v: Vec<u64> = (0..k.len()).filter(|&i| c[i] >= 0).map(|i| (k[i] as u64) << 32 | i as u64).collect();
+            v.par_sort_unstable();
+            (v, Vec::new())
+        } else {
+            let mut v: Vec<(i64, i64)> = (0..k.len()).filter(|&i| c[i] >= 0).map(|i| (k[i], i as i64)).collect();
+            v.par_sort_unstable();
+            (Vec::new(), v)
+        };
+        let len = if small { packed.len() } else { wide.len() };
+        let at = |j: usize| -> (i64, i64) {
+            if small {
+                let x = packed[j];
+                ((x >> 32) as i64, (x & 0xffff_ffff) as i64)
+            } else {
+                wide[j]
+            }
+        };
+        // (own, nei, position in key order, occurrence) sorted: the stable sort by (own, nei)
+        let mut pairs: Vec<(i64, i64, u32, u32)> = Vec::new();
         let (mut bo, mut bown) = (Vec::new(), Vec::new());
         let mut nm = 0usize;
         let mut s = 0;
-        while s < srt.len() {
-            let key = k[srt[s] as usize];
+        while s < len {
+            let (key, a1) = at(s);
             let mut e = s + 1;
-            while e < srt.len() && k[srt[e] as usize] == key {
+            while e < len && at(e).0 == key {
                 e += 1;
             }
             match e - s {
                 1 => {
-                    bo.push(srt[s]);
-                    bown.push(c[srt[s] as usize]);
+                    bo.push(a1);
+                    bown.push(c[a1 as usize]);
                 }
                 2 => {
-                    let (a1, a2) = (srt[s], srt[s + 1]);
+                    let a2 = at(s + 1).1;
                     let (c1, c2) = (c[a1 as usize], c[a2 as usize]);
                     if c1 != c2 {
-                        pairs.push((if c1 < c2 { a1 } else { a2 }, c1.min(c2), c1.max(c2)));
+                        pairs.push((c1.min(c2), c1.max(c2), pairs.len() as u32, (if c1 < c2 { a1 } else { a2 }) as u32));
                     }
                 }
                 _ => nm += 1,
             }
             s = e;
         }
-        pairs.par_sort_by_key(|p| (p.1, p.2));
-        let io: Vec<i64> = pairs.iter().map(|p| p.0).collect();
-        let iown: Vec<i64> = pairs.iter().map(|p| p.1).collect();
-        let inei: Vec<i64> = pairs.iter().map(|p| p.2).collect();
+        drop((packed, wide));
+        pairs.par_sort_unstable();
+        let io: Vec<i64> = pairs.par_iter().map(|p| p.3 as i64).collect();
+        let iown: Vec<i64> = pairs.par_iter().map(|p| p.0).collect();
+        let inei: Vec<i64> = pairs.par_iter().map(|p| p.1).collect();
         (io, iown, inei, bo, bown, nm)
     });
     Ok((io.into_pyarray(py), iown.into_pyarray(py), inei.into_pyarray(py), bo.into_pyarray(py), bown.into_pyarray(py), nm))

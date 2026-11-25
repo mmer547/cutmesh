@@ -40,6 +40,10 @@
 
 <h2 id="news">News</h2>
 <ul class="news">
+  <li><time datetime="2026-11-26">2026-11-26</time><span class="ver">v0.6.0</span>
+    <p><strong>Performance improvements, step 2.</strong> The remaining serial steps now run in parallel or in the Rust extension, with the same meshes as before. These include snapping, merging of small cut cells, the octree 2:1 balance and cell assembly, rotating-zone cuts, face pairing, and cell geometry.
+    On a real-world geometry with about 8.5 million cells, runtime fell from about 100 seconds to about 70 seconds, and peak memory stays at about 13 GB. The meshes of this geometry, the public benchmarks, and the examples were verified byte for byte.
+    The <a href="examples.html">example</a> timings were updated. The stirred tank went from 1.3 to 1.0 seconds and the 1 mm gap example from 9.2 to 7.3 seconds.</p></li>
   <li><time datetime="2026-11-23">2026-11-23</time><span class="ver">v0.5.1</span>
     <p><strong>Lower memory usage.</strong> Each stage now releases data it has finished using, including octree faces, intermediate cut results, search structures, and caches.
     Peak memory dropped from 30 GB to about 13 GB on a real-world geometry with about 8.5 million cells, and from 7.8 GB to 3.4 GB in the 0.5 mm gap example (about 2 million cells). Usage is about 1.5–2 GB per million cells.

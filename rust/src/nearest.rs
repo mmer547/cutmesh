@@ -32,7 +32,7 @@ pub fn nearest_kept<'py>(
     keep: PyReadonlyArray1<'py, bool>,
     q: PyReadonlyArray2<'py, f64>,
 ) -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<bool>>)> {
-    let p = crate::points(&points)?;
+    let p = crate::points_ref(&points)?;
     let q = crate::points(&q)?;
     let keep = keep.as_slice()?;
     if keep.len() != p.len() {

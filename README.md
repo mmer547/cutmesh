@@ -333,11 +333,11 @@ python -m unittest discover -s tests  # Rust と Python の結果の一致を確
 
 | 例題 | Python | Rust 拡張あり |
 |---|---|---|
-| examples/stirred_tank（`meshDict.json`、約 10 万セル） | 142 s | 1.3 s |
-| 同、境界層あり（`meshDict_layers.json`） | 148 s | 2.8 s |
-| 同、隙間 1 mm（`meshDict_stator_1mm.json`、約 60 万セル） | 2080 s（約 35 分） | 9.0 s |
+| examples/stirred_tank（`meshDict.json`、約 10 万セル） | 142 s | 1.0 s |
+| 同、境界層あり（`meshDict_layers.json`） | 148 s | 2.6 s |
+| 同、隙間 1 mm（`meshDict_stator_1mm.json`、約 60 万セル） | 2080 s（約 35 分） | 7.3 s |
 
-16 コアのマシン、v0.5.0（2026-11-22）、品質チェックを含む。約 850 万セルの実形状では約 95 秒（メモリ約 13 GB、v0.5.1）。
+16 コアのマシン、v0.6.0（2026-11-26）、品質チェックを含む。約 850 万セルの実形状では約 70 秒（メモリ約 13 GB）。
 
 ### 書き出し形式（`writeFormat`）
 

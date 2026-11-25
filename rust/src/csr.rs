@@ -44,6 +44,13 @@ pub(crate) type CsrOut<'py> = (
     Bound<'py, PyArray1<i64>>,
 );
 
+/// (item, side, face ptr, face ids, vertex ptr, vertices) as vectors
+pub(crate) type CsrVecs = (Vec<i64>, Vec<i64>, Vec<i64>, Vec<i64>, Vec<i64>, Vec<i64>);
+
+pub(crate) fn csr_out(py: Python<'_>, a: CsrVecs) -> CsrOut<'_> {
+    (a.0.into_pyarray(py), a.1.into_pyarray(py), a.2.into_pyarray(py), a.3.into_pyarray(py), a.4.into_pyarray(py), a.5.into_pyarray(py))
+}
+
 /// per cell (negative components, positive components) -> (item of each component,
 /// side 0 negative / 1 positive, face pointer, face ids, vertex pointer, vertices); the
 /// components of a cell are listed negative first, then positive, cells in order
@@ -52,69 +59,110 @@ pub(crate) fn write_results<'py>(
     res: Vec<(Vec<Vec<Face>>, Vec<Vec<Face>>)>,
     neg_only: bool,
 ) -> CsrOut<'py> {
-    // per cell: its components flattened (in parallel), then joined with offsets
-    struct Block {
-        side: Vec<i64>,
-        fcnt: Vec<i64>,
-        key: Vec<i64>,
-        vcnt: Vec<i64>,
-        verts: Vec<i64>,
+    let res = if neg_only { res.into_par_iter().map(|(n, _)| (n, Vec::new())).collect() } else { res };
+    let a = py.detach(|| write_results_mapped(res, |_, v| v, |_, f| f));
+    csr_out(py, a)
+}
+
+/// write_results with the vertex and face ids of cell c mapped by vmap(c, v), fmap(c, f):
+/// the sizes counted first, then every group of cells written to its place in parallel
+/// (no per-cell vectors), the cells' results freed as they are written
+pub(crate) fn write_results_mapped(
+    res: Vec<(Vec<Vec<Face>>, Vec<Vec<Face>>)>,
+    vmap: impl Fn(usize, i64) -> i64 + Sync,
+    fmap: impl Fn(usize, i64) -> i64 + Sync,
+) -> CsrVecs {
+    const G: usize = 1024;
+    let n = res.len();
+    // per group of cells: (components, faces, vertices)
+    let gcnt: Vec<(usize, usize, usize)> = res
+        .par_chunks(G)
+        .map(|cs| {
+            let mut t = (0, 0, 0);
+            for (neg, pos) in cs {
+                for comp in neg.iter().chain(pos.iter()) {
+                    t.0 += 1;
+                    t.1 += comp.len();
+                    t.2 += comp.iter().map(|f| f.1.len()).sum::<usize>();
+                }
+            }
+            t
+        })
+        .collect();
+    let (mut oc, mut of, mut ov) = (vec![0usize], vec![0usize], vec![0usize]);
+    for &(c, f, v) in &gcnt {
+        oc.push(oc.last().unwrap() + c);
+        of.push(of.last().unwrap() + f);
+        ov.push(ov.last().unwrap() + v);
     }
-    // consumed in parallel: the many small vectors are freed by the workers too
-    let blocks: Vec<Block> = py.detach(|| {
-        res.into_par_iter()
-            .map(|(negc, posc)| {
-                let mut b = Block { side: Vec::new(), fcnt: Vec::new(), key: Vec::new(), vcnt: Vec::new(), verts: Vec::new() };
-                let sides: [(&Vec<Vec<Face>>, i64); 2] = [(&negc, 0), (&posc, 1)];
-                for (comps, s) in sides {
-                    if s == 1 && neg_only {
-                        continue;
-                    }
-                    for comp in comps {
-                        b.side.push(s);
-                        b.fcnt.push(comp.len() as i64);
-                        for (fid, p) in comp {
-                            b.key.push(*fid);
-                            b.vcnt.push(p.len() as i64);
-                            b.verts.extend_from_slice(p);
+    let (nc, nf, nv) = (*oc.last().unwrap(), *of.last().unwrap(), *ov.last().unwrap());
+    let mut item = vec![0i64; nc];
+    let mut side = vec![0i64; nc];
+    let mut fptr = vec![0i64; nc + 1];
+    let mut key = vec![0i64; nf];
+    let mut vptr = vec![0i64; nf + 1];
+    let mut verts = vec![0i64; nv];
+    {
+        let sizes = |o: &Vec<usize>| -> Vec<usize> { o.windows(2).map(|w| w[1] - w[0]).collect() };
+        let (sc, sf, sv) = (sizes(&oc), sizes(&of), sizes(&ov));
+        let it = split(&mut item, &sc);
+        let sd = split(&mut side, &sc);
+        let fp = split(&mut fptr[1..], &sc);
+        let ky = split(&mut key, &sf);
+        let vp = split(&mut vptr[1..], &sf);
+        let vs = split(&mut verts, &sv);
+        // the groups' cells, moved out (each group frees its cells once written)
+        let mut groups: Vec<Vec<(Vec<Vec<Face>>, Vec<Vec<Face>>)>> = Vec::with_capacity(n.div_ceil(G));
+        let mut cells = res.into_iter();
+        loop {
+            let g: Vec<_> = cells.by_ref().take(G).collect();
+            if g.is_empty() {
+                break;
+            }
+            groups.push(g);
+        }
+        groups
+            .into_par_iter()
+            .zip(it)
+            .zip(sd)
+            .zip(fp)
+            .zip(ky)
+            .zip(vp)
+            .zip(vs)
+            .enumerate()
+            .for_each(|(g, ((((((cs, it), sd), fp), ky), vp), vs))| {
+                let (mut ic, mut jf, mut kv) = (0usize, 0usize, 0usize);
+                for (j, (neg, pos)) in cs.into_iter().enumerate() {
+                    let c = g * G + j;
+                    for (comps, s) in [(neg, 0i64), (pos, 1i64)] {
+                        for comp in comps {
+                            it[ic] = c as i64;
+                            sd[ic] = s;
+                            for (fid, p) in comp {
+                                ky[jf] = fmap(c, fid);
+                                for v in p {
+                                    vs[kv] = vmap(c, v);
+                                    kv += 1;
+                                }
+                                vp[jf] = (ov[g] + kv) as i64;
+                                jf += 1;
+                            }
+                            fp[ic] = (of[g] + jf) as i64;
+                            ic += 1;
                         }
                     }
                 }
-                b
-            })
-            .collect()
-    });
-    // joined in parallel (ordered collects), the offsets as running sums
-    let ptr = |cnt: Vec<i64>| -> Vec<i64> {
-        let mut p = Vec::with_capacity(cnt.len() + 1);
-        p.push(0i64);
-        let mut t = 0i64;
-        for c in cnt {
-            t += c;
-            p.push(t);
-        }
-        p
-    };
-    let (item, side, fptr, key, vptr, verts) = py.detach(|| {
-        let item: Vec<i64> = blocks
-            .par_iter()
-            .enumerate()
-            .flat_map_iter(|(k, b)| std::iter::repeat_n(k as i64, b.side.len()))
-            .collect();
-        let side: Vec<i64> = blocks.par_iter().flat_map_iter(|b| b.side.iter().copied()).collect();
-        let fptr = ptr(blocks.par_iter().flat_map_iter(|b| b.fcnt.iter().copied()).collect());
-        let key: Vec<i64> = blocks.par_iter().flat_map_iter(|b| b.key.iter().copied()).collect();
-        let vptr = ptr(blocks.par_iter().flat_map_iter(|b| b.vcnt.iter().copied()).collect());
-        let verts: Vec<i64> = blocks.par_iter().flat_map_iter(|b| b.verts.iter().copied()).collect();
-        blocks.into_par_iter().for_each(drop);
-        (item, side, fptr, key, vptr, verts)
-    });
-    (
-        item.into_pyarray(py),
-        side.into_pyarray(py),
-        fptr.into_pyarray(py),
-        key.into_pyarray(py),
-        vptr.into_pyarray(py),
-        verts.into_pyarray(py),
-    )
+            });
+    }
+    (item, side, fptr, key, vptr, verts)
+}
+
+fn split<'a>(mut s: &'a mut [i64], sizes: &[usize]) -> Vec<&'a mut [i64]> {
+    let mut out = Vec::with_capacity(sizes.len());
+    for &k in sizes {
+        let (a, b) = std::mem::take(&mut s).split_at_mut(k);
+        out.push(a);
+        s = b;
+    }
+    out
 }

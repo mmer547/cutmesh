@@ -476,8 +476,11 @@ def _leaf_bad_py(P, leaves, fptr, fverts, cptr, csize, flat_at=None, flat_angle=
     return (np.bincount(owner_, badf.astype(int), len(leaves)) > 0) | (vv <= 0)
 
 
-def _tets_ok(P, faces, cf, cc, vmin):
+def _tets_ok(P, faces, cf, cc, vmin, use_rs=True):
     """every (face centre, edge, cell centre) tet has a volume above vmin"""
+    if use_rs and _core is not None and hasattr(_core, "tets_ok") and len(faces):
+        return _core.tets_ok(P, [p for _, p in faces], np.ascontiguousarray(cf, float),
+                             np.asarray(cc, float).tolist(), float(vmin))
     for (_, p), c in zip(faces, cf):
         Q = P[p]
         t = np.cross(np.roll(Q, -1, 0) - Q, c - Q) @ (c - cc) / 6.0
@@ -874,6 +877,47 @@ def _unique_points(p):
     keep = np.ones(len(p), bool)
     keep[1:] = (bs[1:] != bs[:-1]).any(1)
     return p[o[keep]]
+
+
+def _hang_follow(pts, idx, par, use_rs=True):
+    """hanging vertices idx to the centres of their parents par (face: the four corners,
+    edge: par[:, 2] == par[:, 0]), in place; returns where they moved"""
+    if (use_rs and _core is not None and hasattr(_core, "hang_follow") and pts.flags.c_contiguous
+            and pts.dtype == np.float64 and par.shape[1:] == (4,) and (par >= 0).all()):
+        return _core.hang_follow(pts, np.ascontiguousarray(idx, np.int64), np.ascontiguousarray(par, np.int64))
+    isface = par[:, 2] != par[:, 0]
+    newx = np.where(isface[:, None], pts[par].mean(1), 0.5 * (pts[par[:, 0]] + pts[par[:, 1]]))
+    ch = np.linalg.norm(newx - pts[idx], axis=1) > 0
+    pts[idx] = newx
+    return ch
+
+
+def _side_width(dom, p, hk, side, use_rs=True):
+    """Thickness of the fluid (side -1) / solid (side 1) at the points p (cell sizes hk),
+    from the nearest wall through the point to the opposite wall if within 1.5 cells
+    (else inf).  Only for the points off the wall (mask off); returns (off, nearest wall
+    point, direction away from it, width) for those."""
+    rs = getattr(dom, "_rs", None) if use_rs else None
+    if rs is not None and hasattr(rs, "side_width"):
+        off, cpk, dirk, width = rs.side_width(np.ascontiguousarray(p, float), np.ascontiguousarray(hk, float),
+                                              np.linspace(0.05, 1.5, 30).tolist(), side < 0)
+        return off, cpk[off], dirk[off], width[off]
+    cpk, dk, _ = dom.closest(p)
+    # points already on the wall (phi a rounding error off zero) carry nothing and give
+    # no direction
+    off = dk > 0.01 * hk
+    p, cpk, dk, hk = p[off], cpk[off], dk[off], hk[off]
+    dirk = (p - cpk) / np.maximum(dk, 1e-300)[:, None]
+    width = np.full(len(p), np.inf)
+    for t in np.linspace(0.05, 1.5, 30):
+        # only the points still without a width are tested (inside() is per point)
+        u = np.flatnonzero(np.isinf(width))
+        if not len(u):
+            break
+        q = cpk[u] + (t * hk[u])[:, None] * dirk[u]
+        hit = dom.inside(q) != (side < 0)
+        width[u[hit]] = t * hk[u[hit]]
+    return off, cpk, dirk, width
 
 
 def _nearest_in(pts, keep, q, cache=None):
@@ -2049,9 +2093,13 @@ def generate(cfg, log=print):
                                          M["fverts"], M["cell_fptr"])
     fn = np.diff(fptr)
     cvol = M["cell_volume"]
-    vh_min = np.full(len(pts), np.inf); vh_max = np.zeros(len(pts))
-    np.minimum.at(vh_min, cvid.ravel(), np.repeat(csize, 8))
-    np.maximum.at(vh_max, cvid.ravel(), np.repeat(csize, 8))
+    if _core is not None and hasattr(_core, "corner_minmax"):
+        vh_min, vh_max = _core.corner_minmax(len(pts), np.ascontiguousarray(cvid, np.int64),
+                                             np.ascontiguousarray(csize, float))
+    else:
+        vh_min = np.full(len(pts), np.inf); vh_max = np.zeros(len(pts))
+        np.minimum.at(vh_min, cvid.ravel(), np.repeat(csize, 8))
+        np.maximum.at(vh_max, cvid.ravel(), np.repeat(csize, 8))
     lone = ~np.isfinite(vh_min)       # not a cell corner (vertices added at block interfaces)
     if lone.any():
         fc_ = np.repeat(csize[f_cell], fn)
@@ -2076,12 +2124,18 @@ def generate(cfg, log=print):
         pv = phi[fverts]
         return tuple(np.add.reduceat(m.astype(np.int32), fptr[:-1]) for m in (pv < 0, pv > 0, pv == 0))
 
+    def cell_any(m):
+        """per leaf: some of its faces in the face mask m"""
+        if _core is not None and hasattr(_core, "seg_any"):
+            return _core.seg_any(np.ascontiguousarray(m, bool), np.ascontiguousarray(cptr, np.int64))
+        return np.logical_or.reduceat(m, cptr[:-1])
+
     def classify_leaves(phi, leaves, signs=None):
         """-1 all vertices <= 0, +1 all >= 0 (and some > 0), 0 straddling.  signs:
         face_signs(phi) if known."""
         nneg, npos, _ = face_signs(phi) if signs is None else signs
-        cn = np.logical_or.reduceat(nneg > 0, cptr[:-1])[leaves]
-        cp_ = np.logical_or.reduceat(npos > 0, cptr[:-1])[leaves]
+        cn = cell_any(nneg > 0)[leaves]
+        cp_ = cell_any(npos > 0)[leaves]
         return np.where(~cp_, -1, np.where(~cn, 1, 0))
 
     # ------------------------------------------------------------ level sets + snapping
@@ -2114,6 +2168,13 @@ def generate(cfg, log=print):
             return _core.leaf_any(np.ascontiguousarray(m, bool), leaf_vptr_full, fverts)
         return np.logical_or.reduceat(m[fverts], leaf_vptr)
 
+    def leaf_lost(a, b, c):
+        """leaf_any(a) & ~leaf_any(b) & leaf_any(c)"""
+        if _core is not None and hasattr(_core, "leaf_lost"):
+            return _core.leaf_lost(np.ascontiguousarray(a, bool), np.ascontiguousarray(b, bool),
+                                   np.ascontiguousarray(c, bool), leaf_vptr_full, fverts)
+        return leaf_any(a) & ~leaf_any(b) & leaf_any(c)
+
     def leaf_verts(lost, vmask=None):
         """the vertices of the leaves in lost (those in vmask), sorted, once each"""
         if _core is not None and hasattr(_core, "leaf_vertices"):
@@ -2123,27 +2184,10 @@ def generate(cfg, log=print):
         return unique(v if vmask is None else v[vmask[v]])
 
     def side_width(kv, side):
-        """Thickness of the fluid (side -1) / solid (side 1) at the vertices kv, from the
-        nearest wall through the vertex to the opposite wall if within 1.5 cells (else inf).
-        Only for the vertices off the wall (mask off); returns (off, nearest wall point,
-        direction away from it, width) for those."""
-        cpk, dk, _ = dom.closest(pts[kv])
-        # vertices already on the wall (phi a rounding error off zero) carry nothing and
-        # give no direction
-        off = dk > 0.01 * vh_min[kv]
-        kv, cpk, dk = kv[off], cpk[off], dk[off]
-        dirk = (pts[kv] - cpk) / np.maximum(dk, 1e-300)[:, None]
-        width = np.full(len(kv), np.inf)
-        hk = vh_min[kv]
-        for t in np.linspace(0.05, 1.5, 30):
-            # only the vertices still without a width are tested (inside() is per point)
-            u = np.flatnonzero(np.isinf(width))
-            if not len(u):
-                break
-            q = cpk[u] + (t * hk[u])[:, None] * dirk[u]
-            hit = dom.inside(q) != (side < 0)
-            width[u[hit]] = t * hk[u[hit]]
-        return off, cpk, dirk, width
+        """the thickness of the fluid (side -1) / solid (side 1) at the vertices kv
+        (_side_width); returns (off, nearest wall point, direction, width) for the
+        vertices off the wall"""
+        return _side_width(dom, pts[kv], vh_min[kv], side)
 
     near_cache = []       # _nearest_in answers, shared by the snapping attempts
 
@@ -2191,9 +2235,10 @@ def generate(cfg, log=print):
             ok = d < lim[sel]
             if ok.any():
                 dn, _ = cKDTree(pts[sel[ok]]).query(cp[ok])       # nearest solid candidate
-                d0, _ = _nearest_in(np.concatenate([pts, c_X]),               # a vertex there already
-                                    np.concatenate([np.abs(phi) < hmin, np.ones(len(c_X), bool)]), cp[ok],
-                                    near_cache)
+                # a vertex there already (or a corner snap of this pass): the nearer of the two
+                d0, _ = _nearest_in(pts, np.abs(phi) < hmin, cp[ok], near_cache)
+                if len(c_X):
+                    d0 = np.minimum(d0, cKDTree(c_X).query(cp[ok])[0])
                 ok[ok] = (d[ok] <= dn * (1 + 1e-9)) & (d0 > 1e-6 * hmin)
             sel, cp, d = sel[ok], cp[ok], d[ok]
             _, first = np.unique(np.round(cp / (1e-6 * hmin)).astype(np.int64), axis=0, return_index=True)
@@ -2206,7 +2251,7 @@ def generate(cfg, log=print):
             # or fin narrower than ~1.5 cells) would vanish there.  Those are not snapped.
             gone = (phi0 > 0) & (phi <= 0)
             gone[sel] = True
-            lost = leaf_any(gone) & ~leaf_any((phi0 > 0) & ~gone) & leaf_any(phi0 < 0)
+            lost = leaf_lost(gone, (phi0 > 0) & ~gone, phi0 < 0)
             nthin = 0
             if lost.any():
                 at = np.isin(sel, leaf_verts(lost))
@@ -2229,6 +2274,11 @@ def generate(cfg, log=print):
     # broken cells and the stage is repeated.
     pts0 = pts.copy(); phi_d0 = phi_d.copy()
     hp2 = np.where(hanging[:, None], hang_par, -1)
+    # the hanging vertices by constraint size, coarsest first (ascending ids within a size)
+    h_idx = np.flatnonzero(hanging)
+    h_idx = h_idx[np.argsort(-hang_size[h_idx], kind="stable")]
+    h_lev = np.flatnonzero(np.diff(hang_size[h_idx])) + 1
+    h_lev = np.concatenate([[0], h_lev, [len(h_idx)]]).tolist() if len(h_idx) else [0]
     for attempt in range(5):
         if attempt:
             pts[:] = pts0; phi_d = phi_d0.copy()
@@ -2244,7 +2294,7 @@ def generate(cfg, log=print):
         for side, label in ((-1.0, "fluid vertices to the middle of thin gaps"),
                             (1.0, "solid vertices to the middle of thin walls")):
             on = side * phi_d > 0
-            lost = leaf_any(on) & ~leaf_any(on & ~snap) & leaf_any(-side * phi_d > 0)
+            lost = leaf_lost(on, on & ~snap, -side * phi_d > 0)
             if not lost.any():
                 continue
             kv = leaf_verts(lost, on)
@@ -2340,33 +2390,46 @@ def generate(cfg, log=print):
         geoms = [(dom, phi_d, None)] + [(z["geom"], phi_z[i], i) for i, z in enumerate(zones)
                                          if z["conforming"]]
         nslide = nvirt = nfree = 0
-        for hsz in sorted(set(hang_size[hanging].tolist()), reverse=True):
-            idx = np.nonzero(hanging & (hang_size == hsz))[0]
+        for l0, l1 in zip(h_lev[:-1], h_lev[1:]):
+            idx = h_idx[l0:l1]
             par = hang_par[idx]
             isface = par[:, 2] != par[:, 0]
-            newx = np.where(isface[:, None], pts[par].mean(1), 0.5 * (pts[par[:, 0]] + pts[par[:, 1]]))
-            ch = np.linalg.norm(newx - pts[idx], axis=1) > 0
-            pts[idx] = newx
+            # to the face centres / edge midpoints
+            ch = _hang_follow(pts, idx, par)
             ci = idx[ch]
             if len(ci):
                 phi_d[ci] = dom.sdf(pts[ci])
                 for i, z in enumerate(zones):
                     phi_z[i][ci] = z["geom"].sdf(pts[ci])
-            # constraint basis
-            A = pts[par[:, 1]] - pts[par[:, 0]]
-            B = np.where(isface[:, None], pts[par[:, 2]] - pts[par[:, 1]], 0.0)  # other direction
+            # constraint basis, for the vertices that may slide only (near a surface, not
+            # snapped: the loop below snaps or zeroes the level set of each it treats, so no
+            # vertex joins this set during it)
+            tv = tol_v[idx]
+            cand = np.zeros(len(idx), bool)
+            for geom, phi, zi in geoms:
+                ph_ = phi[idx]
+                cand |= (np.abs(ph_) < tv) & (ph_ != 0)
+            cand &= ~snapped[idx]
+            cr = np.flatnonzero(cand)
+            pos = np.full(len(idx), -1)
+            pos[cr] = np.arange(len(cr))
+            pc, fc = par[cr], isface[cr]
+            A = pts[pc[:, 1]] - pts[pc[:, 0]]
+            B = np.where(fc[:, None], pts[pc[:, 2]] - pts[pc[:, 1]], 0.0)  # other direction
             e1 = A / np.maximum(np.linalg.norm(A, axis=1), 1e-300)[:, None]
             B = B - (B * e1).sum(1)[:, None] * e1
             nb = np.linalg.norm(B, axis=1)
             e2 = np.where((nb > 1e-12 * h0)[:, None], B / np.maximum(nb, 1e-300)[:, None], 0.0)
             for geom, phi, zi in geoms:
                 excl = snapped[idx] | ((phi_d[idx] == 0) if zi is not None else False)
-                sel = np.nonzero(~excl & (np.abs(phi[idx]) < tol_v[idx]) & (phi[idx] != 0))[0]
+                sel = np.nonzero(~excl & (np.abs(phi[idx]) < tv) & (phi[idx] != 0))[0]
                 if len(sel) == 0:
                     continue
                 j = idx[sel]
                 x = pts[j].copy(); ph = phi[j].copy()
-                E1, E2 = e1[sel], e2[sel]
+                ps = pos[sel]
+                assert (ps >= 0).all()
+                E1, E2 = e1[ps], e2[ps]
                 ok = np.ones(len(j), bool)
                 for _ in range(4):
                     cp, d, _ = geom.closest(x)
@@ -2478,7 +2541,7 @@ def generate(cfg, log=print):
         # along the chord through the edge vertex and the cell drops the wedge (below).
         zc = signs_d[2]
         fz = (zc >= 3) | (zc == fn)
-        cz = np.maximum.reduceat(fz.astype(np.int8), cptr[:-1]) > 0
+        cz = cell_any(fz)
         cand_b = np.nonzero(cz & bulk_alive)[0]
         if len(cand_b):
             cen = _leaf_centres(pts, cand_b, cptr, fptr, fverts)
@@ -2490,8 +2553,8 @@ def generate(cfg, log=print):
     fneg = signs_d[0] > 0
     fpos = signs_d[1] > 0
     f_sc = (fz == fn) | ((fz >= 2) & fneg & fpos)
-    c_sc = np.logical_or.reduceat(f_sc, cptr[:-1])
-    c_cs = np.logical_or.reduceat(~fpos & fneg & (fz >= 3), cptr[:-1])
+    c_sc = cell_any(f_sc)
+    c_cs = cell_any(~fpos & fneg & (fz >= 3))
     del fz, fneg, fpos, signs_d
     ctx.zero_edge, drop = surface_contact(dom, pts, phi_d, [c for c in cl + cb if c_sc[c]], leaf_faces, csize,
                                           face_ok=lambda ci: f_sc[cptr[ci]:cptr[ci + 1]].tolist(),
@@ -3054,7 +3117,17 @@ def generate(cfg, log=print):
     log(f"merged {merged} cut cells ({nsmall} small < {beta:g} of hex volume,"
         f" {len(small) - nsmall} non-convex); {rejected} left as they are"
         f" (no merge partner keeps the cell valid)")
-    proot = np.array([find(i) for i in range(nP)], np.int64)
+    # the root of every piece (find for all: parents followed until they stay)
+    par_a = np.asarray(parent, np.int64)
+    proot = par_a.copy()
+    while True:
+        inn = np.flatnonzero(proot < nP)
+        nxt = par_a[proot[inn]]
+        chg = nxt != proot[inn]
+        if not chg.any():
+            break
+        proot[inn[chg]] = nxt[chg]
+    del par_a
 
     # ------------------------------------------------------------ invalid wall slivers
     # Small cells left unmerged whose face triangles do not all see the centre (e.g. a
@@ -3150,6 +3223,9 @@ def generate(cfg, log=print):
 
     def gather(occs):
         n_ = o_n[occs]
+        if _core is not None and hasattr(_core, "take_ranges"):
+            lo = np.ascontiguousarray(o_ptr[occs], np.int64)
+            return n_, _core.take_ranges(np.ascontiguousarray(o_verts, np.int64), lo, lo + n_)
         off = np.repeat(o_ptr[occs] - np.concatenate([[0], np.cumsum(n_)[:-1]]), n_)
         return n_, o_verts[np.arange(int(n_.sum())) + off]
 
@@ -3259,7 +3335,8 @@ def generate(cfg, log=print):
     if cfg["checkLeaks"]:
         # fluid joined through a solid wall (thinner than the cells there) breaks the
         # simulation: report it loudly
-        nw, Xw = diagnose.through_wall(dom, Pout, faces, owner, neighbour)
+        geom = dict(points=Pout, faces=faces, owner=owner, neighbour=neighbour)
+        nw, Xw = diagnose.through_wall(dom, Pout, faces, owner, neighbour, geom=geom)
         if nw:
             log(f"WARNING: leak check: {nw} cell-to-face lines cross a solid wall (fluid on both"
                 f" sides joined; refine there), e.g. at " + ", ".join(
@@ -3267,9 +3344,11 @@ def generate(cfg, log=print):
         else:
             log("leak check: no fluid connection through a solid wall")
         T("leak check")
+    else:
+        geom = None
     return dict(points=Pout, faces=faces, owner=owner, neighbour=neighbour, patches=patches,
                 cell_zones=cell_zones, face_zones=face_zones, zones=zones, timer=T,
-                cell_zone=cell_zone, leaves=leaves_total)
+                cell_zone=cell_zone, leaves=leaves_total, geometry=geom)
 
 
 def _n_cells(R):
@@ -3341,8 +3420,13 @@ def run(config_path, case_dir=None, log=print, check=True):
             log(f"sliding mesh (openfoam.org): after reading the mesh run {hint}")
     T("write polyMesh")
     if check:
-        R["quality"] = quality.check(R["points"], ff, R["owner"], R["neighbour"], log=log)
+        # the leak check's face and cell geometry, if the mesh is still the one it saw
+        g = R.get("geometry")
+        same = g is not None and "C" in g and all(R[k] is g[k] for k in ("points", "faces", "owner", "neighbour"))
+        R["quality"] = quality.check(R["points"], ff, R["owner"], R["neighbour"], log=log,
+                                     geom=(g["Cf"], g["Sf"], g["C"], g["V"]) if same else None)
         T("quality check")
+    R.pop("geometry", None)              # (memory)
     nC = _n_cells(R)
     log(f"total {time.time() - T.t0:.1f}s, {nC} cells")
     return R
