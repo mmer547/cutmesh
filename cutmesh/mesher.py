@@ -2093,9 +2093,13 @@ def generate(cfg, log=print):
                                          M["fverts"], M["cell_fptr"])
     fn = np.diff(fptr)
     cvol = M["cell_volume"]
-    vh_min = np.full(len(pts), np.inf); vh_max = np.zeros(len(pts))
-    np.minimum.at(vh_min, cvid.ravel(), np.repeat(csize, 8))
-    np.maximum.at(vh_max, cvid.ravel(), np.repeat(csize, 8))
+    if _core is not None and hasattr(_core, "corner_minmax"):
+        vh_min, vh_max = _core.corner_minmax(len(pts), np.ascontiguousarray(cvid, np.int64),
+                                             np.ascontiguousarray(csize, float))
+    else:
+        vh_min = np.full(len(pts), np.inf); vh_max = np.zeros(len(pts))
+        np.minimum.at(vh_min, cvid.ravel(), np.repeat(csize, 8))
+        np.maximum.at(vh_max, cvid.ravel(), np.repeat(csize, 8))
     lone = ~np.isfinite(vh_min)       # not a cell corner (vertices added at block interfaces)
     if lone.any():
         fc_ = np.repeat(csize[f_cell], fn)

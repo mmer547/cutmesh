@@ -83,6 +83,9 @@ struct Verts {
     nfine: I3,
     periodic: [bool; 3],
     ukeys: Vec<i64>,
+    // ukeys[bstart[k >> shift]..bstart[(k >> shift) + 1]] holds key k if present
+    bstart: Vec<u32>,
+    shift: u32,
 }
 
 impl Verts {
@@ -94,7 +97,39 @@ impl Verts {
         }
         (x[0].wrapping_mul(self.nv[1]).wrapping_add(x[1])).wrapping_mul(self.nv[2]).wrapping_add(x[2])
     }
+    /// the bucket table of ukeys (sorted, non-negative): about one key per bucket
+    fn index(&mut self) {
+        let (n, top) = (self.ukeys.len(), self.ukeys.last().copied().unwrap_or(0));
+        if n == 0 || self.ukeys[0] < 0 || n >= u32::MAX as usize {
+            return;
+        }
+        let mut shift = 0u32;
+        while (top >> shift) as usize > 2 * n {
+            shift += 1;
+        }
+        let nb = (top >> shift) as usize + 2;
+        let mut st = vec![0u32; nb];
+        for &k in &self.ukeys {
+            st[(k >> shift) as usize + 1] += 1;
+        }
+        for i in 1..nb {
+            st[i] += st[i - 1];
+        }
+        self.bstart = st;
+        self.shift = shift;
+    }
     fn vid_key(&self, k: i64) -> i64 {
+        if !self.bstart.is_empty() {
+            let b = k >> self.shift;
+            if k < 0 || b as usize + 1 >= self.bstart.len() {
+                return -1;
+            }
+            let (lo, hi) = (self.bstart[b as usize] as usize, self.bstart[b as usize + 1] as usize);
+            return match self.ukeys[lo..hi].binary_search(&k) {
+                Ok(p) => (lo + p) as i64,
+                Err(_) => -1,
+            };
+        }
         match self.ukeys.binary_search(&k) {
             Ok(p) => p as i64,
             Err(_) => -1,
@@ -144,9 +179,9 @@ pub fn build_cells<'py>(
     let nl = lev.len();
     let r = py.detach(|| build(&ijk, &lev, n, lmax, periodic));
     let nv = r.ukeys.len();
-    let hp = numpy::ndarray::Array2::from_shape_vec((nv, 4), r.hang_par.into_iter().flatten().collect()).unwrap();
-    let lat = numpy::ndarray::Array2::from_shape_vec((nv, 3), r.lat.into_iter().flatten().collect()).unwrap();
-    let cvid = numpy::ndarray::Array2::from_shape_vec((nl, 8), r.corner_vid.into_iter().flatten().collect()).unwrap();
+    let hp = numpy::ndarray::Array2::from_shape_vec((nv, 4), r.hang_par.into_flattened()).unwrap();
+    let lat = numpy::ndarray::Array2::from_shape_vec((nv, 3), r.lat.into_flattened()).unwrap();
+    let cvid = numpy::ndarray::Array2::from_shape_vec((nl, 8), r.corner_vid.into_flattened()).unwrap();
     Ok((
         lat.into_pyarray(py),
         r.hanging.into_pyarray(py),
@@ -189,17 +224,17 @@ fn build(ijk: &[I3], lev: &[u32], n: I3, lmax: u32, periodic: [bool; 3]) -> Res 
     };
     let nfine = tree.ncell(lmax);
     let nvx = [nfine[0] + 1, nfine[1] + 1, nfine[2] + 1];
-    let mut vt = Verts { nv: nvx, nfine, periodic, ukeys: Vec::new() };
-    let ck: Vec<i64> = (0..nl)
-        .into_par_iter()
-        .flat_map_iter(|i| {
-            let b = base(i);
-            let s = size(i);
-            let vt = &vt;
-            CHILD.iter().map(move |c| vt.vkey([b[0] + c[0] * s, b[1] + c[1] * s, b[2] + c[2] * s]))
-        })
-        .collect();
+    let mut vt = Verts { nv: nvx, nfine, periodic, ukeys: Vec::new(), bstart: Vec::new(), shift: 0 };
+    let mut ck: Vec<i64> = vec![0; 8 * nl];
+    ck.par_chunks_mut(8).enumerate().for_each(|(i, o)| {
+        let b = base(i);
+        let s = size(i);
+        for (j, c) in CHILD.iter().enumerate() {
+            o[j] = vt.vkey([b[0] + c[0] * s, b[1] + c[1] * s, b[2] + c[2] * s]);
+        }
+    });
     vt.ukeys = par_unique(ck);
+    vt.index();
     let vt = vt;
     let nv = vt.ukeys.len();
     let (n1, n2) = (nvx[1], nvx[2]);
@@ -231,10 +266,14 @@ fn build(ijk: &[I3], lev: &[u32], n: I3, lmax: u32, periodic: [bool; 3]) -> Res 
             }
         }
     }
-    let cands: Vec<(i64, i64, [i64; 4])> = (0..nl)
-        .into_par_iter()
-        .filter(|&i| size(i) >= 2)
-        .flat_map_iter(|i| {
+    let leaf_ids: Vec<usize> = (0..nl).collect();
+    let cands: Vec<Vec<(i64, i64, [i64; 4])>> = leaf_ids
+        .par_chunks(8192)
+        .map(|ch| {
+            ch.iter()
+                .copied()
+                .filter(|&i| size(i) >= 2)
+                .flat_map(|i| {
             let hb = base(i);
             let hs = size(i);
             let h2 = hs / 2;
@@ -259,12 +298,14 @@ fn build(ijk: &[I3], lev: &[u32], n: I3, lmax: u32, periodic: [bool; 3]) -> Res 
                 };
                 Some((hv, hs, p))
             })
+                })
+                .collect()
         })
         .collect();
     let mut hanging = vec![false; nv];
     let mut hang_par = vec![[-1i64; 4]; nv];
     let mut hang_size = vec![0i64; nv];
-    for (hv, hs, p) in cands {
+    for (hv, hs, p) in cands.into_iter().flatten() {
         let v = hv as usize;
         hanging[v] = true;
         if hs > hang_size[v] {
@@ -323,8 +364,7 @@ fn build(ijk: &[I3], lev: &[u32], n: I3, lmax: u32, periodic: [bool; 3]) -> Res 
     let span = (1i64 << lmax) + 1;
     // identity key and polygon (corners interleaved with existing mid-edge vertices) of
     // each square, for chunks of cells in parallel
-    let chunks: Vec<(Vec<i64>, Vec<i64>, Vec<i64>)> = (0..nl)
-        .collect::<Vec<usize>>()
+    let chunks: Vec<(Vec<i64>, Vec<i64>, Vec<i64>)> = leaf_ids
         .par_chunks(16384)
         .map(|cells| {
             let mut idk = Vec::new();
@@ -367,26 +407,45 @@ fn build(ijk: &[I3], lev: &[u32], n: I3, lmax: u32, periodic: [bool; 3]) -> Res 
             (idk, fsz, fv)
         })
         .collect();
-    let mut idk: Vec<i64> = Vec::with_capacity(nf);
-    let mut fptr = Vec::with_capacity(nf + 1);
-    fptr.push(0i64);
+    // the chunks one after the other, each written to its place in parallel
     let nfv: usize = chunks.iter().map(|c| c.2.len()).sum();
-    let mut fverts = Vec::with_capacity(nfv);
-    for (k, s, v) in chunks {
-        idk.extend_from_slice(&k);
-        for x in s {
-            fptr.push(fptr.last().unwrap() + x);
-        }
-        fverts.extend_from_slice(&v);
+    let voff = offsets(&chunks.iter().map(|c| c.2.len()).collect::<Vec<usize>>());
+    let mut idk: Vec<i64> = vec![0; nf];
+    let mut fptr: Vec<i64> = vec![0; nf + 1];
+    let mut fverts: Vec<i64> = vec![0; nfv];
+    {
+        let ik = split_by(&mut idk, chunks.iter().map(|c| c.0.len()));
+        let fp = split_by(&mut fptr[1..], chunks.iter().map(|c| c.1.len()));
+        let fvs = split_by(&mut fverts, chunks.iter().map(|c| c.2.len()));
+        chunks.par_iter().zip(ik).zip(fp).zip(fvs).enumerate().for_each(|(c, ((((k, sz, v), ik), fp), fvs))| {
+            ik.copy_from_slice(k);
+            fvs.copy_from_slice(v);
+            let mut t = voff[c] as i64;
+            for (o, &x) in fp.iter_mut().zip(sz) {
+                t += x;
+                *o = t;
+            }
+        });
     }
+    drop(chunks);
     let ukey = par_unique(idk.clone());
-    let face_key: Vec<i64> = idk.par_iter().map(|k| ukey.binary_search(k).unwrap() as i64).collect();
+    let mut kt = Verts { nv: nvx, nfine, periodic, ukeys: ukey, bstart: Vec::new(), shift: 0 };
+    kt.index();
+    let face_key: Vec<i64> = idk.par_iter().map(|&k| kt.vid_key(k)).collect();
     drop(idk);
-    drop(ukey);
-    let face_cell: Vec<i64> = (0..nl)
-        .into_par_iter()
-        .flat_map_iter(|i| std::iter::repeat(i as i64).take((cell_fptr[i + 1] - cell_fptr[i]) as usize))
-        .collect();
+    drop(kt);
+    let mut face_cell: Vec<i64> = vec![0; nf];
+    {
+        const G: usize = 16384;
+        let groups: Vec<usize> = (0..nl).step_by(G).collect();
+        let parts = split_by(&mut face_cell, groups.iter().map(|&g| (cell_fptr[(g + G).min(nl)] - cell_fptr[g]) as usize));
+        parts.into_par_iter().zip(groups).for_each(|(o, g)| {
+            for i in g..(g + G).min(nl) {
+                let (a, b) = ((cell_fptr[i] - cell_fptr[g]) as usize, (cell_fptr[i + 1] - cell_fptr[g]) as usize);
+                o[a..b].fill(i as i64);
+            }
+        });
+    }
     Res {
         ukeys: vt.ukeys,
         lat,

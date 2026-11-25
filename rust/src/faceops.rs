@@ -73,6 +73,39 @@ pub fn vertex_min<'py>(
     Ok(out.into_pyarray(py))
 }
 
+/// (np.minimum.at(full(n, inf), corners, repeat(size, 8)), the same with np.maximum.at
+/// on zeros): the smallest and largest size of the leaves at each vertex
+#[pyfunction]
+pub fn corner_minmax<'py>(
+    py: Python<'py>,
+    n: usize,
+    corners: numpy::PyReadonlyArray2<'py, i64>,
+    size: PyReadonlyArray1<'py, f64>,
+) -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>)> {
+    let (c, h) = (corners.as_slice()?, size.as_slice()?);
+    let k = corners.as_array().ncols();
+    if c.len() != k * h.len() || c.par_iter().any(|&v| v < 0 || v as usize >= n) {
+        return Err(pyo3::exceptions::PyValueError::new_err("inconsistent corner arrays"));
+    }
+    let mut lo = vec![f64::INFINITY; n];
+    let mut hi = vec![0.0f64; n];
+    py.detach(|| {
+        for (i, &x) in h.iter().enumerate() {
+            for &v in &c[k * i..k * (i + 1)] {
+                let v = v as usize;
+                // np.minimum / np.maximum: a NaN wins
+                if x < lo[v] || x.is_nan() {
+                    lo[v] = x;
+                }
+                if x > hi[v] || x.is_nan() {
+                    hi[v] = x;
+                }
+            }
+        }
+    });
+    Ok((lo.into_pyarray(py), hi.into_pyarray(py)))
+}
+
 /// per leaf: the OR of flag(v) over the vertex occurrences of its faces
 /// (vptr[i]..vptr[i+1] the leaf's occurrences, all non-empty); one read of fverts, the
 /// vertex ids checked as they are read (an id >= n or < 0: an error)

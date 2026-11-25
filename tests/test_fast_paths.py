@@ -1097,6 +1097,20 @@ class RustArgsort(unittest.TestCase):
             np.testing.assert_array_equal(geometry._core.argsort_stable(a), np.argsort(a, kind="stable"))
 
 
+class RustCornerMinMax(unittest.TestCase):
+    def test_same_as_numpy(self):
+        rng = np.random.default_rng(3)
+        for n, m in ((5, 1), (1000, 300), (20000, 5000)):
+            cv = rng.integers(0, n, (m, 8)).astype(np.int64)
+            h = rng.uniform(0.1, 2.0, m)
+            lo = np.full(n, np.inf); hi = np.zeros(n)
+            np.minimum.at(lo, cv.ravel(), np.repeat(h, 8))
+            np.maximum.at(hi, cv.ravel(), np.repeat(h, 8))
+            a, b = geometry._core.corner_minmax(n, cv, h)
+            np.testing.assert_array_equal(a, lo)
+            np.testing.assert_array_equal(b, hi)
+
+
 class RustHangFollow(unittest.TestCase):
     """_core.hang_follow against mesher._hang_follow's NumPy code"""
 
