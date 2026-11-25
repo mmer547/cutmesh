@@ -1252,10 +1252,6 @@ pub(crate) fn face_cs(pts: &[V3], f: &[usize]) -> (V3, V3) {
     (ctr, [0.5 * sum_n[0], 0.5 * sum_n[1], 0.5 * sum_n[2]])
 }
 
-fn all_points(p: &PyReadonlyArray2<f64>) -> PyResult<Vec<V3>> {
-    points(p)
-}
-
 /// face_geometry(points[n, 3], sizes[F], verts[sum sizes]) -> (centres[F, 3], area vectors[F, 3])
 #[pyfunction]
 fn face_geometry<'py>(
@@ -1264,7 +1260,7 @@ fn face_geometry<'py>(
     sizes: PyReadonlyArray1<'py, i64>,
     verts: PyReadonlyArray1<'py, i64>,
 ) -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>)> {
-    let pts = all_points(&points)?;
+    let pts = points_ref(&points)?;
     let n = sizes.as_array();
     let v = verts.as_array();
     let mut ptr = Vec::with_capacity(n.len() + 1);
@@ -1272,12 +1268,15 @@ fn face_geometry<'py>(
     for &k in n.iter() {
         ptr.push(ptr.last().unwrap() + k as usize);
     }
-    let vv: Vec<usize> = v.iter().map(|&x| x as usize).collect();
-    if *ptr.last().unwrap() != vv.len() || vv.iter().any(|&x| x >= pts.len()) {
+    let vv: Vec<usize> = match v.as_slice() {
+        Some(x) => x.par_iter().map(|&x| x as usize).collect(),
+        None => v.iter().map(|&x| x as usize).collect(),
+    };
+    if *ptr.last().unwrap() != vv.len() || vv.par_iter().any(|&x| x >= pts.len()) {
         return Err(pyo3::exceptions::PyValueError::new_err("inconsistent face list"));
     }
-    let res: Vec<(V3, V3)> = py.detach(|| (0..n.len()).into_par_iter().map(|i| face_cs(&pts, &vv[ptr[i]..ptr[i + 1]])).collect());
-    let (c, s): (Vec<V3>, Vec<V3>) = res.into_iter().unzip();
+    let (c, s): (Vec<V3>, Vec<V3>) =
+        py.detach(|| (0..n.len()).into_par_iter().map(|i| face_cs(&pts, &vv[ptr[i]..ptr[i + 1]])).unzip());
     Ok((vec3_array(py, c)?, vec3_array(py, s)?))
 }
 
@@ -1335,6 +1334,73 @@ pub(crate) fn cell_cv(n_cells: usize, own: &[usize], nei: &[usize], cf: &[V3], s
     (cc, vol)
 }
 
+/// cell_cv with the cells in parallel: each cell adds its faces in face order, as the
+/// loop over the faces does (the same sums)
+pub(crate) fn cell_cv_par(n_cells: usize, own: &[usize], nei: &[usize], cf: &[V3], sf: &[V3]) -> (Vec<V3>, Vec<f64>) {
+    let ni = nei.len();
+    let is_nei = |f: usize| f < ni && nei[f] != usize::MAX;
+    // the faces of each cell, in face order (owner: f, neighbour: !f)
+    let mut start = vec![0usize; n_cells + 1];
+    for f in 0..cf.len() {
+        start[own[f] + 1] += 1;
+        if is_nei(f) {
+            start[nei[f] + 1] += 1;
+        }
+    }
+    for c in 0..n_cells {
+        start[c + 1] += start[c];
+    }
+    let mut at = start.clone();
+    let mut lst = vec![0usize; start[n_cells]];
+    for f in 0..cf.len() {
+        let o = own[f];
+        lst[at[o]] = f;
+        at[o] += 1;
+        if is_nei(f) {
+            let q = nei[f];
+            lst[at[q]] = !f;
+            at[q] += 1;
+        }
+    }
+    drop(at);
+    (0..n_cells)
+        .into_par_iter()
+        .map(|c| {
+            let fl = &lst[start[c]..start[c + 1]];
+            let mut est = [0.0; 3];
+            for &e in fl {
+                let f = if e > cf.len() { !e } else { e };
+                for k in 0..3 {
+                    est[k] += cf[f][k];
+                }
+            }
+            let m = fl.len().max(1) as f64;
+            for k in 0..3 {
+                est[k] /= m;
+            }
+            let mut vol = 0.0;
+            let mut cc = [0.0; 3];
+            for &e in fl {
+                let (f, p) = if e > cf.len() {
+                    let f = !e;
+                    (f, -dot(sf[f], sub(cf[f], est)))
+                } else {
+                    (e, dot(sf[e], sub(cf[e], est)))
+                };
+                vol += p;
+                for k in 0..3 {
+                    cc[k] += p * (0.75 * cf[f][k] + 0.25 * est[k]);
+                }
+            }
+            let d = if vol.abs() > 1e-300 { vol } else { 1.0 };
+            for k in 0..3 {
+                cc[k] /= d;
+            }
+            (cc, vol / 3.0)
+        })
+        .unzip()
+}
+
 /// cell_geometry(nC, owner[F], neighbour[nI], Cf[F, 3], Sf[F, 3]) -> (centres[nC, 3], volumes[nC])
 #[pyfunction]
 fn cell_geometry<'py>(
@@ -1347,14 +1413,14 @@ fn cell_geometry<'py>(
 ) -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<f64>>)> {
     let own: Vec<usize> = owner.as_array().iter().map(|&v| v as usize).collect();
     let nei: Vec<usize> = neighbour.as_array().iter().map(|&v| v as usize).collect();
-    let cf = points(&cf)?;
-    let sf = points(&sf)?;
+    let cf = points_ref(&cf)?;
+    let sf = points_ref(&sf)?;
     if own.len() != cf.len() || sf.len() != cf.len() || nei.len() > cf.len()
-        || own.iter().chain(nei.iter()).any(|&c| c >= n_cells)
+        || own.par_iter().chain(nei.par_iter()).any(|&c| c >= n_cells)
     {
         return Err(pyo3::exceptions::PyValueError::new_err("inconsistent cell data"));
     }
-    let (cc, vol) = cell_cv(n_cells, &own, &nei, &cf, &sf);
+    let (cc, vol) = py.detach(|| cell_cv_par(n_cells, &own, &nei, &cf, &sf));
     Ok((vec3_array(py, cc)?, vol.into_pyarray(py)))
 }
 
