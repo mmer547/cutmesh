@@ -859,6 +859,34 @@ impl TriMesh {
         Ok(d.into_pyarray(py))
     }
 
+    /// distance_below_each(p[n, 3], r[n]) -> d[n]: distance_below with a radius per point
+    fn distance_below_each<'py>(
+        &self,
+        py: Python<'py>,
+        p: PyReadonlyArray2<'py, f64>,
+        r: PyReadonlyArray1<'py, f64>,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let pts = points_ref(&p)?;
+        let r = r.as_slice()?;
+        if r.len() != pts.len() {
+            return Err(pyo3::exceptions::PyValueError::new_err("p and r differ in length"));
+        }
+        let d: Vec<f64> = py.detach(|| {
+            pts.par_iter()
+                .zip(r.par_iter())
+                .map(|(&q, &ri)| {
+                    self.bvh
+                        .closest_below(q, ri * ri, |i| {
+                            let [a, b, c] = self.t[i];
+                            dist2(q, closest_tri(q, a, b, c))
+                        })
+                        .sqrt()
+                })
+                .collect()
+        });
+        Ok(d.into_pyarray(py))
+    }
+
     /// sdf() through a PointCache: points asked before (the same bits) are not computed again
     fn sdf_cached<'py>(
         &self,
