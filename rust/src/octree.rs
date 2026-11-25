@@ -148,6 +148,7 @@ fn half(a: I3, b: I3) -> I3 {
 fn par_unique(mut v: Vec<i64>) -> Vec<i64> {
     v.par_sort_unstable();
     v.dedup();
+    v.shrink_to_fit(); // (the duplicates' room is given back)
     v
 }
 
@@ -417,17 +418,17 @@ fn build(ijk: &[I3], lev: &[u32], n: I3, lmax: u32, periodic: [bool; 3]) -> Res 
         let ik = split_by(&mut idk, chunks.iter().map(|c| c.0.len()));
         let fp = split_by(&mut fptr[1..], chunks.iter().map(|c| c.1.len()));
         let fvs = split_by(&mut fverts, chunks.iter().map(|c| c.2.len()));
-        chunks.par_iter().zip(ik).zip(fp).zip(fvs).enumerate().for_each(|(c, ((((k, sz, v), ik), fp), fvs))| {
-            ik.copy_from_slice(k);
-            fvs.copy_from_slice(v);
+        // each chunk freed once copied (the output and all the chunks are not held at once)
+        chunks.into_par_iter().zip(ik).zip(fp).zip(fvs).enumerate().for_each(|(c, ((((k, sz, v), ik), fp), fvs))| {
+            ik.copy_from_slice(&k);
+            fvs.copy_from_slice(&v);
             let mut t = voff[c] as i64;
-            for (o, &x) in fp.iter_mut().zip(sz) {
+            for (o, &x) in fp.iter_mut().zip(&sz) {
                 t += x;
                 *o = t;
             }
         });
     }
-    drop(chunks);
     let ukey = par_unique(idk.clone());
     let mut kt = Verts { nv: nvx, nfine, periodic, ukeys: ukey, bstart: Vec::new(), shift: 0 };
     kt.index();
