@@ -35,6 +35,31 @@ pub(crate) fn read_cells(
         .collect())
 }
 
+/// the parts of the blocks one after the other: part k (len(block k) long) is written by
+/// fill(k, block k, its place in the output); blocks in groups, in parallel
+fn join<B: Sync>(blocks: &[B], len: impl Fn(&B) -> usize + Sync, fill: impl Fn(usize, &B, &mut [i64]) + Sync) -> Vec<i64> {
+    const G: usize = 1024;
+    let lens: Vec<usize> = blocks.par_iter().map(&len).collect();
+    let total: usize = lens.iter().sum();
+    let mut out = vec![0i64; total];
+    let mut parts: Vec<(usize, &mut [i64])> = Vec::with_capacity(blocks.len().div_ceil(G));
+    let mut rest: &mut [i64] = &mut out;
+    for g in (0..blocks.len()).step_by(G) {
+        let n: usize = lens[g..(g + G).min(blocks.len())].iter().sum();
+        let (x, y) = std::mem::take(&mut rest).split_at_mut(n);
+        parts.push((g, x));
+        rest = y;
+    }
+    parts.into_par_iter().for_each(|(g, part)| {
+        let mut o = 0;
+        for k in g..(g + G).min(blocks.len()) {
+            fill(k, &blocks[k], &mut part[o..o + lens[k]]);
+            o += lens[k];
+        }
+    });
+    out
+}
+
 pub(crate) type CsrOut<'py> = (
     Bound<'py, PyArray1<i64>>,
     Bound<'py, PyArray1<i64>>,
@@ -84,7 +109,8 @@ pub(crate) fn write_results<'py>(
             })
             .collect()
     });
-    // joined in parallel (ordered collects), the offsets as running sums
+    // joined: every block written to its place in the output, in parallel (an ordered
+    // collect of the many small parts costs more than the cut itself)
     let ptr = |cnt: Vec<i64>| -> Vec<i64> {
         let mut p = Vec::with_capacity(cnt.len() + 1);
         p.push(0i64);
@@ -96,16 +122,12 @@ pub(crate) fn write_results<'py>(
         p
     };
     let (item, side, fptr, key, vptr, verts) = py.detach(|| {
-        let item: Vec<i64> = blocks
-            .par_iter()
-            .enumerate()
-            .flat_map_iter(|(k, b)| std::iter::repeat_n(k as i64, b.side.len()))
-            .collect();
-        let side: Vec<i64> = blocks.par_iter().flat_map_iter(|b| b.side.iter().copied()).collect();
-        let fptr = ptr(blocks.par_iter().flat_map_iter(|b| b.fcnt.iter().copied()).collect());
-        let key: Vec<i64> = blocks.par_iter().flat_map_iter(|b| b.key.iter().copied()).collect();
-        let vptr = ptr(blocks.par_iter().flat_map_iter(|b| b.vcnt.iter().copied()).collect());
-        let verts: Vec<i64> = blocks.par_iter().flat_map_iter(|b| b.verts.iter().copied()).collect();
+        let item = join(&blocks, |b| b.side.len(), |k, _, out| out.fill(k as i64));
+        let side = join(&blocks, |b| b.side.len(), |_, b, out| out.copy_from_slice(&b.side));
+        let fptr = ptr(join(&blocks, |b| b.fcnt.len(), |_, b, out| out.copy_from_slice(&b.fcnt)));
+        let key = join(&blocks, |b| b.key.len(), |_, b, out| out.copy_from_slice(&b.key));
+        let vptr = ptr(join(&blocks, |b| b.vcnt.len(), |_, b, out| out.copy_from_slice(&b.vcnt)));
+        let verts = join(&blocks, |b| b.verts.len(), |_, b, out| out.copy_from_slice(&b.verts));
         blocks.into_par_iter().for_each(drop);
         (item, side, fptr, key, vptr, verts)
     });

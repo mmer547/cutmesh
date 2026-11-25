@@ -3213,6 +3213,9 @@ def generate(cfg, log=print):
 
     def gather(occs):
         n_ = o_n[occs]
+        if _core is not None and hasattr(_core, "take_ranges"):
+            lo = np.ascontiguousarray(o_ptr[occs], np.int64)
+            return n_, _core.take_ranges(np.ascontiguousarray(o_verts, np.int64), lo, lo + n_)
         off = np.repeat(o_ptr[occs] - np.concatenate([[0], np.cumsum(n_)[:-1]]), n_)
         return n_, o_verts[np.arange(int(n_.sum())) + off]
 
