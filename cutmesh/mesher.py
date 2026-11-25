@@ -1644,11 +1644,13 @@ def _finer_nearby(oc, cand):
     return fine
 
 
-def _fluid_fraction(dom, c, h, n=6):
+def _fluid_fraction(dom, c, h, n=6, cache=None):
     """Fluid fraction of cells (centres c, sizes h) from the trilinear interpolation of
-    the signed distance at their corners, and whether the wall cuts them."""
+    the signed distance at their corners, and whether the wall cuts them.
+    cache: dom.point_cache() for the corner distances"""
     corners = np.array(list(itertools.product((-1, 1), repeat=3)), float)
-    sd = dom.sdf((c[:, None, :] + 0.5 * h[:, None, None] * corners[None]).reshape(-1, 3)).reshape(len(c), 8)
+    q = (c[:, None, :] + 0.5 * h[:, None, None] * corners[None]).reshape(-1, 3)
+    sd = (dom.sdf(q) if cache is None else dom.sdf(q, cache=cache)).reshape(len(c), 8)
     t = (np.arange(n) + 0.5) / n
     T = np.array(list(itertools.product(t, t, t)))                       # sample points in [0,1]^3
     # trilinear weights of the 8 corners (corner k at (-1|1)^3 -> (0|1)^3)
@@ -1658,15 +1660,17 @@ def _fluid_fraction(dom, c, h, n=6):
     return (phi < 0).mean(1), (sd.min(1) < 0) & (sd.max(1) > 0)
 
 
-def _thin_wall_cells(dom, c, h):
+def _thin_wall_cells(dom, c, h, cache=None):
     """Cells (centres c, sizes h) with no corner in the solid that contain a solid wall:
     on one of 13 lines through the cell the surface is entered and left again with
     opposite normals (the two faces of a wall; a convex edge of the solid, poking into
-    the cell, has its face normals at 90 degrees or less and does not count)."""
+    the cell, has its face normals at 90 degrees or less and does not count).
+    cache: dom.point_cache() for the corner distances"""
     D = np.array([d for d in itertools.product((-1, 0, 1), repeat=3)
                   if any(d) and next(x for x in d if x) > 0], float)            # 13
     corners = np.array(list(itertools.product((-1, 1), repeat=3)), float)
-    sd = dom.sdf((c[:, None, :] + 0.5 * h[:, None, None] * corners[None]).reshape(-1, 3))
+    q = (c[:, None, :] + 0.5 * h[:, None, None] * corners[None]).reshape(-1, 3)
+    sd = dom.sdf(q) if cache is None else dom.sdf(q, cache=cache)
     no_solid = ~(sd.reshape(len(c), 8) > 1e-3 * h[:, None]).any(1)
     idx = np.nonzero(no_solid)[0]
     out = np.zeros(len(c), bool)
@@ -2008,6 +2012,30 @@ def generate(cfg, log=print):
         oc.refine(ssrc, vsrc, log=lambda s: log(s), keep_fn=keep_fn)
         sgn = np.array(list(itertools.product((-1, 0, 1), repeat=3)), float)   # 27 points
         corner = np.all(sgn != 0, axis=1)
+        # The passes below take the signed distance at the corners of cells: neighbouring
+        # cells share many of them, bit for bit, and the passes test the same cells
+        # again.  Distances kept by point (the same values, fewer queries).
+        sd_cache = dom.point_cache()
+        # near the STL (approx_below at 0.9 h + rmax), per leaf, kept through the
+        # splits: a leaf's answer depends on the leaf alone (-1: not asked yet)
+        near_v = None
+
+        def near_leaves(sel):
+            """approx_below for the leaves sel, asking only those not asked before"""
+            nonlocal near_v
+            if near_v is None or len(near_v) != len(oc.lev):
+                near_v = np.full(len(oc.lev), -1, np.int8)
+            todo = sel[near_v[sel] < 0]
+            near_v[todo] = dom.approx_below(oc.centers(todo), 0.9 * oc.leaf_sizes(todo) + dom._rmax)
+            return near_v[sel] > 0
+
+        def follow_split():
+            """carry near_v over a split (oc.track() before it)"""
+            nonlocal near_v
+            if near_v is not None:
+                nv = np.full(len(oc.lev), -1, np.int8)
+                nv[:len(oc.src)] = near_v[oc.src]
+                near_v = nv
         n_old = 0      # after a pass: the leaves before this index were tested there, unsplit
         for it in range(max(nfill_g, nfill_w)):
             near = oc.lev < oc.Lmax
@@ -2015,7 +2043,7 @@ def generate(cfg, log=print):
             # (the tests depend on the cell alone, and they only drop out pass by pass)
             near[:n_old] = False
             ni = np.flatnonzero(near)                 # centres and sizes of these leaves only
-            near[ni] = dom.approx_below(oc.centers(ni), 0.9 * oc.leaf_sizes(ni) + dom._rmax)
+            near[ni] = near_leaves(ni)
             mark = np.zeros(len(oc.lev), bool)
             nh = nw = 0
             if it < nfill_g:
@@ -2032,7 +2060,7 @@ def generate(cfg, log=print):
                 # a solid wall inside the cell with no corner in the solid vanishes: the
                 # fluid on both sides joins (a bypass).  Split until a corner lands in it.
                 cand = np.nonzero(near)[0]
-                wall = _thin_wall_cells(dom, oc.centers(cand), oc.leaf_sizes(cand))
+                wall = _thin_wall_cells(dom, oc.centers(cand), oc.leaf_sizes(cand), cache=sd_cache)
                 mark[cand[wall]] = True
                 nw = int(wall.sum())
             if not mark.any():
@@ -2041,6 +2069,7 @@ def generate(cfg, log=print):
             oc.split(mark)
             oc.balance(lambda s: None)
             n_old = len(oc.src)
+            follow_split()
             oc.untrack()
             log(f"thin gaps / walls: split {nh} cells with fluid inside but no fluid corner,"
                 f" {nw} with a solid wall inside but no solid corner")
@@ -2057,9 +2086,9 @@ def generate(cfg, log=print):
             if cand_old is not None:
                 near[:len(cand_old)] = False           # unsplit leaves: as in the pass before
             ni = np.flatnonzero(near)
-            near[ni] = dom.approx_below(oc.centers(ni), 0.9 * oc.leaf_sizes(ni) + dom._rmax)
+            near[ni] = near_leaves(ni)
             cand = np.nonzero(near)[0]
-            fr, cut = _fluid_fraction(dom, oc.centers(cand), oc.leaf_sizes(cand))
+            fr, cut = _fluid_fraction(dom, oc.centers(cand), oc.leaf_sizes(cand), cache=sd_cache)
             cand = cand[cut & (fr > 0) & (fr < thr)]
             if cand_old is not None:                   # the unsplit leaves come first
                 cand = np.concatenate([np.flatnonzero(cand_old), cand])
@@ -2075,9 +2104,11 @@ def generate(cfg, log=print):
             oc.split(mark)
             oc.balance(lambda s: None)
             cand_old = is_cand[oc.src]
+            follow_split()
             oc.untrack()
         if n_tc:
             log(f"thin cut cells at level transitions: split {nsplit}")
+        sd_cache = near_v = None
     T(f"octree ({len(oc.lev)} leaves)")
     ssrc = vsrc = None                  # done with them (memory: the samples' KD-trees)
     M = oc.build_cells()

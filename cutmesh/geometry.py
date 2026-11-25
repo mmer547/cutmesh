@@ -666,6 +666,11 @@ class Surface:
         self._btri = tl[o]
         self._bstart = np.searchsorted(bins[o], np.arange(self._nb * self._nb + 1))
 
+    def point_cache(self):
+        """a cache for sdf(p, cache=...) (None without the Rust extension): a point asked
+        again with the same bits gets the distance computed before"""
+        return _core.PointCache() if self._rs is not None and hasattr(self._rs, "sdf_cached") else None
+
     def inside(self, p, chunk=100000):
         """Parity of +x ray crossings. True where p is inside the closed surface."""
         p = np.atleast_2d(p)
@@ -704,10 +709,13 @@ class Surface:
         return res
 
     # ---------------- signed distance ----------------
-    def sdf(self, p, exact_mask=None, far_value=None, exact_within=np.inf):
-        """Signed distance. Magnitude from closest() where exact_mask (default: all)."""
+    def sdf(self, p, exact_mask=None, far_value=None, exact_within=np.inf, cache=None):
+        """Signed distance. Magnitude from closest() where exact_mask (default: all).
+        cache: point_cache() of earlier sdf() calls (the same values, fewer queries)."""
         p = np.atleast_2d(p)
         if self._rs is not None and exact_mask is None:
+            if cache is not None:
+                return self._rs.sdf_cached(np.ascontiguousarray(p, float), cache)
             return self._rs.sdf(np.ascontiguousarray(p, float))
         sign = np.where(self.inside(p), -1.0, 1.0)
         if exact_mask is None:

@@ -27,6 +27,7 @@ mod sampling;
 mod centroids;
 mod cylinder;
 mod nearest;
+mod ptcache;
 
 pub(crate) type V3 = [f64; 3];
 
@@ -797,6 +798,22 @@ impl TriMesh {
         Ok(r.into_pyarray(py))
     }
 
+    /// sdf() through a PointCache: points asked before (the same bits) are not computed again
+    fn sdf_cached<'py>(
+        &self,
+        py: Python<'py>,
+        p: PyReadonlyArray2<'py, f64>,
+        cache: &Bound<'py, ptcache::PointCache>,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let pts = points_ref(&p)?;
+        let mut c = cache.borrow_mut();
+        let map = &mut c.map;
+        let r: Vec<f64> = py.detach(|| {
+            ptcache::cached_eval(map, &pts, |q| self.sdf_one(q).to_bits()).into_iter().map(f64::from_bits).collect()
+        });
+        Ok(r.into_pyarray(py))
+    }
+
     /// parity of +x ray crossings: true inside the closed surface
     fn inside<'py>(&self, py: Python<'py>, p: PyReadonlyArray2<'py, f64>) -> PyResult<Bound<'py, PyArray1<bool>>> {
         let pts = points(&p)?;
@@ -1497,6 +1514,7 @@ fn tets_ok(points: PyReadonlyArray2<'_, f64>, polys: Vec<Vec<usize>>, cf: PyRead
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tets_ok, m)?)?;
     m.add_class::<TriMesh>()?;
+    m.add_class::<ptcache::PointCache>()?;
     m.add_class::<SegSet>()?;
     m.add_class::<dcut::CutKernel>()?;
     m.add_class::<dcut::CutCaches>()?;
