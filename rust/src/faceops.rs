@@ -106,6 +106,18 @@ pub fn corner_minmax<'py>(
     Ok((lo.into_pyarray(py), hi.into_pyarray(py)))
 }
 
+/// np.logical_or.reduceat(mask, ptr[:-1]) for ptr strictly increasing from 0 to
+/// len(mask): per segment ptr[i]..ptr[i+1], whether some entry is set
+#[pyfunction]
+pub fn seg_any<'py>(py: Python<'py>, mask: PyReadonlyArray1<'py, bool>, ptr: PyReadonlyArray1<'py, i64>) -> PyResult<Bound<'py, PyArray1<bool>>> {
+    let (m, p) = (mask.as_slice()?, ptr.as_slice()?);
+    if p.is_empty() || p[0] != 0 || *p.last().unwrap() as usize != m.len() || p.par_windows(2).any(|w| w[1] <= w[0]) {
+        return Err(pyo3::exceptions::PyValueError::new_err("segments must be non-empty and cover the mask"));
+    }
+    let r: Vec<bool> = py.detach(|| (0..p.len() - 1).into_par_iter().map(|i| m[p[i] as usize..p[i + 1] as usize].contains(&true)).collect());
+    Ok(r.into_pyarray(py))
+}
+
 /// per leaf: the OR of flag(v) over the vertex occurrences of its faces
 /// (vptr[i]..vptr[i+1] the leaf's occurrences, all non-empty); one read of fverts, the
 /// vertex ids checked as they are read (an id >= n or < 0: an error)

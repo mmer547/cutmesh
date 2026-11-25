@@ -2124,12 +2124,18 @@ def generate(cfg, log=print):
         pv = phi[fverts]
         return tuple(np.add.reduceat(m.astype(np.int32), fptr[:-1]) for m in (pv < 0, pv > 0, pv == 0))
 
+    def cell_any(m):
+        """per leaf: some of its faces in the face mask m"""
+        if _core is not None and hasattr(_core, "seg_any"):
+            return _core.seg_any(np.ascontiguousarray(m, bool), np.ascontiguousarray(cptr, np.int64))
+        return np.logical_or.reduceat(m, cptr[:-1])
+
     def classify_leaves(phi, leaves, signs=None):
         """-1 all vertices <= 0, +1 all >= 0 (and some > 0), 0 straddling.  signs:
         face_signs(phi) if known."""
         nneg, npos, _ = face_signs(phi) if signs is None else signs
-        cn = np.logical_or.reduceat(nneg > 0, cptr[:-1])[leaves]
-        cp_ = np.logical_or.reduceat(npos > 0, cptr[:-1])[leaves]
+        cn = cell_any(nneg > 0)[leaves]
+        cp_ = cell_any(npos > 0)[leaves]
         return np.where(~cp_, -1, np.where(~cn, 1, 0))
 
     # ------------------------------------------------------------ level sets + snapping
@@ -2535,7 +2541,7 @@ def generate(cfg, log=print):
         # along the chord through the edge vertex and the cell drops the wedge (below).
         zc = signs_d[2]
         fz = (zc >= 3) | (zc == fn)
-        cz = np.maximum.reduceat(fz.astype(np.int8), cptr[:-1]) > 0
+        cz = cell_any(fz)
         cand_b = np.nonzero(cz & bulk_alive)[0]
         if len(cand_b):
             cen = _leaf_centres(pts, cand_b, cptr, fptr, fverts)
@@ -2547,8 +2553,8 @@ def generate(cfg, log=print):
     fneg = signs_d[0] > 0
     fpos = signs_d[1] > 0
     f_sc = (fz == fn) | ((fz >= 2) & fneg & fpos)
-    c_sc = np.logical_or.reduceat(f_sc, cptr[:-1])
-    c_cs = np.logical_or.reduceat(~fpos & fneg & (fz >= 3), cptr[:-1])
+    c_sc = cell_any(f_sc)
+    c_cs = cell_any(~fpos & fneg & (fz >= 3))
     del fz, fneg, fpos, signs_d
     ctx.zero_edge, drop = surface_contact(dom, pts, phi_d, [c for c in cl + cb if c_sc[c]], leaf_faces, csize,
                                           face_ok=lambda ci: f_sc[cptr[ci]:cptr[ci + 1]].tolist(),

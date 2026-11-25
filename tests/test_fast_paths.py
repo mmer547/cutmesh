@@ -1097,6 +1097,16 @@ class RustArgsort(unittest.TestCase):
             np.testing.assert_array_equal(geometry._core.argsort_stable(a), np.argsort(a, kind="stable"))
 
 
+class RustSegAny(unittest.TestCase):
+    def test_same_as_numpy(self):
+        rng = np.random.default_rng(9)
+        for n in (1, 7, 5000):
+            ptr = np.concatenate([[0], np.cumsum(rng.integers(1, 30, n))]).astype(np.int64)
+            for p in (0.001, 0.1, 0.9):
+                m = rng.random(ptr[-1]) < p
+                np.testing.assert_array_equal(geometry._core.seg_any(m, ptr), np.logical_or.reduceat(m, ptr[:-1]))
+
+
 class RustCornerMinMax(unittest.TestCase):
     def test_same_as_numpy(self):
         rng = np.random.default_rng(3)
