@@ -1092,6 +1092,37 @@ class RustArgsort(unittest.TestCase):
             np.testing.assert_array_equal(geometry._core.argsort_stable(a), np.argsort(a, kind="stable"))
 
 
+class RustCylinder(unittest.TestCase):
+    """_core.cylinder_sdf / cylinder_closest against geometry.Cylinder's NumPy code"""
+
+    @unittest.skipUnless(NUMPY_FMA, NO_FMA)
+    def test_same_as_numpy(self):
+        rng = np.random.default_rng(23)
+        core = geometry._core
+        for t in range(60):
+            c = geometry.Cylinder(rng.normal(size=3), rng.normal(size=3) * 3,
+                                  float(rng.uniform(0.01, 2)))
+            n = (1, 2, 7, 1500)[t % 4]
+            p = rng.normal(size=(n, 3)) * 2
+            if t % 3 == 0:          # on the axis, inside, beyond the caps
+                k = max(1, n // 3)
+                p[:k] = c.p1 + np.outer(rng.uniform(-0.5, 1.5, k) * c.H, c.a)
+            if t % 5 == 0:          # near the side and the caps
+                p[n // 2:] = c.p1 + np.outer(rng.choice([0.0, 1.0, 0.5], n - n // 2) * c.H, c.a) \
+                    + c.R * c.e1 * rng.choice([0.0, 1.0, 1 - 1e-12], (n - n // 2, 1))
+            try:
+                geometry._core = None
+                s0 = c.sdf(p)
+                cp0, d0, _ = c.closest(p)
+            finally:
+                geometry._core = core
+            s1 = c.sdf(p)
+            cp1, d1, _ = c.closest(p)
+            np.testing.assert_array_equal(s0, s1)
+            np.testing.assert_array_equal(cp0, cp1)
+            np.testing.assert_array_equal(d0, d1)
+
+
 def l_prism(c=0.037, L=0.1, H=0.03, ang=(7.0, 5.0, 11.0)):
     """L-shaped channel [0, L]^2 minus [0, c]^2 times [0, H], turned: outward triangles"""
     P = [(c, 0), (L, 0), (L, L), (c, L), (0, L), (0, c), (c, c)]

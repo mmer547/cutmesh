@@ -25,6 +25,7 @@ mod fhook;
 mod quality;
 mod sampling;
 mod centroids;
+mod cylinder;
 mod nearest;
 
 pub(crate) type V3 = [f64; 3];
@@ -352,6 +353,14 @@ pub(crate) fn points(p: &PyReadonlyArray2<f64>) -> PyResult<Vec<V3>> {
         return Ok(p.as_slice()?.as_chunks::<3>().0.to_vec());
     }
     Ok(a.outer_iter().map(|r| [r[0], r[1], r[2]]).collect())
+}
+
+/// the rows of an (n, 3) array: borrowed when C-contiguous (no copy), else copied
+pub(crate) fn points_ref<'a>(p: &'a PyReadonlyArray2<f64>) -> PyResult<std::borrow::Cow<'a, [V3]>> {
+    if p.as_array().ncols() == 3 && numpy::PyUntypedArrayMethods::is_c_contiguous(&**p) {
+        return Ok(std::borrow::Cow::Borrowed(p.as_slice()?.as_chunks::<3>().0));
+    }
+    Ok(std::borrow::Cow::Owned(points(p)?))
 }
 
 pub(crate) fn vec3_array<'py>(py: Python<'py>, v: Vec<V3>) -> PyResult<Bound<'py, PyArray2<f64>>> {
@@ -1366,6 +1375,8 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(octree::octree_split, m)?)?;
     m.add_function(wrap_pyfunction!(octree::octree_centers, m)?)?;
     m.add_function(wrap_pyfunction!(nearest::nearest_kept, m)?)?;
+    m.add_function(wrap_pyfunction!(cylinder::cylinder_sdf, m)?)?;
+    m.add_function(wrap_pyfunction!(cylinder::cylinder_closest, m)?)?;
     m.add_function(wrap_pyfunction!(nearest::unique_points, m)?)?;
     m.add_function(wrap_pyfunction!(octree::leaf_bad, m)?)?;
     m.add_function(wrap_pyfunction!(octree::finer_face_neighbour, m)?)?;

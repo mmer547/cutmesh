@@ -719,7 +719,7 @@ pub fn leaf_bad<'py>(
     flat_at: Option<PyReadonlyArray1<'py, bool>>,
     flat_sin: f64,
 ) -> PyResult<Bound<'py, PyArray1<bool>>> {
-    let pts = crate::points(&points)?;
+    let pts = crate::points_ref(&points)?;
     let lv = leaves.as_slice()?;
     let fp = fptr.as_slice()?;
     let fv = fverts.as_slice()?;
