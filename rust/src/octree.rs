@@ -417,6 +417,29 @@ fn off26() -> Vec<I3> {
     v
 }
 
+/// the cells of the tree that are split (internal nodes), by level: sorted keys.  A
+/// cell inside the box is covered by a leaf of its level or coarser, or it is one of these.
+fn inner_cells(tree: &Tree) -> Vec<Vec<i64>> {
+    let lmax = tree.lmax as usize;
+    let mut inner: Vec<Vec<i64>> = vec![Vec::new(); lmax + 1];
+    for l in (1..=lmax).rev() {
+        let nn = tree.ncell(l as u32);
+        let np = tree.ncell(l as u32 - 1);
+        let parent = |k: i64| -> i64 {
+            let z = k.rem_euclid(nn[2]);
+            let y = (k / nn[2]).rem_euclid(nn[1]);
+            let x = k / (nn[2] * nn[1]);
+            ((x >> 1) * np[1] + (y >> 1)) * np[2] + (z >> 1)
+        };
+        let leaves = &tree.keys[tree.start[l]..tree.start[l + 1]];
+        let mut pk: Vec<i64> = leaves.par_iter().map(|&k| parent(k)).chain(inner[l].par_iter().map(|&k| parent(k))).collect();
+        pk.par_sort_unstable();
+        pk.dedup();
+        inner[l - 1] = pk;
+    }
+    inner
+}
+
 fn tree_of(ijk: &[I3], lev: &[u32], n: I3, lmax: u32, periodic: [bool; 3]) -> Tree {
     let t0 = Tree { n, lmax, periodic, keys: Vec::new(), idx: Vec::new(), start: Vec::new() };
     // one parallel sort by (level, key) (keys are unique within a level)
@@ -613,35 +636,63 @@ pub fn balance<'py>(
     let n0 = lev.len();
     let (passes, alive) = py.detach(|| {
         let tree = tree_of(&ijk, &lev, n, lmax, periodic);
+        let inner = inner_cells(&tree);
         let mut added: Vec<crate::cut::FxMap<i64, i64>> = vec![crate::cut::FxMap::default(); lmax as usize + 1];
         let mut alive = vec![true; n0];
         let off = off26();
         let mut passes = Vec::new();
         let mut from = new_from.unwrap_or(0);
+        // every leaf checked (new_from None): the (level, parent) of the alive leaves of
+        // level >= 2, with the number of alive leaves of each, kept up to date across the
+        // passes instead of collected from all the leaves again
+        let mut ent: Vec<(u32, I3)> = Vec::new();
+        let mut cnt: Vec<u32> = Vec::new();
+        let mut extra: crate::cut::FxMap<(u32, I3), u32> = crate::cut::FxMap::default();
+        if new_from.is_none() {
+            let mut all: Vec<(u32, I3)> = (0..lev.len())
+                .into_par_iter()
+                .filter(|&i| lev[i] >= 2)
+                .map(|i| (lev[i], [ijk[i][0] >> 1, ijk[i][1] >> 1, ijk[i][2] >> 1]))
+                .collect();
+            all.par_sort_unstable();
+            for e in all {
+                if ent.last() == Some(&e) {
+                    *cnt.last_mut().unwrap() += 1;
+                } else {
+                    ent.push(e);
+                    cnt.push(1);
+                }
+            }
+        }
         loop {
             let bad: Vec<usize> = {
-                let (ijk, lev, alive, added, tree) = (&ijk, &lev, &alive, &added, &tree);
-                let find = |c: u32, q: I3| -> i64 {
+                let (ijk, lev, alive, added, tree, inner) = (&ijk, &lev, &alive, &added, &tree, &inner);
+                // the leaf of level <= l covering the level-l cell q (Tree::covering), -1
+                // where the cell is split (finer leaves).  The search stops at the first
+                // leaf found, alive or split in a pass (then there is no coverer: the
+                // levels above were looked at first), and at a cell split in the tree.
+                let leaf_at = |c: u32, q: I3| -> Option<i64> {
                     let r = tree.find_exact(c, q);
-                    if r >= 0 && alive[r as usize] {
-                        return r;
+                    if r >= 0 {
+                        return Some(if alive[r as usize] { r } else { -1 });
                     }
-                    match added[c as usize].get(&tree.key(c, q)) {
-                        Some(&r) if alive[r as usize] => r,
-                        _ => -1,
-                    }
+                    added[c as usize].get(&tree.key(c, q)).map(|&r| if alive[r as usize] { r } else { -1 })
                 };
-                // the leaf of level <= l covering the level-l cell q (Tree::covering)
                 let covering = |l: u32, q: I3| -> i64 {
                     let q = tree.wrap(l, q);
                     let nn = tree.ncell(l);
                     if (0..3).any(|k| q[k] < 0 || q[k] >= nn[k]) {
                         return -1;
                     }
-                    for c in (0..=l).rev() {
+                    if let Some(r) = leaf_at(l, q) {
+                        return r;
+                    }
+                    if inner[l as usize].binary_search(&tree.key(l, q)).is_ok() {
+                        return -1;
+                    }
+                    for c in (0..l).rev() {
                         let s = l - c;
-                        let r = find(c, [q[0] >> s, q[1] >> s, q[2] >> s]);
-                        if r >= 0 {
+                        if let Some(r) = leaf_at(c, [q[0] >> s, q[1] >> s, q[2] >> s]) {
                             return r;
                         }
                     }
@@ -649,13 +700,20 @@ pub fn balance<'py>(
                 };
                 // the test depends on the level and the parent only: once per parent
                 // (siblings ask the same)
-                let mut par: Vec<(u32, I3)> = (from.min(lev.len())..lev.len())
-                    .into_par_iter()
-                    .filter(|&i| alive[i] && lev[i] >= 2)
-                    .map(|i| (lev[i], [ijk[i][0] >> 1, ijk[i][1] >> 1, ijk[i][2] >> 1]))
-                    .collect();
-                par.par_sort_unstable();
-                par.dedup();
+                let par: Vec<(u32, I3)> = if new_from.is_none() {
+                    let mut v: Vec<(u32, I3)> = ent.iter().zip(&cnt).filter(|e| *e.1 > 0).map(|e| *e.0).collect();
+                    v.extend(extra.iter().filter(|e| *e.1 > 0).map(|e| *e.0));
+                    v
+                } else {
+                    let mut v: Vec<(u32, I3)> = (from.min(lev.len())..lev.len())
+                        .into_par_iter()
+                        .filter(|&i| alive[i] && lev[i] >= 2)
+                        .map(|i| (lev[i], [ijk[i][0] >> 1, ijk[i][1] >> 1, ijk[i][2] >> 1]))
+                        .collect();
+                    v.par_sort_unstable();
+                    v.dedup();
+                    v
+                };
                 par.par_iter()
                     .flat_map_iter(|&(m, p)| {
                         let covering = &covering;
@@ -678,6 +736,23 @@ pub fn balance<'py>(
             }
             for &r in &marked {
                 alive[r] = false;
+                if new_from.is_none() {
+                    // r leaves its parent's count; its children make one of their own
+                    let l = lev[r];
+                    if l >= 2 {
+                        let e = (l, [ijk[r][0] >> 1, ijk[r][1] >> 1, ijk[r][2] >> 1]);
+                        match extra.get_mut(&e) {
+                            Some(c) => *c -= 1,
+                            None => {
+                                let k = ent.binary_search(&e).expect("parent of an alive leaf");
+                                cnt[k] -= 1;
+                            }
+                        }
+                    }
+                    if l >= 1 {
+                        *extra.entry((l + 1, ijk[r])).or_insert(0) += 8;
+                    }
+                }
                 for c in CHILD.iter() {
                     let q = [2 * ijk[r][0] + c[0], 2 * ijk[r][1] + c[1], 2 * ijk[r][2] + c[2]];
                     let l = lev[r] + 1;
