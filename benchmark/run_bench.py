@@ -499,7 +499,7 @@ def compare(results, baseline, same_mesh=False, use_gate=False):
                 out.append(f"{'WORSE ' if same_mesh else 'mesh  '} {r['name']}: mesh changed ({', '.join(bad)})")
             else:
                 out.append(f"same   {r['name']}: same mesh")
-        elif hashes_ok and same_mesh and r["status"] != "SKIP":
+        elif hashes_ok and same_mesh and r["status"] != "SKIP" and (o.get("quality") or r.get("quality")):
             out.append(f"WORSE  {r['name']}: no mesh hash to compare "
                        f"({'baseline' if not ha else 'this run'})")
         if qa.get("nCells") and qb.get("nCells") and qa["nCells"] != qb["nCells"]:

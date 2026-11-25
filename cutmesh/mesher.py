@@ -2377,7 +2377,8 @@ def generate(cfg, log=print):
     # Far feature snaps (tol_f .. tol_f2) and free projections of hanging vertices are
     # kept only where the octree cells stay valid after all vertices (including the
     # hanging ones) have moved; otherwise they are forbidden for the vertices of the
-    # broken cells and the stage is repeated.
+    # broken cells, and those vertices and the ones of the cells around them are snapped
+    # again (the other vertices keep where the pass put them).
     pts0 = pts.copy(); phi_d0 = phi_d.copy()
     hp2 = np.where(hanging[:, None], hang_par, -1)
     # the hanging vertices by constraint size, coarsest first (ascending ids within a size)
@@ -2385,13 +2386,31 @@ def generate(cfg, log=print):
     h_idx = h_idx[np.argsort(-hang_size[h_idx], kind="stable")]
     h_lev = np.flatnonzero(np.diff(hang_size[h_idx])) + 1
     h_lev = np.concatenate([[0], h_lev, [len(h_idx)]]).tolist() if len(h_idx) else [0]
+    # the features of the conforming zones (the same for every pass)
+    zone_feats = []
+    for z in zones:
+        g = z["geom"]
+        if not z["conforming"]:
+            zone_feats.append(None)
+        elif isinstance(g, Cylinder):
+            zone_feats.append(FeatureSet(cylinder_features(g, hmin / 4), L=g.L))
+        else:
+            zone_feats.append(FeatureSet(g.s.feature_edges(cfg["featureAngle"]), L=g.L))
+    movable_all = movable
+    redo = None                    # vertices snapped again in this pass (None: all)
+    onf_d = np.zeros(len(pts), bool)                       # on the STL features
+    onf_z = [np.zeros(len(pts), bool) for _ in zones]      # on the zones' features
+    phi_z = None
+    nredo = []
     for attempt in range(5):
         if attempt:
-            pts[:] = pts0; phi_d = phi_d0.copy()
-            snapped[:] = False; far_snap[:] = False; free_snap[:] = False; ccv_far[:] = False; slide_far[:] = False
-            msgs.clear()
+            pts[redo] = pts0[redo]; phi_d[redo] = phi_d0[redo]
+            for a_ in (snapped, far_snap, free_snap, ccv_far, slide_far, onf_d, *onf_z):
+                a_[redo] = False
+            movable = movable_all & redo
+            n_msgs = len(msgs)
         # ---- 1) regular (non-hanging) vertices: features, then surfaces
-        on_feat_d = snap_features(dom_feat, phi_d, "STL", dom_ccv)
+        onf_d[snap_features(dom_feat, phi_d, "STL", dom_ccv)] = True
         snap = movable & ~snapped & (np.abs(phi_d) < tol_v) & (phi_d != 0)
         # A cut cell must keep a vertex on either side.  In a fluid gap (a solid wall)
         # about one cell thick the cell's vertices on that side can all lie near the two
@@ -2413,6 +2432,8 @@ def generate(cfg, log=print):
             # a wall unsnapped, they cut skewed slivers)
             mid = cpk + 0.5 * np.where(thin, width, 0.0)[:, None] * dirk
             mv = thin & (np.linalg.norm(mid - pts[kv], axis=1) < 0.4 * vh_min[kv])
+            if redo is not None:
+                mv &= redo[kv]            # the vertices kept from the pass before stay
             j = kv[mv]
             snap[j] = False
             pts[j] = mid[mv]
@@ -2431,9 +2452,7 @@ def generate(cfg, log=print):
             # them in a cell without a solid vertex: the cut keeps it, the edge is
             # chamfered.  The nearest wall vertex slides along its wall onto the edge.
             lim = np.where(no_far, tol_f, tol_cc)
-            onf = np.zeros(len(pts), bool)
-            onf[on_feat_d] = True
-            sel = np.nonzero(movable & (phi_d == 0) & ~onf)[0]
+            sel = np.nonzero(movable & (phi_d == 0) & ~onf_d)[0]
             cp, d = dom_ccv.closest(pts[sel])
             ok = (d < lim[sel]) & (d > 1e-6 * hmin)
             sel, cp, d = sel[ok], cp[ok], d[ok]
@@ -2456,28 +2475,31 @@ def generate(cfg, log=print):
                 sel, cp, d = sel[first], cp[first], d[first]
                 far_snap[sel] = slide_far[sel] = d >= tol_f[sel]
                 pts[sel] = cp
-                on_feat_d = np.concatenate([on_feat_d, sel])
+                onf_d[sel] = True
             msgs.append(f"slid {len(sel)} wall vertices along their wall onto the concave STL feature edges")
-        phi_z = []
-        zone_feats = []
-        on_feat_z = []
-        for z in zones:
+        # the zones' level sets: of every vertex in the first pass, of the vertices
+        # snapped again later (the others keep theirs)
+        rows = slice(None) if redo is None else np.flatnonzero(redo)
+        if phi_z is None:
+            phi_z = [None] * len(zones)
+        for zi, z in enumerate(zones):
             g = z["geom"]
+            q_ = pts[rows]
             if isinstance(g, SurfaceZone):
-                nearz = g.s.approx_below(pts, np.sqrt(3) * vh_max + g.s._rmax + hmin)
-                pz = g.sdf(pts, exact_mask=nearz, far_value=g.L)
+                nearz = g.s.approx_below(q_, np.sqrt(3) * vh_max[rows] + g.s._rmax + hmin)
+                pr = g.sdf(q_, exact_mask=nearz, far_value=g.L)
             else:
-                pz = g.sdf(pts)
+                pr = g.sdf(q_)
+            if redo is None:
+                phi_z[zi] = pr
+            else:
+                phi_z[zi][rows] = pr
+            pz = phi_z[zi]
             if not z["conforming"]:           # cells are assigned by centre later: no snapping
-                zone_feats.append(None); on_feat_z.append(np.zeros(0, np.int64)); phi_z.append(pz)
                 continue
-            if isinstance(g, Cylinder):
-                zf = FeatureSet(cylinder_features(g, hmin / 4), L=g.L)
-            else:
-                zf = FeatureSet(g.s.feature_edges(cfg["featureAngle"]), L=g.L)
-            zone_feats.append(zf)
+            zf = zone_feats[zi]
             before = snapped.copy()           # vertices already on the STL are not moved
-            on_feat_z.append(snap_features(zf, pz, f"zone '{z['name']}'"))
+            onf_z[zi][snap_features(zf, pz, f"zone '{z['name']}'")] = True
             sz = movable & ~snapped & (np.abs(pz) < tol_v) & (pz != 0)
             cp, _, _ = g.closest(pts[sz])
             pts[sz] = cp
@@ -2487,7 +2509,6 @@ def generate(cfg, log=print):
             if moved.any():   # re-evaluate the domain level set where vertices moved
                 phi_d[moved] = dom.sdf(pts[moved])
             msgs.append(f"snapped {int(sz.sum())} vertices onto zone '{z['name']}'")
-            phi_z.append(pz)
 
         # ---- 2) hanging vertices, coarsest constraint first: follow the (moved) parents,
         # then slide along the coarse edge / within the coarse face onto a surface.  If the
@@ -2498,6 +2519,10 @@ def generate(cfg, log=print):
         nslide = nvirt = nfree = 0
         for l0, l1 in zip(h_lev[:-1], h_lev[1:]):
             idx = h_idx[l0:l1]
+            if redo is not None:
+                idx = idx[redo[idx]]
+                if not len(idx):
+                    continue
             par = hang_par[idx]
             isface = par[:, 2] != par[:, 0]
             # to the face centres / edge midpoints
@@ -2571,20 +2596,26 @@ def generate(cfg, log=print):
                 nslide += int(ok.sum()); nvirt += int((~ok).sum())
         msgs.append(f"hanging nodes: {nslide - nfree} slid onto a surface along their edge/face,"
                     f" {nfree} projected freely, {nvirt} treated as on-surface")
+        if attempt:
+            del msgs[n_msgs:]                 # the counts of the first pass are logged
+            movable = movable_all
         if not (far_snap.any() or free_snap.any()):
             break
-        mv_ = (pts != pts0).any(1)           # hanging vertices move with their parents too
-        tl = np.nonzero(leaf_any(mv_))[0]
+        # the leaves to check: those with a vertex that moved (in a later pass: one that
+        # was snapped again; the other leaves are as the pass before left them)
+        mv_ = (pts != pts0).any(1) if redo is None else redo
+        lk = leaf_any(mv_)
+        tl = np.nonzero(lk)[0]
         badl = tl[_leaf_bad(pts, tl, fptr, fverts, cptr, csize)] if len(tl) else tl
         if ccv_far.any():
             # a vertex pushed onto a concave edge must not straighten a face corner either
-            tc = np.nonzero(leaf_any(ccv_far))[0]
+            tc = np.nonzero(leaf_any(ccv_far) & lk)[0]
             badl = np.union1d(badl, tc[_leaf_bad(pts, tc, fptr, fverts, cptr, csize, flat_at=ccv_far)])
         if slide_far.any():
             # a slid vertex often lands on the line of the wall vertices next to it (the
             # cell becomes a wedge with a straight face corner, still convex and uncut):
             # only a corner pushed clearly past straight breaks the cell
-            tc = np.nonzero(leaf_any(slide_far))[0]
+            tc = np.nonzero(leaf_any(slide_far) & lk)[0]
             badl = np.union1d(badl, tc[_leaf_bad(pts, tc, fptr, fverts, cptr, csize, flat_at=slide_far,
                                                  flat_angle=-1.0)])
         if not len(badl):
@@ -2600,10 +2631,27 @@ def generate(cfg, log=print):
             break
         no_far[resp] = True
         no_free[respf] = True
+        # snapped again: the vertices of the leaves around those vertices, and the
+        # hanging vertices that follow them
+        vm = np.zeros(len(pts), bool)
+        vm[vb] = True
+        redo = np.zeros(len(pts), bool)
+        redo[leaf_verts(leaf_any(vm))] = True
+        for _ in range(3):
+            ch_ = hanging & (redo[np.maximum(hp2, 0)] & (hp2 >= 0)).any(1)
+            if not (ch_ & ~redo).any():
+                break
+            redo |= ch_
+        nredo.append((len(badl), int(redo.sum())))
     for m_ in msgs:
         log(m_)
+    for nb_, nv_ in nredo:
+        log(f"far snaps that broke {nb_} cells not allowed: {nv_} vertices around them snapped again"
+            " (the counts above are those of the first pass)")
     if (tol_cc > tol_f).any():
         log(f"far feature snaps: {int(far_snap.sum())} kept, {int(no_far.sum())} not allowed (cells would break)")
+    on_feat_d = np.flatnonzero(onf_d)
+    on_feat_z = [np.flatnonzero(m_) for m_ in onf_z]
     phi_d[(phi_d != 0) & (np.abs(phi_d) < 1e-9 * vh_min)] = 0.0
     for pz in phi_z:
         pz[(pz != 0) & (np.abs(pz) < 1e-9 * vh_min)] = 0.0
