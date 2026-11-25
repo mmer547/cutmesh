@@ -476,8 +476,11 @@ def _leaf_bad_py(P, leaves, fptr, fverts, cptr, csize, flat_at=None, flat_angle=
     return (np.bincount(owner_, badf.astype(int), len(leaves)) > 0) | (vv <= 0)
 
 
-def _tets_ok(P, faces, cf, cc, vmin):
+def _tets_ok(P, faces, cf, cc, vmin, use_rs=True):
     """every (face centre, edge, cell centre) tet has a volume above vmin"""
+    if use_rs and _core is not None and hasattr(_core, "tets_ok") and len(faces):
+        return _core.tets_ok(P, [p for _, p in faces], np.ascontiguousarray(cf, float),
+                             np.asarray(cc, float).tolist(), float(vmin))
     for (_, p), c in zip(faces, cf):
         Q = P[p]
         t = np.cross(np.roll(Q, -1, 0) - Q, c - Q) @ (c - cc) / 6.0
@@ -3104,7 +3107,17 @@ def generate(cfg, log=print):
     log(f"merged {merged} cut cells ({nsmall} small < {beta:g} of hex volume,"
         f" {len(small) - nsmall} non-convex); {rejected} left as they are"
         f" (no merge partner keeps the cell valid)")
-    proot = np.array([find(i) for i in range(nP)], np.int64)
+    # the root of every piece (find for all: parents followed until they stay)
+    par_a = np.asarray(parent, np.int64)
+    proot = par_a.copy()
+    while True:
+        inn = np.flatnonzero(proot < nP)
+        nxt = par_a[proot[inn]]
+        chg = nxt != proot[inn]
+        if not chg.any():
+            break
+        proot[inn[chg]] = nxt[chg]
+    del par_a
 
     # ------------------------------------------------------------ invalid wall slivers
     # Small cells left unmerged whose face triangles do not all see the centre (e.g. a

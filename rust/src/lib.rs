@@ -1400,8 +1400,36 @@ fn poly_cell<'py>(
     Ok((vec3_array(py, c)?, vec3_array(py, s)?, vol, cc.to_vec().into_pyarray(py)))
 }
 
+/// mesher._tets_ok: every (face centre, edge, cell centre) tet of the faces polys (centres
+/// cf) and the cell centre cc has a volume above vmin, as NumPy rounds it:
+/// np.cross(roll(Q, -1) - Q, c - Q) @ (c - cc) / 6
+#[pyfunction]
+fn tets_ok(points: PyReadonlyArray2<'_, f64>, polys: Vec<Vec<usize>>, cf: PyReadonlyArray2<'_, f64>, cc: V3, vmin: f64) -> PyResult<bool> {
+    let pos = points_ref(&points)?;
+    let cf = points_ref(&cf)?;
+    if cf.len() != polys.len() || polys.iter().flatten().any(|&v| v >= pos.len()) {
+        return Err(pyo3::exceptions::PyValueError::new_err("inconsistent faces"));
+    }
+    for (p, &c) in polys.iter().zip(cf.iter()) {
+        let m = p.len();
+        let w = sub(c, cc);
+        for i in 0..m {
+            let q = pos[p[i]];
+            let a = sub(pos[p[(i + 1) % m]], q);
+            let b = sub(c, q);
+            let x = [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+            let t = if m >= 2 { wallmerge::gemv_row(x, w) } else { wallmerge::dot1(x, w) } / 6.0;
+            if t <= vmin {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(tets_ok, m)?)?;
     m.add_class::<TriMesh>()?;
     m.add_class::<SegSet>()?;
     m.add_class::<dcut::CutKernel>()?;

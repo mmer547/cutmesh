@@ -144,10 +144,11 @@ struct Merger<'a> {
     // face id -> pieces holding it (in piece order): ids sorted, and their pieces
     occ_k: &'a [i64],
     occ_p: &'a [i64],
+    // where present: occ_k[occ_start[fid]..occ_start[fid + 1]] are the entries of fid
+    occ_start: Option<&'a [u32]>,
     parent: Vec<i64>,
     members: FxMap<i64, Vec<i64>>,
     bulk_members: FxMap<i64, Vec<i64>>,
-    gcache: FxMap<i64, V3>,
     // centre and area vector of the pieces' faces (face_cs depends on the vertices only)
     pcs: &'a [(V3, V3)],
 }
@@ -157,6 +158,14 @@ impl Merger<'_> {
         while i < self.np_ && self.parent[i as usize] != i {
             let p = self.parent[i as usize];
             self.parent[i as usize] = if p < self.np_ { self.parent[p as usize] } else { p };
+            i = self.parent[i as usize];
+        }
+        i
+    }
+
+    /// find without path compression (the same root; for the parallel evaluations)
+    fn find_ro(&self, mut i: i64) -> i64 {
+        while i < self.np_ && self.parent[i as usize] != i {
             i = self.parent[i as usize];
         }
         i
@@ -199,14 +208,23 @@ impl Merger<'_> {
         fl
     }
 
-    fn face_neighbour(&mut self, fid: i64, me: &[i64]) -> i64 {
-        let a = self.occ_k.partition_point(|&k| k < fid);
-        let mut b = a;
-        while b < self.occ_k.len() && self.occ_k[b] == fid {
-            b += 1;
-        }
+    /// the node across face fid (not in me), or -1; every node looked at goes to seen
+    fn face_neighbour(&self, fid: i64, me: &[i64], seen: &mut Vec<i64>) -> i64 {
+        let (a, b) = match self.occ_start {
+            Some(st) if fid >= 0 && (fid as usize) + 1 < st.len() => (st[fid as usize] as usize, st[fid as usize + 1] as usize),
+            Some(_) => (0, 0),
+            None => {
+                let a = self.occ_k.partition_point(|&k| k < fid);
+                let mut b = a;
+                while b < self.occ_k.len() && self.occ_k[b] == fid {
+                    b += 1;
+                }
+                (a, b)
+            }
+        };
         for j in a..b {
-            let r = self.find(self.occ_p[j]);
+            let r = self.find_ro(self.occ_p[j]);
+            seen.push(r);
             if !me.contains(&r) {
                 return r;
             }
@@ -215,6 +233,7 @@ impl Merger<'_> {
             for b in [self.kb1[fid as usize], self.kb2[fid as usize]] {
                 if b >= 0 {
                     let r = self.np_ + b;
+                    seen.push(r);
                     if !me.contains(&r) {
                         return r;
                     }
@@ -225,23 +244,33 @@ impl Merger<'_> {
     }
 
     /// the merge partner of piece pi (the loop body of the Python code): (best node or
-    /// -1, whether it had candidates)
-    fn evaluate(&mut self, pi: i64, hcell: f64, cos_lim: f64) -> (i64, bool) {
+    /// -1, whether it had candidates).  Reads the nodes in seen only (their faces and the
+    /// roots of their pieces): a merge that changes none of them leaves the answer as is.
+    fn evaluate(
+        &self,
+        pi: i64,
+        hcell: f64,
+        cos_lim: f64,
+        seen: &mut Vec<i64>,
+        shared: &FxMap<i64, V3>,
+        local: &mut FxMap<i64, V3>,
+    ) -> (i64, bool) {
+        seen.push(pi);
         let fa = self.node_faces(pi);
         let me = [pi];
         let mut cands = PySet::new();
-        let mut seen: FxSet<i64> = FxSet::default();
+        let mut uniq: FxSet<i64> = FxSet::default();
         let zpi = self.zone_of[pi as usize];
         for &(fid, _) in &fa {
-            let nb = self.face_neighbour(fid, &me);
-            if nb >= 0 && self.zone_of_node(nb) == zpi && seen.insert(nb) {
+            let nb = self.face_neighbour(fid, &me, seen);
+            if nb >= 0 && self.zone_of_node(nb) == zpi && uniq.insert(nb) {
                 cands.add(nb);
             }
         }
         let (mut best, mut bscore) = (-1i64, cos_lim);
         let order: Vec<i64> = cands.iter().collect();
         for &ro in &order {
-            if let Some(sc) = self.merge_score(&fa, pi, ro, hcell) {
+            if let Some(sc) = self.merge_score(&fa, pi, ro, hcell, shared, local, seen) {
                 if sc > bscore {
                     best = ro;
                     bscore = sc;
@@ -251,7 +280,7 @@ impl Merger<'_> {
         (best, !order.is_empty())
     }
 
-    fn cs(&mut self, h: usize) -> (V3, V3) {
+    fn cs(&self, h: usize) -> (V3, V3) {
         if h < self.n_pf {
             return self.pcs[h];
         }
@@ -263,7 +292,7 @@ impl Merger<'_> {
     }
 
     /// poly_geom: the faces of fl that occur once, and their geometry (_core.poly_cell)
-    fn poly_geom(&mut self, fl: &[FRef]) -> (Vec<i64>, Vec<V3>, Vec<V3>, f64, V3) {
+    fn poly_geom(&self, fl: &[FRef]) -> (Vec<i64>, Vec<V3>, Vec<V3>, f64, V3) {
         // the faces whose id occurs once (a node has a few dozen faces at most: compared
         // pairwise, no hash map)
         let keep: Vec<FRef> = if fl.len() <= 64 {
@@ -298,17 +327,27 @@ impl Merger<'_> {
         (keep.iter().map(|(f, _)| *f).collect(), c, s, vol, cc)
     }
 
-    fn node_centre(&mut self, r: i64) -> V3 {
-        if let Some(c) = self.gcache.get(&r) {
+    /// the centre of node r (from the caches: shared read only, local filled)
+    fn node_centre(&self, r: i64, shared: &FxMap<i64, V3>, local: &mut FxMap<i64, V3>) -> V3 {
+        if let Some(c) = shared.get(&r).or_else(|| local.get(&r)) {
             return *c;
         }
         let fl = self.node_faces(r);
         let c = self.poly_geom(&fl).4;
-        self.gcache.insert(r, c);
+        local.insert(r, c);
         c
     }
 
-    fn merge_score(&mut self, fa: &[FRef], r_small: i64, r_target: i64, hcell: f64) -> Option<f64> {
+    fn merge_score(
+        &self,
+        fa: &[FRef],
+        r_small: i64,
+        r_target: i64,
+        hcell: f64,
+        shared: &FxMap<i64, V3>,
+        local: &mut FxMap<i64, V3>,
+        seen: &mut Vec<i64>,
+    ) -> Option<f64> {
         let mut fl = fa.to_vec();
         fl.extend(self.node_faces(r_target));
         let (keep, cf, sf, v, cc) = self.poly_geom(&fl);
@@ -324,9 +363,9 @@ impl Merger<'_> {
         let mut cmin = f64::INFINITY;
         let mut any = false;
         for (i, &fid) in keep.iter().enumerate() {
-            let nb = self.face_neighbour(fid, &me);
+            let nb = self.face_neighbour(fid, &me, seen);
             if nb >= 0 {
-                let c = self.node_centre(nb);
+                let c = self.node_centre(nb, shared, local);
                 let d = sub(c, cc);
                 let s = sf[i];
                 let x = mm3(d, s) / (mm3(d, d).sqrt() * mm3(s, s).sqrt() + 1e-300);
@@ -369,7 +408,7 @@ pub fn merge_cells(
     hpiece: Vec<f64>,
     cos_lim: f64,
 ) -> PyResult<MergeOut> {
-    let pos = crate::points(&points)?;
+    let pos = crate::points_ref(&points)?;
     let (mut pf, mut pk, mut pvp, mut pv) = (vec![0i64], Vec::new(), vec![0i64], Vec::new());
     for fl in &pieces {
         for (fid, p) in fl {
@@ -412,7 +451,7 @@ pub fn merge_cells_csr(
     hpiece: PyReadonlyArray1<f64>,
     cos_lim: f64,
 ) -> PyResult<MergeOut> {
-    let pos = crate::points(&points)?;
+    let pos = crate::points_ref(&points)?;
     merge_core(
         &pos, pfptr.as_slice()?, pkey.as_slice()?, pvptr.as_slice()?, pverts.as_slice()?, zone_of.as_slice()?,
         bulk_zone.as_slice()?, cptr.as_slice()?, fptr.as_slice()?, fverts.as_slice()?, fkey.as_slice()?,
@@ -466,6 +505,20 @@ fn merge_core(
     let occ_k: Vec<i64> = idx.iter().map(|&i| pk[i]).collect();
     let occ_p: Vec<i64> = idx.iter().map(|&i| fl_p[i]).collect();
     drop((fl_p, idx));
+    // a table by face id where the ids are not too sparse (else the binary search)
+    let occ_start: Option<Vec<u32>> = match (occ_k.first(), occ_k.last()) {
+        (Some(&lo), Some(&hi)) if lo >= 0 && (hi as u64) < 4 * occ_k.len() as u64 + (1 << 26) && occ_k.len() < u32::MAX as usize => {
+            let mut st = vec![0u32; hi as usize + 2];
+            for &k in &occ_k {
+                st[k as usize + 1] += 1;
+            }
+            for i in 1..st.len() {
+                st[i] += st[i - 1];
+            }
+            Some(st)
+        }
+        _ => None,
+    };
     let pcs: Vec<(V3, V3)> = (0..pk.len())
         .into_par_iter()
         .map(|f| {
@@ -493,36 +546,85 @@ fn merge_core(
         np_: np_ as i64,
         occ_k: &occ_k,
         occ_p: &occ_p,
+        occ_start: occ_start.as_deref(),
         parent: (0..np_ as i64).collect(),
         members: FxMap::default(),
         bulk_members: FxMap::default(),
-        gcache: FxMap::default(),
     };
     let mut gvol = gvol;
     let (mut merged, mut rejected) = (0usize, 0usize);
-    for (qi, &pi) in small.iter().enumerate() {
-        if m.find(pi) != pi || (qi < nsmall && gvol[pi as usize] >= beta * hexvol[pi as usize]) {
-            continue;
+    // The greedy loop, in batches: the next pieces are evaluated in parallel against the
+    // state at the start of the batch, then taken in order.  An evaluation reads the nodes
+    // in its `seen` list only (their faces and the roots of their pieces) and a merge
+    // changes two nodes (the merged piece and its partner): a piece whose evaluation read a
+    // node changed by a merge of this batch is evaluated again.  The same answers as one by
+    // one.  Node centres are cached across the evaluations (dropped when a node changes).
+    let mut gcache: FxMap<i64, V3> = FxMap::default();
+    // the batch: large enough to keep the threads busy, small enough that few of its
+    // evaluations are spoilt by its merges (consecutive small pieces are often neighbours)
+    let bmax: usize = 128;
+    let mut q0 = 0;
+    while q0 < small.len() {
+        let q1 = (q0 + bmax).min(small.len());
+        type Spec = Option<(i64, bool, Vec<i64>, Vec<(i64, V3)>)>;
+        let spec: Vec<Spec> = {
+            let (mr, gv, gc) = (&m, &gvol, &gcache);
+            (q0..q1)
+                .into_par_iter()
+                .map(|qi| {
+                    let pi = small[qi];
+                    // skipped now: skipped later too (roots only get parents, volumes grow)
+                    if mr.find_ro(pi) != pi || (qi < nsmall && gv[pi as usize] >= beta * hexvol[pi as usize]) {
+                        return None;
+                    }
+                    let mut seen = Vec::new();
+                    let mut local = FxMap::default();
+                    let (b, a) = mr.evaluate(pi, hpiece[pi as usize], cos_lim, &mut seen, gc, &mut local);
+                    Some((b, a, seen, local.into_iter().collect()))
+                })
+                .collect()
+        };
+        // the centres found hold at the start of the batch: cached before any merge
+        for (_, _, _, loc) in spec.iter().flatten() {
+            gcache.extend(loc.iter().copied());
         }
-        let (best, any) = m.evaluate(pi, hpiece[pi as usize], cos_lim);
-        if best >= 0 {
-            m.parent[pi as usize] = best;
-            let mut mem = vec![pi];
-            if let Some(x) = m.members.remove(&pi) {
-                mem.extend(x);
+        let mut dirty: FxSet<i64> = FxSet::default();
+        for qi in q0..q1 {
+            let pi = small[qi];
+            if m.find(pi) != pi || (qi < nsmall && gvol[pi as usize] >= beta * hexvol[pi as usize]) {
+                continue;
             }
-            if best < np_ as i64 {
-                gvol[best as usize] += gvol[pi as usize];
-                m.members.entry(best).or_default().extend(mem);
-            } else {
-                m.bulk_members.entry(best - np_ as i64).or_default().extend(mem);
+            let (best, any) = match &spec[qi - q0] {
+                Some((b, a, seen, _)) if !seen.iter().any(|r| dirty.contains(r)) => (*b, *a),
+                _ => {
+                    let mut local = FxMap::default();
+                    let r = m.evaluate(pi, hpiece[pi as usize], cos_lim, &mut Vec::new(), &gcache, &mut local);
+                    gcache.extend(local);
+                    r
+                }
+            };
+            if best >= 0 {
+                m.parent[pi as usize] = best;
+                let mut mem = vec![pi];
+                if let Some(x) = m.members.remove(&pi) {
+                    mem.extend(x);
+                }
+                if best < np_ as i64 {
+                    gvol[best as usize] += gvol[pi as usize];
+                    m.members.entry(best).or_default().extend(mem);
+                } else {
+                    m.bulk_members.entry(best - np_ as i64).or_default().extend(mem);
+                }
+                gcache.remove(&best);
+                gcache.remove(&pi);
+                dirty.insert(pi);
+                dirty.insert(best);
+                merged += 1;
+            } else if any {
+                rejected += 1;
             }
-            m.gcache.remove(&best);
-            m.gcache.remove(&pi);
-            merged += 1;
-        } else if any {
-            rejected += 1;
         }
+        q0 = q1;
     }
     let members: Vec<(i64, Vec<i64>)> = m.members.drain().collect();
     let bulk_members: Vec<(i64, Vec<i64>)> = m.bulk_members.drain().collect();

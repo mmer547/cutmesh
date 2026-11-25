@@ -1120,6 +1120,27 @@ class RustHangFollow(unittest.TestCase):
             np.testing.assert_array_equal(ca, cb)
 
 
+class RustTetsOk(unittest.TestCase):
+    """_core.tets_ok against mesher._tets_ok's NumPy code"""
+
+    @unittest.skipUnless(NUMPY_FMA, NO_FMA)
+    def test_same_as_numpy(self):
+        rng = np.random.default_rng(41)
+        P = rng.normal(size=(400, 3))
+        agree = {True: 0, False: 0}
+        for t in range(400):
+            faces = [(0, rng.choice(400, int(rng.integers(3, 7)), replace=False).tolist())
+                     for _ in range(int(rng.integers(1, 8)))]
+            cf = np.array([P[p].mean(0) for _, p in faces]) + rng.normal(size=(len(faces), 3)) * 0.01
+            cc = rng.normal(size=3) * 0.1
+            vmin = float(rng.choice([-1.0, 0.0, 1e-3, 1e-2]))
+            a = mesher._tets_ok(P, faces, cf, cc, vmin, use_rs=False)
+            b = mesher._tets_ok(P, faces, cf, cc, vmin)
+            self.assertEqual(bool(a), b)
+            agree[b] += 1
+        self.assertTrue(agree[True] and agree[False])
+
+
 class RustCylinder(unittest.TestCase):
     """_core.cylinder_sdf / cylinder_closest against geometry.Cylinder's NumPy code"""
 
