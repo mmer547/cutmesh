@@ -24,14 +24,18 @@ def _face_geometry(points, faces):
     return quality.face_geometry(points, ff)
 
 
-def through_wall(dom, points, faces, owner, neighbour, samples=16, cos_opposite=-0.5):
-    """(number of cell-centre -> face-centre lines through a wall, their midpoints)"""
+def through_wall(dom, points, faces, owner, neighbour, samples=16, cos_opposite=-0.5, geom=None):
+    """(number of cell-centre -> face-centre lines through a wall, their midpoints).
+    geom (a dict): receives the face centres and area vectors, the cell centres and
+    volumes (Cf, Sf, C, V) for a later quality check of the same mesh."""
     nI = len(neighbour)
     if getattr(dom, "_rs", None) is None and dom._kd is None:
         dom.build_search(0.01 * dom.L)          # Python closest-point search (no Rust)
     Cf, Sf = _face_geometry(points, faces)
     nC = int(max(owner.max(), neighbour.max() if nI else 0)) + 1
-    C, _ = quality.cell_geometry(nC, owner, neighbour, Cf, Sf)
+    C, V = quality.cell_geometry(nC, owner, neighbour, Cf, Sf)
+    if geom is not None:
+        geom.update(Cf=Cf, Sf=Sf, C=C, V=V)
     T = dom.tris
     tn = np.cross(T[:, 1] - T[:, 0], T[:, 2] - T[:, 0])
     tn /= np.maximum(np.linalg.norm(tn, axis=1), 1e-300)[:, None]

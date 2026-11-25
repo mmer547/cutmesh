@@ -165,12 +165,16 @@ def _quality_metrics_py(points, ff, owner, neighbour, Cf, Sf, C, magSf):
     return float(closed.max()), open_edges, dup, cosang, sk, nPyr, int(neg_own.sum() + neg_nei.sum())
 
 
-def check(points, faces, owner, neighbour, log=print):
+def check(points, faces, owner, neighbour, log=print, geom=None):
+    """geom: (Cf, Sf, C, V) of this mesh if known (face_geometry / cell_geometry)"""
     nI = len(neighbour)
     nC = int(max(owner.max(), neighbour.max() if len(neighbour) else 0)) + 1
     ff = faces if isinstance(faces, FlatFaces) else FlatFaces(faces)
-    Cf, Sf = face_geometry(points, ff)
-    C, V = cell_geometry(nC, owner, neighbour, Cf, Sf)
+    if geom is not None:
+        Cf, Sf, C, V = geom
+    else:
+        Cf, Sf = face_geometry(points, ff)
+        C, V = cell_geometry(nC, owner, neighbour, Cf, Sf)
     magSf = np.linalg.norm(Sf, axis=1)
     res = {}
     # --- topology: upper triangular ordering

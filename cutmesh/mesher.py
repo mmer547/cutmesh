@@ -3325,7 +3325,8 @@ def generate(cfg, log=print):
     if cfg["checkLeaks"]:
         # fluid joined through a solid wall (thinner than the cells there) breaks the
         # simulation: report it loudly
-        nw, Xw = diagnose.through_wall(dom, Pout, faces, owner, neighbour)
+        geom = dict(points=Pout, faces=faces, owner=owner, neighbour=neighbour)
+        nw, Xw = diagnose.through_wall(dom, Pout, faces, owner, neighbour, geom=geom)
         if nw:
             log(f"WARNING: leak check: {nw} cell-to-face lines cross a solid wall (fluid on both"
                 f" sides joined; refine there), e.g. at " + ", ".join(
@@ -3333,9 +3334,11 @@ def generate(cfg, log=print):
         else:
             log("leak check: no fluid connection through a solid wall")
         T("leak check")
+    else:
+        geom = None
     return dict(points=Pout, faces=faces, owner=owner, neighbour=neighbour, patches=patches,
                 cell_zones=cell_zones, face_zones=face_zones, zones=zones, timer=T,
-                cell_zone=cell_zone, leaves=leaves_total)
+                cell_zone=cell_zone, leaves=leaves_total, geometry=geom)
 
 
 def _n_cells(R):
@@ -3407,8 +3410,13 @@ def run(config_path, case_dir=None, log=print, check=True):
             log(f"sliding mesh (openfoam.org): after reading the mesh run {hint}")
     T("write polyMesh")
     if check:
-        R["quality"] = quality.check(R["points"], ff, R["owner"], R["neighbour"], log=log)
+        # the leak check's face and cell geometry, if the mesh is still the one it saw
+        g = R.get("geometry")
+        same = g is not None and "C" in g and all(R[k] is g[k] for k in ("points", "faces", "owner", "neighbour"))
+        R["quality"] = quality.check(R["points"], ff, R["owner"], R["neighbour"], log=log,
+                                     geom=(g["Cf"], g["Sf"], g["C"], g["V"]) if same else None)
         T("quality check")
+    R.pop("geometry", None)              # (memory)
     nC = _n_cells(R)
     log(f"total {time.time() - T.t0:.1f}s, {nC} cells")
     return R
