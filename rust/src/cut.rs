@@ -543,6 +543,11 @@ pub fn cut_batch<'py>(
 /// cut_batch with the cells and the results as flat arrays (csr.rs):
 ///   -> ((item, side, face ptr, face ids, vertex ptr, vertices), new points, new parents,
 ///       next_face_id)
+/// The cells are cut in parallel on symbolic ids (SymAlloc); the ids are then given in
+/// cell order as one by one: a crossing gets the next vertex where its edge first comes,
+/// a cap or a sub-face (one per face and vertex set) the next face id where it first
+/// comes.  The first comings are found by sorting, and the results are written with
+/// their ids straight into the arrays.
 #[pyfunction]
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn cut_batch_csr<'py>(
@@ -558,8 +563,172 @@ pub fn cut_batch_csr<'py>(
     zero_edge: HashMap<(i64, i64, i64), i64>,
 ) -> PyResult<(crate::csr::CsrOut<'py>, Bound<'py, PyArray2<f64>>, Vec<(i64, i64)>, i64)> {
     let cells = crate::csr::read_cells(&fptr, &key, &vptr, &verts)?;
-    let (res, newp, parents, nid) = cut_cells_par(py, &points, &phi, next_face_id, cells, shared_cap, &zero_edge)?;
-    Ok((crate::csr::write_results(py, res, false), vec3_array(py, newp)?, parents, nid))
+    let pos = crate::points_ref(&points)?;
+    let ph: std::borrow::Cow<[f64]> = match phi.as_slice() {
+        Ok(s) => std::borrow::Cow::Borrowed(s),
+        Err(_) => std::borrow::Cow::Owned(phi.as_array().to_vec()),
+    };
+    if ph.len() != pos.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("phi and points differ in length"));
+    }
+    let n0 = pos.len();
+    if cells.par_iter().flatten().any(|(_, p)| p.iter().any(|&v| v < 0 || v as usize >= n0)) {
+        return Err(pyo3::exceptions::PyValueError::new_err("vertex id out of range"));
+    }
+    let (arrays, newp, parents, nid) = py.detach(|| {
+        let ph0: &[f64] = &ph;
+        let zero_edge = &zero_edge;
+        let sym: Vec<(CellResult, Vec<Ev>)> = cells
+            .into_par_iter()
+            .map(|c| {
+                let mut al = SymAlloc {
+                    phi: ph0,
+                    zero_edge,
+                    vcache: FxMap::default(),
+                    nv: 0,
+                    scache: FxMap::default(),
+                    nf: 0,
+                    events: Vec::new(),
+                };
+                let (neg, pos_) = cut_with(&mut al, c, shared_cap);
+                let pc = if shared_cap { split_components(pos_) } else { Vec::new() };
+                ((split_components(neg), pc), al.events)
+            })
+            .collect();
+        let nc = sym.len();
+        // per cell: its crossings and its face requests, numbered in cell order
+        let nvx: Vec<usize> = sym.par_iter().map(|(_, ev)| ev.iter().filter(|e| matches!(e, Ev::Vertex(..))).count()).collect();
+        let nfx: Vec<usize> = sym.par_iter().map(|(_, ev)| ev.len() - ev.iter().filter(|e| matches!(e, Ev::Vertex(..))).count()).collect();
+        let voff = offsets(&nvx);
+        let foff = offsets(&nfx);
+        let (nv_ev, nf_ev) = (voff[nc], foff[nc]);
+
+        // ---- vertices: (lo, hi, request), sorted; the first request of an edge makes the vertex
+        let mut vk: Vec<(i64, i64, usize)> = vec![(0, 0, 0); nv_ev];
+        {
+            let parts = split_by(&mut vk, nvx.iter().copied());
+            parts.into_par_iter().zip(sym.par_iter()).enumerate().for_each(|(c, (out, (_, ev)))| {
+                let mut j = 0;
+                for e in ev {
+                    if let Ev::Vertex(lo, hi) = e {
+                        out[j] = (*lo, *hi, voff[c] + j);
+                        j += 1;
+                    }
+                }
+            });
+        }
+        vk.par_sort_unstable();
+        // runs of one edge: (first request, run start)
+        let mut reps: Vec<(usize, usize)> = Vec::new();
+        for i in 0..vk.len() {
+            if i == 0 || (vk[i].0, vk[i].1) != (vk[i - 1].0, vk[i - 1].1) {
+                reps.push((vk[i].2, i));
+            }
+        }
+        reps.par_sort_unstable();
+        // vertex of each request
+        let mut run_vid = vec![0i64; vk.len()];
+        for (r, &(_, st)) in reps.iter().enumerate() {
+            run_vid[st] = (n0 + r) as i64;
+        }
+        let mut ev_vid = vec![0i64; nv_ev];
+        let mut cur = 0i64;
+        for i in 0..vk.len() {
+            if i == 0 || (vk[i].0, vk[i].1) != (vk[i - 1].0, vk[i - 1].1) {
+                cur = run_vid[i];
+            }
+            ev_vid[vk[i].2] = cur;
+        }
+        drop(run_vid);
+        let parents: Vec<(i64, i64)> = reps.iter().map(|&(_, st)| (vk[st].0, vk[st].1)).collect();
+        drop((vk, reps));
+        let newp: Vec<V3> = parents
+            .par_iter()
+            .map(|&(lo, hi)| {
+                let (pl, phh) = (ph0[lo as usize], ph0[hi as usize]);
+                let t = pl / (pl - phh);
+                let (pa, pb) = (pos[lo as usize], pos[hi as usize]);
+                [pa[0] + t * (pb[0] - pa[0]), pa[1] + t * (pb[1] - pa[1]), pa[2] + t * (pb[2] - pa[2])]
+            })
+            .collect();
+
+        // ---- faces: every request takes the next id, but a sub-face only where it first comes
+        // sub-face requests: (face, its vertex set, request)
+        let nsub: Vec<usize> = sym.par_iter().map(|(_, ev)| ev.iter().filter(|e| matches!(e, Ev::Sub(..))).count()).collect();
+        let soff = offsets(&nsub);
+        let mut sk: Vec<(i64, Vec<i64>, usize)> = vec![(0, Vec::new(), 0); soff[nc]];
+        {
+            let parts = split_by(&mut sk, nsub.iter().copied());
+            parts.into_par_iter().zip(sym.par_iter()).enumerate().for_each(|(c, (out, (_, ev)))| {
+                let vm = &ev_vid[voff[c]..voff[c + 1]];
+                let (mut j, mut f) = (0, 0);
+                for e in ev {
+                    match e {
+                        Ev::Vertex(..) => {}
+                        Ev::Sub(fid, pp) => {
+                            let mut k: Vec<i64> = pp.iter().map(|&v| if v < 0 { vm[(-v - 1) as usize] } else { v }).collect();
+                            k.sort_unstable();
+                            out[j] = (*fid, k, foff[c] + f);
+                            j += 1;
+                            f += 1;
+                        }
+                        Ev::New => f += 1,
+                    }
+                }
+            });
+        }
+        sk.par_sort_unstable();
+        // a repeated sub-face: the request it repeats (else itself)
+        let mut first_of: Vec<usize> = (0..nf_ev).collect();
+        let mut takes = vec![true; nf_ev];
+        for i in 1..sk.len() {
+            if sk[i].0 == sk[i - 1].0 && sk[i].1 == sk[i - 1].1 {
+                let f0 = first_of[sk[i - 1].2];
+                first_of[sk[i].2] = f0;
+                takes[sk[i].2] = false;
+            }
+        }
+        drop(sk);
+        let mut ev_fid = vec![0i64; nf_ev];
+        let mut nid = next_face_id;
+        for r in 0..nf_ev {
+            if takes[r] {
+                ev_fid[r] = nid;
+                nid += 1;
+            } else {
+                ev_fid[r] = ev_fid[first_of[r]];
+            }
+        }
+        drop((first_of, takes));
+
+        // ---- the results with their ids, written straight into the arrays
+        let res: Vec<CellResult> = sym.into_iter().map(|(r, _)| r).collect();
+        let arrays = crate::csr::write_results_mapped(res, |c, v| if v < 0 { ev_vid[voff[c] + (-v - 1) as usize] } else { v },
+                                                      |c, f| if f < 0 { ev_fid[foff[c] + (-f - 1) as usize] } else { f });
+        (arrays, newp, parents, nid)
+    });
+    Ok((crate::csr::csr_out(py, arrays), vec3_array(py, newp)?, parents, nid))
+}
+
+/// running sums [0, c0, c0 + c1, ...]
+fn offsets(c: &[usize]) -> Vec<usize> {
+    let mut o = Vec::with_capacity(c.len() + 1);
+    o.push(0usize);
+    for &x in c {
+        o.push(o.last().unwrap() + x);
+    }
+    o
+}
+
+/// the slice cut into consecutive pieces of the given lengths
+fn split_by<T>(mut s: &mut [T], sizes: impl Iterator<Item = usize>) -> Vec<&mut [T]> {
+    let mut out = Vec::new();
+    for k in sizes {
+        let (a, b) = std::mem::take(&mut s).split_at_mut(k);
+        out.push(a);
+        s = b;
+    }
+    out
 }
 
 #[allow(clippy::type_complexity)]
@@ -604,113 +773,3 @@ fn cut_cells(
     Ok((res, newp, parents, nid))
 }
 
-/// cut_cells with the cells cut in parallel on symbolic ids (SymAlloc), then numbered
-/// in cell order by replaying their id requests on a Cutter: the same ids, points and
-/// results as the sequential loop
-#[allow(clippy::type_complexity)]
-fn cut_cells_par(
-    py: Python<'_>,
-    points: &PyReadonlyArray2<'_, f64>,
-    phi: &PyReadonlyArray1<'_, f64>,
-    next_face_id: i64,
-    cells: Vec<Vec<Face>>,
-    shared_cap: bool,
-    zero_edge: &HashMap<(i64, i64, i64), i64>,
-) -> PyResult<(Vec<CellResult>, Vec<V3>, Vec<(i64, i64)>, i64)> {
-    let mut pos = crate::points(points)?;
-    let mut ph: Vec<f64> = phi.as_array().to_vec();
-    if ph.len() != pos.len() {
-        return Err(pyo3::exceptions::PyValueError::new_err("phi and points differ in length"));
-    }
-    let n0 = pos.len();
-    if cells.par_iter().flatten().any(|(_, p)| p.iter().any(|&v| v < 0 || v as usize >= n0)) {
-        return Err(pyo3::exceptions::PyValueError::new_err("vertex id out of range"));
-    }
-    let (res, parents, nid) = py.detach(|| {
-        let ph0: &[f64] = &ph;
-        let sym: Vec<(CellResult, Vec<Ev>)> = cells
-            .into_par_iter()
-            .map(|c| {
-                let mut al = SymAlloc {
-                    phi: ph0,
-                    zero_edge,
-                    vcache: FxMap::default(),
-                    nv: 0,
-                    scache: FxMap::default(),
-                    nf: 0,
-                    events: Vec::new(),
-                };
-                let (neg, pos_) = cut_with(&mut al, c, shared_cap);
-                let pc = if shared_cap { split_components(pos_) } else { Vec::new() };
-                ((split_components(neg), pc), al.events)
-            })
-            .collect();
-        let mut ct = Cutter {
-            pos: &mut pos,
-            phi: &mut ph,
-            cache: FxMap::default(),
-            subids: FxMap::default(),
-            next_id: next_face_id,
-            new_parents: Vec::new(),
-            zero_edge,
-        };
-        // room for every crossing and sub-face the cells ask for (no rehashing)
-        let (nv, ns) = sym.iter().fold((0usize, 0usize), |(a, b), (_, ev)| {
-            (a + ev.iter().filter(|e| matches!(e, Ev::Vertex(..))).count(), b + ev.iter().filter(|e| matches!(e, Ev::Sub(..))).count())
-        });
-        ct.cache.reserve(nv);
-        ct.subids.reserve(ns);
-        let mut ids: Vec<(CellResult, Vec<i64>, Vec<i64>)> = Vec::with_capacity(sym.len());
-        for ((negc, posc), events) in sym {
-            let mut vmap: Vec<i64> = Vec::new();
-            let mut fmap: Vec<i64> = Vec::new();
-            let real_v = |v: i64, vmap: &[i64]| if v < 0 { vmap[(-v - 1) as usize] } else { v };
-            for ev in events {
-                match ev {
-                    Ev::Vertex(lo, hi) => {
-                        let c = match ct.cache.get(&(lo, hi)) {
-                            Some(&c) => c,
-                            None => {
-                                let c = ct.new_vertex(lo, hi);
-                                ct.cache.insert((lo, hi), c);
-                                c
-                            }
-                        };
-                        vmap.push(c);
-                    }
-                    Ev::Sub(fid, pp) => {
-                        let mut k: Vec<i64> = pp.iter().map(|&v| real_v(v, &vmap)).collect();
-                        k.sort_unstable();
-                        fmap.push(ct.sub_key((fid, k)));
-                    }
-                    Ev::New => fmap.push(ct.new_face_id()),
-                }
-            }
-            ids.push(((negc, posc), vmap, fmap));
-        }
-        let res: Vec<CellResult> = ids
-            .into_par_iter()
-            .map(|((negc, posc), vmap, fmap)| {
-                let real_v = |v: i64| if v < 0 { vmap[(-v - 1) as usize] } else { v };
-                let map_comps = |comps: Vec<Vec<Face>>| -> Vec<Vec<Face>> {
-                    comps
-                        .into_iter()
-                        .map(|comp| {
-                            comp.into_iter()
-                                .map(|(f, p)| {
-                                    let f = if f < 0 { fmap[(-f - 1) as usize] } else { f };
-                                    (f, p.into_iter().map(real_v).collect())
-                                })
-                                .collect()
-                        })
-                        .collect()
-                };
-                (map_comps(negc), map_comps(posc))
-            })
-            .collect();
-        let parents = std::mem::take(&mut ct.new_parents);
-        (res, parents, ct.next_id)
-    });
-    let newp: Vec<V3> = pos[n0..].to_vec();
-    Ok((res, newp, parents, nid))
-}
