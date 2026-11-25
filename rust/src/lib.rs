@@ -1020,14 +1020,17 @@ impl TriMesh {
                     if !self.inside_one(axpy(p, eps, n)) {
                         return (false, false);
                     }
+                    // no wall within the ball around the probe segment [eps, tg]: the
+                    // fluid goes on (the fixed steps below would all stay inside too).
+                    // Most samples end here, so this test comes before them.
+                    let r = 0.5 * (tg - eps);
+                    if !(self.closest_one(axpy(p, eps + r, n)).0.sqrt() < r) {
+                        return (false, false);
+                    }
                     for k in 1..9 {
                         if !self.inside_one(axpy(p, k as f64 * tg / 8.0, n)) {
                             return (true, false);
                         }
-                    }
-                    let r = 0.5 * (tg - eps);
-                    if !(self.closest_one(axpy(p, eps + r, n)).0.sqrt() < r) {
-                        return (false, false);
                     }
                     let mut t = eps;
                     for _ in 0..max_steps {

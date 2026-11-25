@@ -482,10 +482,15 @@ class Surface:
             self._build_search_tree(self._kd_spacing)
         return self._search_tree
 
-    def samples(self, spacing, regions=None, ordered=True):
-        """sample points of the triangles (regions) and their triangle ids.  ordered=False:
-        the same points in any order (in Rust: triangle by triangle, in parallel)"""
-        sel = np.arange(len(self.tris)) if regions is None else np.nonzero(np.isin(self.region, regions))[0]
+    def samples(self, spacing, regions=None, ordered=True, triangles=None):
+        """sample points of the triangles (regions, or the triangle ids `triangles`) and
+        their triangle ids.  ordered=False: the same points in any order (in Rust:
+        triangle by triangle, in parallel; a triangle gets the same points whichever
+        triangles are sampled with it)"""
+        if triangles is not None:
+            sel = np.asarray(triangles, np.int64)
+        else:
+            sel = np.arange(len(self.tris)) if regions is None else np.nonzero(np.isin(self.region, regions))[0]
         if not ordered and hasattr(self._rs, "samples_by_triangle"):
             return self._rs.samples_by_triangle(np.asarray(sel, np.int64), spacing)
         if hasattr(self._rs, "samples"):
