@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 
 from cutmesh.geometry import Surface               # noqa: E402
 from cutmesh.mesher import (_thin_gap, _thin_gap_py, merge_coplanar_wall_faces,   # noqa: E402
-                            _gap_refinement_samples, _wall_into)
+                            _gap_refinement_samples, _wall_into, _wall_skewness)
 
 
 def merge(P, faces):
@@ -135,6 +135,26 @@ class ThinGap(unittest.TestCase):
         # no first look when its spacing (2 tg) is under two samples: every wall finely
         q2, _, nc2 = _gap_refinement_samples(dom, sp, 0.08)
         self.assertIsNone(nc2)
+
+
+class WallSkewness(unittest.TestCase):
+    def test_matches_quality(self):
+        # a thin slab cell 1 x 1 x 0.1 with its top face split into a small and a large
+        # part: the boundary skewness of quality.face_skewness (checkMesh's formula)
+        from cutmesh import quality
+        P = np.array([[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0],
+                      [0, 0, .1], [1, 0, .1], [1, 1, .1], [0, 1, .1], [.9, 0, .1], [.9, 1, .1]], float)
+        faces = [[0, 3, 2, 1], [4, 8, 9, 7], [8, 5, 6, 9], [0, 1, 5, 8, 4], [3, 7, 9, 6, 2],
+                 [0, 4, 7, 3], [1, 2, 6, 5]]
+        ff = quality.FlatFaces(faces)
+        Cf, Sf = quality.face_geometry(P, ff)
+        own = np.zeros(len(faces), np.int64)
+        nei = np.zeros(0, np.int64)
+        C, _ = quality.cell_geometry(1, own, nei, Cf, Sf)
+        ref = quality.face_skewness(P, ff, Cf, Sf, C, own, nei)
+        got = _wall_skewness(P, [(i, f) for i, f in enumerate(faces)], Cf, Sf, C[0])
+        np.testing.assert_allclose(got, ref, rtol=1e-12, atol=1e-12)
+        self.assertGreater(got[2], 4.0)                  # the narrow strip far off the centre
 
 
 if __name__ == "__main__":

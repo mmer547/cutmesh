@@ -496,6 +496,24 @@ def _leaf_bad_py(P, leaves, fptr, fverts, cptr, csize, flat_at=None, flat_angle=
     return (np.bincount(owner_, badf.astype(int), len(leaves)) > 0) | (vv <= 0)
 
 
+def _wall_skewness(P, faces, cf, sf, cc):
+    """checkMesh's skewness of each face (vertex lists faces, centres cf, area vectors sf)
+    taken as a boundary face of the cell with centre cc: the distance of the face centre
+    from the face normal through cc, divided by the extent of the face that way (at
+    least 0.4 x the distance of cc from the face plane)"""
+    cf = np.asarray(cf, float); sf = np.asarray(sf, float)
+    cpf = cf - np.asarray(cc, float)
+    n = sf / np.maximum(np.linalg.norm(sf, axis=1), 1e-300)[:, None]
+    d = n * np.einsum("ij,ij->i", n, cpf)[:, None]
+    sv = cpf - (np.einsum("ij,ij->i", sf, cpf) / (np.einsum("ij,ij->i", sf, d) + 1e-300))[:, None] * d
+    msv = np.linalg.norm(sv, axis=1)
+    svh = sv / (msv + 1e-300)[:, None]
+    fd = 0.4 * np.linalg.norm(d, axis=1)
+    for i, (_, p) in enumerate(faces):
+        fd[i] = max(fd[i], float(np.abs((P[p] - cf[i]) @ svh[i]).max()))
+    return msv / (fd + 1e-300)
+
+
 def _tets_ok(P, faces, cf, cc, vmin, use_rs=True):
     """every (face centre, edge, cell centre) tet has a volume above vmin"""
     if use_rs and _core is not None and hasattr(_core, "tets_ok") and len(faces):
@@ -3386,15 +3404,28 @@ def generate(cfg, log=print):
     # tet decomposition.  If they touch the wall they are removed: their faces become
     # walls of the neighbours.
     # A cell failing only the tet test is removed if the faces it exposes stay close to
-    # the STL (no dent in the wall).
+    # the STL (no dent in the wall).  So is a cell with a wall face whose skewness is
+    # over checkMesh's limit (a thin slab along a wall, its wall faces far off the
+    # centre): checkMesh fails such a mesh.
     removed = np.zeros(nP, bool)
     tet_cand = []
+    skewed = set()
     roots = np.nonzero(proot == np.arange(nP))[0]
-    # the large convex cells are fine: only the others are looked at
-    roots = roots[~((gvol[roots] >= beta * hexvol[roots]) & ~np.asarray(bad_piece, bool)[roots])]
+    # the large convex cells are fine unless pieces were merged into them (a union of
+    # thin slabs along a wall can have its wall faces far off its centre)
+    has_m = np.zeros(nP, bool)
+    has_m[[k for k in members if k < nP]] = True
+    roots = roots[~((gvol[roots] >= beta * hexvol[roots]) & ~np.asarray(bad_piece, bool)[roots]) | has_m[roots]]
     for r in roots.tolist():
         keep_, cf_, sf_, V_, cc_ = poly_geom(node_faces(r))
         if V_ > 0 and _tets_ok(P, keep_, cf_, cc_, 1e-3 * V_):
+            hi = np.flatnonzero(_wall_skewness(P, keep_, cf_, sf_, cc_) > 4.0)
+            if not len(hi) or min(face_neighbour(keep_[i][0], {r}) for i in hi.tolist()) >= 0:
+                continue                      # no wall face over the limit
+            nb_ = [face_neighbour(fid, {r}) for fid, _ in keep_]
+            exposed = {v for (_, p), b in zip(keep_, nb_) if b >= 0 for v in p}
+            tet_cand.append((r, sorted(exposed), csize[pieces[r][1]]))
+            skewed.add(r)
             continue
         nb_ = [face_neighbour(fid, {r}) for fid, _ in keep_]
         if min(nb_) >= 0:
@@ -3415,8 +3446,13 @@ def generate(cfg, log=print):
             if max((dmap[v] for v in ex), default=0.0) < 0.4 * hc:
                 removed[r] = True
     if removed.any():
+        nsk = sum(1 for r in skewed if removed[r])
         log(f"removed {int(removed.sum())} invalid wall slivers"
-            f" ({float(np.sum(np.maximum(gvol[removed], 0))) * 1e9:.3g} mm^3)")
+            f" ({float(np.sum(np.maximum(gvol[removed], 0))) * 1e9:.3g} mm^3"
+            + (f"; {nsk} of them with a wall face skewed over 4" if nsk else "") + ")")
+    if len(skewed) > sum(1 for r in skewed if removed[r]):
+        log(f"wall slivers: {len(skewed) - sum(1 for r in skewed if removed[r])} cells with a wall face skewed"
+            " over 4 kept (removing them would dent the wall)")
 
     T.mark("wall slivers")
     # ------------------------------------------------------------ final cell numbering
