@@ -517,6 +517,10 @@ REPAIR: domain STL: removed 20 zero-area triangles, 50 duplicated triangles (one
 4. **スライディングメッシュ**: 界面の AMI / 非適合カップル用パッチへの分割は対応済み（上記）。今後: OpenFOAM 本体での
    動作確認、openfoam.org 開発版の `dynamicMeshDict`
 
+## ライセンス
+
+MIT ライセンスです（[LICENSE](LICENSE)）。
+
 ## 商標
 
 cutmesh は OpenFOAM の一部ではなく、OpenFOAM 用のメッシュ（`constant/polyMesh`）を書き出す独立したツールです。

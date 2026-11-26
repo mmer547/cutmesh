@@ -541,6 +541,10 @@ orientation is inconsistent.
 4. **Sliding meshes.** Interfaces can already be split into AMI or non-conformal coupling patches. Next are more checks
    in OpenFOAM and `dynamicMeshDict` support for the openfoam.org development version.
 
+## License
+
+cutmesh is released under the MIT License (see [LICENSE](LICENSE)).
+
 ## Trademarks
 
 cutmesh is an independent tool that writes meshes (`constant/polyMesh`) for OpenFOAM.
