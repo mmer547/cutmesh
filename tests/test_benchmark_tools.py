@@ -69,6 +69,8 @@ class QualityGate(unittest.TestCase):
     def test_pass(self):
         o = gres()
         self.assertEqual(run_bench.gate(gres(quality={"nCells": 1029, "nSkew4": 1}), o), [])
+        for n in (970, 1030):                  # exactly 3 %: inside (no rounding at the boundary)
+            self.assertEqual(run_bench.gate(gres(quality={"nCells": n}), o), [], n)
         self.assertEqual(run_bench.gate(gres(layers={"full": 89.1},
                                              featureEdges={"over02": 0.014, "p95": 0.11}), o), [])
 

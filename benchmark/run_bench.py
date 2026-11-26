@@ -390,7 +390,7 @@ STEP_MIN, STEP_SLOW = 1.0, 1.2          # steps of at least STEP_MIN s, slower b
 
 # quality gate (--gate, roadmap v0.7.0): a change that may change the mesh is accepted when
 # every case meets all of these against the baseline
-GATE_CELLS = 0.03                       # cell count within +-3 %
+GATE_CELLS_PCT = 3                      # cell count within +-3 % (inclusive, compared in integers)
 GATE_LAYERS = 1.0                       # full layer thickness: not down by 1 point or more
 GATE_EDGE_OVER = 0.005                  # feature-edge samples farther than 0.2 hmin: +0.5 points at most
 GATE_EDGE_P95 = 0.02                    # their 95th percentile: +0.02 hmin at most
@@ -416,8 +416,9 @@ def gate(r, o):
     if int(qb.get("nNegVol", 0)) > 0:
         out.append(f"{qb['nNegVol']} non-positive volumes")
     if qa.get("nCells") and qb.get("nCells"):
-        dc = qb["nCells"] / qa["nCells"] - 1.0
-        if abs(dc) > GATE_CELLS:
+        na, nb = int(qa["nCells"]), int(qb["nCells"])
+        dc = nb / na - 1.0
+        if abs(nb - na) * 100 > GATE_CELLS_PCT * na:
             out.append(f"cells {qa['nCells']} -> {qb['nCells']} ({dc:+.1%})")
     # the layer coverage and the feature edges must have been measured in both runs (None:
     # measured, but not applicable to the case); a missing one is not a pass
