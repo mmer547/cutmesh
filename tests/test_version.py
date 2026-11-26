@@ -1,4 +1,4 @@
-"""The version is kept in cutmesh/__init__.py only; rust/Cargo.toml carries the same."""
+"""The version is kept in cutmesh/__init__.py and rust/Cargo.toml (the wheel's, through maturin): the same."""
 import contextlib
 import io
 import os
@@ -23,10 +23,13 @@ class Version(unittest.TestCase):
         self.assertEqual(m.group(1), cutmesh.__version__)
 
     def test_pyproject_reads_it(self):
+        # maturin takes the version of the wheel from rust/Cargo.toml (checked above)
         with open(os.path.join(ROOT, "pyproject.toml"), encoding="utf-8") as f:
             s = f.read()
         self.assertIn('dynamic = ["version"]', s)
-        self.assertIn('version = {attr = "cutmesh.__version__"}', s)
+        self.assertIn('build-backend = "maturin"', s)
+        self.assertIn('manifest-path = "rust/Cargo.toml"', s)
+        self.assertIn('module-name = "cutmesh._core"', s)
 
     def test_cli(self):
         out = io.StringIO()

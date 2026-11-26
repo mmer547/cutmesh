@@ -28,12 +28,24 @@ https://mmer547.github.io/cutmesh/ ）にあります。
 
 ## インストール
 
+**wheel（おすすめ）**: [GitHub の Releases](https://github.com/mmer547/cutmesh/releases) から、自分の OS 用の
+wheel（`cutmesh-<版>-cp39-abi3-<OS>.whl`。Linux・Windows・macOS、Python 3.9 以上で共通）をダウンロードしてインストールします。
+Rust 拡張が入っているので、ビルドは要りません。PyPI には公開していません。
+
 ```bash
-pip install -e .                      # オフライン環境では --no-build-isolation（要 wheel）
-python tools/build_rust.py            # 任意: Rust 拡張のビルド（下記「高速化」）
+pip install cutmesh-0.9.0-cp39-abi3-win_amd64.whl     # ダウンロードした wheel のファイル名
+cutmesh --version
 ```
 
-インストールしない場合はプロジェクト直下から実行するか、`PYTHONPATH` に `cutmesh` の親ディレクトリを通してください。
+**ソースから**: Rust ツールチェーン（cargo）があれば、`pip install .`（`maturin` でビルドされる）で Rust 拡張ごと入ります。
+
+```bash
+pip install -e .                      # 開発用（Rust 拡張もビルドされる）
+python tools/build_rust.py            # インストールせずに、リポジトリ直下から使う場合の Rust 拡張のビルド（下記「高速化」）
+```
+
+インストールしない場合はリポジトリ直下から `python -m cutmesh` で実行するか、`PYTHONPATH` にリポジトリのディレクトリを通してください。
+Rust 拡張がなくても Python/NumPy の処理で動きます（大幅に遅い）。
 
 ## 使い方
 
@@ -460,6 +472,18 @@ ASCII しか読めないツールに渡すときは `"writeFormat": "ascii"` に
 STL が空・途中で切れている・頂点の行が壊れている・三角形がない・座標が NaN のときは、ファイル名（ASCII では行番号）と
 内容を示すエラーで止まります。`cutmesh` コマンドはこれらのエラーをトレースバックなしで `ERROR: ...` と表示し、
 終了コード 1 を返します（不明なオプションや引数の誤りは終了コード 2）。
+
+## meshDict の互換性
+
+- 版番号は `MAJOR.MINOR.PATCH`（`cutmesh --version`、ログの先頭）。
+- **1.x のあいだ、meshDict のキーは削除・改名・意味の変更をしない**。1.x のある版で書いた meshDict は、それ以降の 1.x でも
+  同じ意味で読める。仕様は `docs/meshdict.schema.json` とマニュアル。
+- 新しいキーは追加することがある。既定値は、そのキーがなかったときと同じ動作になる値にする。
+- キーを廃止・改名するときは、古いキーを少なくとも 1 つのマイナー版のあいだ新しいキーとして読み、`WARNING: meshDict: ... is
+  deprecated` を出す（`cutmesh/config.py` の `DEPRECATED_KEYS`）。古いキーを外すのは次のメジャー版。
+- 同じ meshDict でも、マイナー版ではメッシュの改良で結果が変わることがある（更新情報に書き、ベンチマークの品質ゲートで
+  確かめる）。パッチ版は、不具合の修正を除いてメッシュを変えない。
+- 1.0 より前（0.x）は、キーが変わることがある。
 
 ## 入力 STL の修正と検査
 

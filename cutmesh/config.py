@@ -6,6 +6,8 @@ validate_config(cfg, log): types and ranges of the settings, required keys, inpu
     logged as WARNING lines, with the closest known key.
 check_names(cfg, names, log): names that should be solids of the domain STL
     (surfaceRefinement, patchTypes, nonRotatingPatches, addLayers.patches) but are not.
+upgrade_keys(cfg): top-level keys renamed or retired (DEPRECATED_KEYS) read as their
+    replacement; validate_config logs a WARNING for each.
 
 Keys starting with "_" or "//" are comments and are not checked.
 """
@@ -16,6 +18,30 @@ import os
 
 class ConfigError(ValueError):
     """meshDict settings that cannot be used (all problems found, one per line)."""
+
+
+# Top-level meshDict keys renamed or retired, with the version that did it:
+#   old key -> (new key, or None when the setting is gone, version, note)
+# Compatibility (the manual's "meshDict compatibility"): a key leaves the meshDict only
+# through this table.  It keeps being read (as the new key) with a WARNING for at least one
+# minor version, and is removed from the table at the next major version.
+DEPRECATED_KEYS = {}
+
+
+def upgrade_keys(cfg):
+    """cfg (a meshDict as read) with the deprecated keys read as their replacement:
+    (new dict, [(old, new, version, note)] for the keys found).  A replacement given in
+    cfg as well wins over the old key."""
+    out, found = {}, []
+    for k, v in cfg.items():
+        if k in DEPRECATED_KEYS:
+            new, ver, note = DEPRECATED_KEYS[k]
+            found.append((k, new, ver, note))
+            if new is not None and new not in cfg:
+                out[new] = v
+        else:
+            out[k] = v
+    return out, found
 
 
 # keys read by the mesher besides DEFAULTS (cutmesh/mesher.py)
@@ -138,7 +164,10 @@ def validate_config(cfg, log=None, layer_keys=None):
         from .layers import DEFAULTS as LD
         layer_keys = set(LD)
     c = _Checker(log)
-    c.unknown({k: v for k, v in cfg.items() if k != "_base"}, set(DEFAULTS) | OTHER_KEYS, "")
+    for old, new, ver, note in cfg.get("_deprecated", ()):
+        c.warn(f"{old!r} is deprecated since {ver}" + (f": read as {new!r}" if new else ": it is ignored")
+               + (f" ({note})" if note else "") + "; it will be removed in the next major version")
+    c.unknown({k: v for k, v in cfg.items() if k not in ("_base", "_deprecated")}, set(DEFAULTS) | OTHER_KEYS, "")
 
     for k in ("domain", "baseCellSize"):
         if k not in cfg:

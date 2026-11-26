@@ -244,3 +244,38 @@ class TestCLI(TempDir):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DeprecatedKeys(TempDir):
+    """a renamed key keeps being read as its replacement, with a WARNING (config.DEPRECATED_KEYS)"""
+
+    def test_renamed_and_retired(self):
+        from unittest import mock
+        from cutmesh import config
+        write_stl_ascii(self.write("s.stl", ""), [("walls", box())])
+        table = {"oldBuffer": ("bufferLayers", "0.9.0", "renamed"), "oldFlag": (None, "0.9.0", "")}
+        with mock.patch.dict(config.DEPRECATED_KEYS, table):
+            p = self.write("m.json", json.dumps({"domain": "s.stl", "baseCellSize": 0.1, "oldBuffer": 4,
+                                                 "oldFlag": True}))
+            cfg = load_config(p)
+            self.assertEqual(cfg["bufferLayers"], 4)
+            self.assertNotIn("oldBuffer", cfg)
+            self.assertNotIn("oldFlag", cfg)
+            lines = []
+            validate_config(cfg, lines.append)
+            self.assertTrue(any("'oldBuffer' is deprecated since 0.9.0: read as 'bufferLayers'" in s for s in lines), lines)
+            self.assertTrue(any("'oldFlag' is deprecated since 0.9.0: it is ignored" in s for s in lines), lines)
+            self.assertFalse(any("unknown key" in s for s in lines), lines)
+            # the new key given as well wins
+            p = self.write("m2.json", json.dumps({"domain": "s.stl", "baseCellSize": 0.1, "oldBuffer": 4,
+                                                  "bufferLayers": 1}))
+            self.assertEqual(load_config(p)["bufferLayers"], 1)
+
+    def test_table_entries(self):
+        # every entry names a known replacement (or none) and a version
+        from cutmesh import config
+        from cutmesh.mesher import DEFAULTS
+        for old, (new, ver, note) in config.DEPRECATED_KEYS.items():
+            self.assertNotIn(old, DEFAULTS)
+            self.assertTrue(new is None or new in DEFAULTS or new in config.OTHER_KEYS, old)
+            self.assertRegex(ver, r"^\d+\.\d+\.\d+$")

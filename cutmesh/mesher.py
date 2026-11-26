@@ -15,7 +15,7 @@ from .cylbase import CylindricalBase
 from .cutcell import CutContext, split_components
 from .polymesh import write_polymesh
 from .featclip import PlaneClip, clip_cell, clipped_face, make_alloc
-from .config import validate_config, check_names, ConfigError  # noqa: F401
+from .config import validate_config, check_names, upgrade_keys, ConfigError  # noqa: F401
 from . import quality, __version__
 from . import diagnose
 
@@ -101,8 +101,11 @@ def load_config(path):
     if not isinstance(cfg, dict):
         raise ConfigError(f"{path}: a meshDict is a JSON object {{...}}, got {type(cfg).__name__}")
     base = os.path.dirname(os.path.abspath(path))
+    cfg, dep = upgrade_keys(cfg)           # renamed / retired keys (config.DEPRECATED_KEYS)
     full = dict(DEFAULTS); full.update(cfg)
     full["_base"] = base
+    if dep:
+        full["_deprecated"] = dep
     return full
 
 

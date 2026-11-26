@@ -27,12 +27,24 @@ The documentation site includes a manual and mesh images from the examples. [Eng
 
 ## Installation
 
+**Wheel (recommended).** Download the wheel for your OS from the
+[GitHub releases](https://github.com/mmer547/cutmesh/releases) (`cutmesh-<version>-cp39-abi3-<platform>.whl`, for Linux,
+Windows, or macOS and any Python 3.9 or later) and install it. The Rust extension is built in. cutmesh is not on PyPI.
+
 ```bash
-pip install -e .                      # Offline: use --no-build-isolation (requires wheel)
-python tools/build_rust.py            # Optional: build the Rust extension (see Rust acceleration below)
+pip install cutmesh-0.9.0-cp39-abi3-win_amd64.whl     # the file name of the wheel you downloaded
+cutmesh --version
 ```
 
-To run from the source tree, use the repository root as the working directory or add it to `PYTHONPATH`.
+**From source.** With a Rust toolchain (cargo), `pip install .` builds the Rust extension with `maturin`.
+
+```bash
+pip install -e .                      # Development install (builds the Rust extension too)
+python tools/build_rust.py            # Rust build for running from the source tree without installing (see Rust acceleration below)
+```
+
+To run from the source tree, use `python -m cutmesh` from the repository root or add it to `PYTHONPATH`. Without the Rust
+extension, cutmesh falls back to slower Python/NumPy code.
 
 ## Usage
 
@@ -475,6 +487,18 @@ cutmesh validates `meshDict.json` before meshing (`cutmesh/config.py`).
 For an empty or truncated STL, malformed vertex lines, missing triangles, or NaN coordinates, the error identifies the
 file, the problem, and the line number for ASCII files. `cutmesh` prints `ERROR: ...` without a traceback and returns
 exit code 1. Unknown options and invalid command-line arguments return 2.
+
+## meshDict compatibility
+
+- Versions are `MAJOR.MINOR.PATCH` (`cutmesh --version` and the first line of the log).
+- **Within 1.x, meshDict keys are not removed, renamed, or given a new meaning.** A meshDict written for one 1.x version reads
+  the same in every later 1.x version. `docs/meshdict.schema.json` and the manual are the specification.
+- New keys may be added. Their defaults keep the behavior from before the key existed.
+- A key that must be retired or renamed is still read, as its replacement, for at least one minor version, with a
+  `WARNING: meshDict: ... is deprecated` line (`DEPRECATED_KEYS` in `cutmesh/config.py`). It is removed at the next major version.
+- With the same meshDict, a minor version may produce a different mesh when the meshing improves. The news lists such changes
+  and the benchmark quality gate checks them. Patch versions do not change meshes except to fix bugs.
+- Before 1.0 (0.x), keys may still change.
 
 ## Input STL repair and checks
 
