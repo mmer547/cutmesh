@@ -488,6 +488,18 @@ For an empty or truncated STL, malformed vertex lines, missing triangles, or NaN
 file, the problem, and the line number for ASCII files. `cutmesh` prints `ERROR: ...` without a traceback and returns
 exit code 1. Unknown options and invalid command-line arguments return 2.
 
+## meshDict compatibility
+
+- Versions are `MAJOR.MINOR.PATCH` (`cutmesh --version` and the first line of the log).
+- **Within 1.x, meshDict keys are not removed, renamed, or given a new meaning.** A meshDict written for one 1.x version reads
+  the same in every later 1.x version. `docs/meshdict.schema.json` and the manual are the specification.
+- New keys may be added. Their defaults keep the behavior from before the key existed.
+- A key that must be retired or renamed is still read, as its replacement, for at least one minor version, with a
+  `WARNING: meshDict: ... is deprecated` line (`DEPRECATED_KEYS` in `cutmesh/config.py`). It is removed at the next major version.
+- With the same meshDict, a minor version may produce a different mesh when the meshing improves. The news lists such changes
+  and the benchmark quality gate checks them. Patch versions do not change meshes except to fix bugs.
+- Before 1.0 (0.x), keys may still change.
+
 ## Input STL repair and checks
 
 **Whenever cutmesh automatically repairs an input, it logs a `REPAIR:` line with the repair type and count.**

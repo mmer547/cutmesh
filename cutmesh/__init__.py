@@ -2,4 +2,4 @@
 
 # The version of cutmesh.  rust/Cargo.toml carries the same (maturin takes the wheel's version
 # from there; tests/test_version.py checks that both agree).
-__version__ = "0.8.0"
+__version__ = "0.9.0"

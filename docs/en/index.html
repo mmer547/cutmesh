@@ -40,6 +40,9 @@
 
 <h2 id="news">News</h2>
 <ul class="news">
+  <li><time datetime="2026-11-27">2026-11-27</time><span class="ver">v0.9.0</span>
+    <p><strong>Packaging.</strong> Wheels with the Rust extension built in (Linux, Windows, and macOS, for any Python 3.9 or later) are attached to the <a href="https://github.com/mmer547/cutmesh/releases">GitHub releases</a>. Download one and <code>pip install</code> it to get the fast version without building anything. cutmesh is not published on PyPI.
+    The <a href="manual.html#compat">meshDict compatibility policy</a> from 1.0 is set, and retired or renamed keys are read as their replacement with a warning. Meshes are unchanged.</p></li>
   <li><time datetime="2026-11-27">2026-11-27</time><span class="ver">v0.8.0</span>
     <p><strong>Reliability.</strong> CI now runs OpenFOAM's <code>checkMesh</code> (v2512) on all 15 stirred-tank and showcase examples, and every one reports "Mesh OK". This also confirms that OpenFOAM reads cutmesh's binary format.
     Thin slivers with wall faces skewed over 4, including cells merged from small pieces, are removed where the wall does not dent (the 1 mm gap example went from 8 such faces to 0).

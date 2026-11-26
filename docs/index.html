@@ -40,6 +40,9 @@
 
 <h2 id="news">更新情報</h2>
 <ul class="news">
+  <li><time datetime="2026-11-27">2026-11-27</time><span class="ver">v0.9.0</span>
+    <p><strong>配布。</strong>Rust 拡張を組み込んだ wheel（Linux・Windows・macOS、Python 3.9 以上で共通）を作り、<a href="https://github.com/mmer547/cutmesh/releases">GitHub の Releases</a> に置くようにしました。ダウンロードして <code>pip install</code> するだけで、ビルドなしに速い版が入ります（PyPI には公開しません）。
+    1.0 以降の <a href="manual.html#compat">meshDict の互換性の方針</a>を決め、廃止・改名したキーを読み替えて警告する仕組みを入れました。メッシュは変わりません。</p></li>
   <li><time datetime="2026-11-27">2026-11-27</time><span class="ver">v0.8.0</span>
     <p><strong>信頼性。</strong>OpenFOAM（v2512）の <code>checkMesh</code> を、攪拌槽の例とショーケースの全 15 例に CI で毎回かけるようにし、全例が「Mesh OK」になりました。cutmesh のバイナリ形式を OpenFOAM 本体で読めることも確かめています。
     歪度 4 を超える壁面を持つ薄い切れ端（小さな切れ端どうしを統合したセルを含む）を、壁がへこまない範囲で取り除くようにしました（隙間 1 mm の例で 8 面 → 0 面）。

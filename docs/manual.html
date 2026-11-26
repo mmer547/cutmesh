@@ -42,6 +42,7 @@
     <li><a href="#format">書き出し形式</a></li>
     <li><a href="#rust">高速化（Rust 拡張）</a></li>
     <li><a href="#checks">設定と入力の検査</a></li>
+    <li><a href="#compat">meshDict の互換性</a></li>
     <li><a href="#tools">コマンドとオプション</a>
       <ol>
         <li><a href="#cmd-cutmesh">cutmesh</a></li>
@@ -351,6 +352,17 @@ CUTMESH_NO_RUST=1 python -m cutmesh meshDict.json   # Python の処理を強制�
 <p>直さずに <code>WARNING:</code> を出すもの: 開いた辺、非多様体の辺、向きの食い違う辺。問題がなければ
 <code>domain STL check: closed, consistently oriented, N triangles</code> と出ます。メッシュの完成後には、メッシュの体積を STL の体積と比べます
 （<code>volume check: mesh ..., STL ... (+x%)</code>）。</p>
+
+<h2 id="compat">meshDict の互換性</h2>
+<ul>
+  <li><strong>版番号</strong>は <code>MAJOR.MINOR.PATCH</code> です（<code>cutmesh --version</code>、ログの先頭）。</li>
+  <li><strong>1.x のあいだ、meshDict のキーは削除・改名・意味の変更をしません。</strong>1.x のある版で書いた meshDict は、それ以降の 1.x でも同じ意味で読めます。仕様は <a href="meshdict.schema.json">JSON スキーマ</a> とこのマニュアルです。</li>
+  <li><strong>新しいキー</strong>は追加することがあります。既定値は、そのキーがなかったときと同じ動作になる値にします。</li>
+  <li><strong>キーを廃止・改名するとき</strong>は、古いキーを少なくとも 1 つのマイナー版のあいだ新しいキーとして読み、<code>WARNING: meshDict: 'old' is deprecated since x.y.z: read as 'new'</code> を出します。古いキーを外すのは次のメジャー版です。</li>
+  <li><strong>メッシュ</strong>: 同じ meshDict でも、マイナー版ではメッシュの改良で結果が変わることがあります（更新情報に書き、ベンチマークの品質ゲートで悪化していないことを確かめます）。パッチ版は、不具合の修正を除いてメッシュを変えません。</li>
+  <li>知らないキーは無視して警告します（綴りの誤りに気づくため）。</li>
+  <li>1.0 より前（0.x）は、キーが変わることがあります。</li>
+</ul>
 
 <h2 id="tools">コマンドとオプション</h2>
 <p>パスはリポジトリの直下から実行する場合のものです。<code>pip install -e .</code> をすれば <code>cutmesh</code> と <code>python -m cutmesh.*</code> はどこからでも使えます。</p>

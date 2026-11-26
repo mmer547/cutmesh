@@ -42,6 +42,7 @@
     <li><a href="#format">Export format</a></li>
     <li><a href="#rust">Rust acceleration</a></li>
     <li><a href="#checks">Configuration and input checks</a></li>
+    <li><a href="#compat">meshDict compatibility</a></li>
     <li><a href="#tools">Commands and options</a>
       <ol>
         <li><a href="#cmd-cutmesh">cutmesh</a></li>
@@ -351,6 +352,17 @@ CUTMESH_NO_RUST=1 python -m cutmesh meshDict.json   # Force the Python path for 
 <p>Open edges, non-manifold edges, and inconsistent orientations produce <code>WARNING:</code> messages and require repair in the source STL. For a valid STL, the log reads
 <code>domain STL check: closed, consistently oriented, N triangles</code>. After meshing, cutmesh compares the mesh volume with the STL volume
 （<code>volume check: mesh ..., STL ... (+x%)</code>）。</p>
+
+<h2 id="compat">meshDict compatibility</h2>
+<ul>
+  <li><strong>Versions</strong> are <code>MAJOR.MINOR.PATCH</code> (<code>cutmesh --version</code> and the first line of the log).</li>
+  <li><strong>Within 1.x, meshDict keys are not removed, renamed, or given a new meaning.</strong> A meshDict written for one 1.x version reads the same in every later 1.x version. The <a href="meshdict.schema.json">JSON schema</a> and this manual are the specification.</li>
+  <li><strong>New keys</strong> may be added. Their defaults keep the behavior from before the key existed.</li>
+  <li><strong>A key that must be retired or renamed</strong> is still read, as its replacement, for at least one minor version, with <code>WARNING: meshDict: 'old' is deprecated since x.y.z: read as 'new'</code>. The old key is removed at the next major version.</li>
+  <li><strong>Meshes</strong>: with the same meshDict, a minor version may produce a different mesh when the meshing improves. The news lists such changes, and the benchmark quality gate checks that they are not worse. Patch versions do not change meshes except to fix bugs.</li>
+  <li>Unknown keys are ignored with a warning, so that typos are noticed.</li>
+  <li>Before 1.0 (0.x), keys may still change.</li>
+</ul>
 
 <h2 id="tools">Commands and options</h2>
 <p>These paths are relative to the repository root. After <code>pip install -e .</code>, you can run <code>cutmesh</code> and <code>python -m cutmesh.*</code> from any directory.</p>
