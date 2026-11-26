@@ -111,6 +111,19 @@ class RustMatchesPython(unittest.TestCase):
         np.testing.assert_allclose(self.dom.sdf(self.X), self.python_surface().sdf(self.X), atol=1e-12)
 
     @unittest.skipUnless(hasattr(getattr(G._core, "TriMesh", None), "centroid_search"), "Rust centroid index not built")
+    def test_sdf_cached(self):
+        # the cache gives the distances computed before for the same points (bit for bit)
+        ref = self.dom.sdf(self.X)
+        c = self.dom.point_cache()
+        half = len(self.X) // 2
+        a = self.dom.sdf(self.X[:half], cache=c)
+        self.assertEqual(len(c), half)
+        Y = np.concatenate([self.X[half // 2:], self.X[:half // 2], self.X[:10]])   # repeats and new points
+        b = self.dom.sdf(Y, cache=c)
+        self.assertEqual(len(c), len(self.X))
+        np.testing.assert_array_equal(a, ref[:half])
+        np.testing.assert_array_equal(b, np.concatenate([ref[half // 2:], ref[:half // 2], ref[:10]]))
+
     def test_release_search(self):
         # the centroid index let go after the snapping (memory) is built again if asked
         d = G.Surface(G.read_stl(STL))

@@ -8,7 +8,8 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from cutmesh.geometry import Surface               # noqa: E402
-from cutmesh.mesher import _thin_gap, _thin_gap_py, merge_coplanar_wall_faces   # noqa: E402
+from cutmesh.mesher import (_thin_gap, _thin_gap_py, merge_coplanar_wall_faces,   # noqa: E402
+                            _gap_refinement_samples, _wall_into)
 
 
 def merge(P, faces):
@@ -113,6 +114,27 @@ class ThinGap(unittest.TestCase):
             np.testing.assert_array_equal(a[0], b[0])
             self.assertEqual(a[1], b[1])
             self.assertGreater(int(a[0].sum()), 0)
+
+    def test_gap_refinement_first_look(self):
+        # the first look (every 2 tg) and the fine samples of the triangles it finds give
+        # the thin samples of sampling every wall finely
+        outer = box((-5, -5, 0), (5, 5, 20))
+        plate = flip(box((-4, -4, 0.4), (4, 4, 0.6)))
+        slot = flip(box((-3, -0.05, 5), (3, 0.05, 15)))
+        dom = Surface([("w", np.concatenate([outer, plate, slot]))])
+        dom.build_search(0.05)
+        sp, tg = 0.1, 0.5
+        p, ti = dom.samples(sp, ordered=False)
+        thin, _ = _thin_gap(dom, p, _wall_into(dom, p, ti, 0.02 * sp), tg, 0.02 * sp)
+        q, nun, ncand = _gap_refinement_samples(dom, sp, tg)
+        self.assertEqual(nun, 0)
+        self.assertLess(ncand, len(dom.tris))
+        self.assertGreater(len(q), 0)
+        key = lambda a: a[np.lexsort(a.T[::-1])]               # noqa: E731
+        np.testing.assert_array_equal(key(q), key(p[thin]))
+        # no first look when its spacing (2 tg) is under two samples: every wall finely
+        q2, _, nc2 = _gap_refinement_samples(dom, sp, 0.08)
+        self.assertIsNone(nc2)
 
 
 if __name__ == "__main__":

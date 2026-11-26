@@ -958,6 +958,40 @@ def _nearest_in(pts, keep, q, cache=None):
     return d, gj
 
 
+def _exact_sources():
+    """whether refine's surface sources can be the surfaces themselves (Rust)"""
+    return (_core is not None and hasattr(getattr(_core, "TriMesh", None), "distance_below")
+            and hasattr(getattr(_core, "SegSet", None), "distance_below"))
+
+
+class _NearSource:
+    """A surface source of the refinement without sample points: query(c,
+    distance_upper_bound=r) gives the distance to the geometry where it is below r and
+    infinity elsewhere, as the query of a KD-tree of points on the geometry would
+    (whose distances are those to the nearest sample: up to about half the sample
+    spacing longer).  dist_below(c, r) -> distances."""
+
+    def __init__(self, dist_below):
+        self._f = dist_below
+
+    def query(self, c, distance_upper_bound=np.inf, workers=-1):
+        c = np.ascontiguousarray(c, float)
+        if len(c) == 0:
+            return np.zeros(0), None
+        return self._f(c, float(distance_upper_bound)), None
+
+
+def _zone_distance_below(g):
+    """dist_below(c, r) of a rotating zone's surface (cylinder or STL)"""
+    if isinstance(g, SurfaceZone):
+        return g.s._rs.distance_below
+
+    def f(c, r):
+        d = np.abs(g.sdf(c))
+        return np.where(d < r, d, np.inf)
+    return f
+
+
 def _samples_set(geom, spacing):
     """geom.samples(spacing) for a point set only (the order does not matter)"""
     if isinstance(geom, (Surface, SurfaceZone)):
@@ -1190,6 +1224,20 @@ def _argsort_stable(a):
     if len(a) > 100000 and a.dtype == np.int64 and _core is not None and hasattr(_core, "argsort_stable"):
         return _core.argsort_stable(np.ascontiguousarray(a))
     return np.argsort(a, kind="stable")
+
+
+def _assemble_occurrences_py(fn, fptr, fverts, bsel, p_n, p_verts, leaf_cid, f_cell, piece_cid, py_cell,
+                             f_key, py_key):
+    """the face occurrences of the uncut leaves (octree faces bsel), then those of the cut
+    pieces: (sizes, offsets, vertices, final cell, face key); _core.assemble_occurrences"""
+    bn = fn[bsel]
+    o_n = np.concatenate([bn, p_n])
+    o_ptr = np.concatenate([[0], np.cumsum(o_n)])
+    b_off = np.repeat(fptr[bsel] - np.concatenate([[0], np.cumsum(bn)[:-1]]), bn)
+    o_verts = np.concatenate([fverts[np.arange(int(bn.sum())) + b_off], p_verts])
+    o_cell = np.concatenate([leaf_cid[f_cell[bsel]], piece_cid[py_cell]])
+    o_key = np.concatenate([f_key[bsel], py_key])
+    return o_n, o_ptr, o_verts, o_cell, o_key
 
 
 def _pair_faces_py(o_key, o_cell, log):
@@ -1644,30 +1692,64 @@ def _finer_nearby(oc, cand):
     return fine
 
 
-def _fluid_fraction(dom, c, h, n=6):
+def _signed_distance_signs(dom, q):
+    """(sdf(q) < 0, sdf(q) > 0) without the distances: the side by inside(), and a
+    point exactly on the STL (distance 0, neither) by a search that stops at once"""
+    ins = dom.inside(q)
+    on = dom._rs.distance_below(np.ascontiguousarray(q, float), 1e-12 * dom.L) == 0.0
+    return ins & ~on, ~ins & ~on
+
+
+def _fluid_fraction(dom, c, h, n=6, cache=None):
     """Fluid fraction of cells (centres c, sizes h) from the trilinear interpolation of
-    the signed distance at their corners, and whether the wall cuts them."""
+    the signed distance at their corners, and whether the wall cuts them.
+    cache: dom.point_cache() for the corner distances.  With the Rust extension only
+    the cut cells' corners get their distances (a cell the wall does not cut is all
+    fluid, 1, or none, 0)."""
     corners = np.array(list(itertools.product((-1, 1), repeat=3)), float)
-    sd = dom.sdf((c[:, None, :] + 0.5 * h[:, None, None] * corners[None]).reshape(-1, 3)).reshape(len(c), 8)
+    q = (c[:, None, :] + 0.5 * h[:, None, None] * corners[None]).reshape(-1, 3)
     t = (np.arange(n) + 0.5) / n
     T = np.array(list(itertools.product(t, t, t)))                       # sample points in [0,1]^3
     # trilinear weights of the 8 corners (corner k at (-1|1)^3 -> (0|1)^3)
     cw = (corners + 1) / 2
     W = np.prod(np.where(cw[None, :, :] > 0, T[:, None, :], 1 - T[:, None, :]), axis=2)   # (n^3, 8)
+    if cache is not None and hasattr(getattr(dom, "_rs", None), "distance_below"):
+        neg, pos = _signed_distance_signs(dom, q)
+        neg, pos = neg.reshape(len(c), 8), pos.reshape(len(c), 8)
+        cut = neg.any(1) & pos.any(1)
+        fr = neg.any(1).astype(float)          # not cut: phi < 0 everywhere iff a corner is
+        ic = np.flatnonzero(cut)
+        if len(ic):
+            sd = dom.sdf(q.reshape(len(c), 8, 3)[ic].reshape(-1, 3), cache=cache).reshape(len(ic), 8)
+            fr[ic] = (sd @ W.T < 0).mean(1)
+        return fr, cut
+    sd = (dom.sdf(q) if cache is None else dom.sdf(q, cache=cache)).reshape(len(c), 8)
     phi = sd @ W.T
     return (phi < 0).mean(1), (sd.min(1) < 0) & (sd.max(1) > 0)
 
 
-def _thin_wall_cells(dom, c, h):
+def _thin_wall_cells(dom, c, h, cache=None):
     """Cells (centres c, sizes h) with no corner in the solid that contain a solid wall:
     on one of 13 lines through the cell the surface is entered and left again with
     opposite normals (the two faces of a wall; a convex edge of the solid, poking into
-    the cell, has its face normals at 90 degrees or less and does not count)."""
+    the cell, has its face normals at 90 degrees or less and does not count).
+    cache: dom.point_cache() for the corner distances"""
     D = np.array([d for d in itertools.product((-1, 0, 1), repeat=3)
                   if any(d) and next(x for x in d if x) > 0], float)            # 13
     corners = np.array(list(itertools.product((-1, 1), repeat=3)), float)
-    sd = dom.sdf((c[:, None, :] + 0.5 * h[:, None, None] * corners[None]).reshape(-1, 3))
-    no_solid = ~(sd.reshape(len(c), 8) > 1e-3 * h[:, None]).any(1)
+    q = (c[:, None, :] + 0.5 * h[:, None, None] * corners[None]).reshape(-1, 3)
+    thr = np.repeat(1e-3 * h, 8)
+    if hasattr(getattr(dom, "_rs", None), "distance_below_each"):
+        # a corner in the solid (sdf > thr): outside, and no wall within thr (a search
+        # that stops at thr; the distance itself is not needed)
+        solid = ~dom.inside(q)
+        io = np.flatnonzero(solid)
+        d = dom._rs.distance_below_each(np.ascontiguousarray(q[io], float), np.ascontiguousarray(thr[io], float))
+        solid[io] = d > thr[io]
+    else:
+        sd = dom.sdf(q) if cache is None else dom.sdf(q, cache=cache)
+        solid = sd > thr
+    no_solid = ~solid.reshape(len(c), 8).any(1)
     idx = np.nonzero(no_solid)[0]
     out = np.zeros(len(c), bool)
     if len(idx) and dom._rs is not None:
@@ -1830,6 +1912,42 @@ def _gap_levels(p, lw, w, h0, nacross, lmax):
     return out, nun
 
 
+def _wall_into(dom, p, ti, eps):
+    """unit normals of the triangles ti at the wall samples p, turned towards the fluid"""
+    # unit normals per triangle, then per sample (the same rows as computing them for
+    # every sample, without a (samples, 3, 3) array)
+    T_ = dom.tris
+    nrm = np.cross(T_[:, 1] - T_[:, 0], T_[:, 2] - T_[:, 0])
+    nrm /= np.maximum(np.linalg.norm(nrm, axis=1), 1e-300)[:, None]
+    nrm = nrm[ti]
+    return np.where(dom.inside(p - eps * nrm)[:, None], -nrm, nrm)
+
+
+def _gap_refinement_samples(dom, spacing, tg, look=None):
+    """gapRefinement: the wall samples (every `spacing`) where the fluid is thinner than
+    tg: (samples, n_unresolved, number of triangles sampled finely or None).
+
+    A first look every `look` (default 2 tg; a gap up to tg + look wide counts there)
+    finds the triangles at a thin gap; only those and their neighbours are sampled
+    finely.  They get the samples and answers that sampling every wall finely gives
+    them; a thin spot on another triangle, narrower than the first look's spacing, is
+    missed.  On a 0.3 m tank with a 1 mm gap, sampling every wall finely took 42 million
+    samples and 35 s, for thin samples on 84 of its 3840 triangles."""
+    eps = 0.02 * spacing
+    look = 2 * tg if look is None else float(look)
+    cand = None
+    if look >= 2 * spacing:
+        p, ti = dom.samples(look, ordered=False)
+        thin, _ = _thin_gap(dom, p, _wall_into(dom, p, ti, eps), tg + look, eps)
+        if not thin.any():
+            return np.zeros((0, 3)), 0, 0
+        cand = _tri_neighbours(dom, np.unique(ti[thin]))
+        p = ti = thin = None
+    p, ti = dom.samples(spacing, ordered=False, triangles=cand)
+    thin, nun = _thin_gap(dom, p, _wall_into(dom, p, ti, eps), tg, eps)
+    return p[thin], nun, None if cand is None else len(cand)
+
+
 def _thin_gap(dom, p, into, tg, eps, max_steps=512):
     """wall samples p whose fluid along `into` ends (leaves the domain) within tg.
     Marches by the distance to the STL - no wall can be closer, so none is skipped; a step
@@ -1845,15 +1963,16 @@ def _thin_gap_py(dom, p, into, tg, eps, max_steps=512):
     thin = np.zeros(len(p), bool)
     t = np.full(len(p), eps)
     act = np.nonzero(dom.inside(p + eps * into))[0]
-    for k in range(1, 9):
-        # cheap pass first: a fixed step that lands outside has found a wall for sure
-        out = ~dom.inside(p[act] + (k * tg / 8) * into[act])
-        thin[act[out]] = True
-        act = act[~out]
-    # one query settles most of the rest: no wall within the ball on the probe segment
+    # one query settles most samples: no wall within the ball around the probe segment
+    # [eps, tg] (the fixed steps below would all stay inside too)
     r = 0.5 * (tg - eps)
     _, d, _ = dom.closest(p[act] + (eps + r) * into[act])
     act = act[d < r]
+    for k in range(1, 9):
+        # a fixed step that lands outside has found a wall for sure
+        out = ~dom.inside(p[act] + (k * tg / 8) * into[act])
+        thin[act[out]] = True
+        act = act[~out]
     for _ in range(max_steps):
         if not len(act):
             break
@@ -1918,10 +2037,15 @@ def generate(cfg, log=print):
     check_zone_overlap(zones, 2 * hmin)
     nbuf = int(cfg["bufferLayers"])
     ssrc, vsrc = [], []
+    exact_src = _exact_sources()
     for r, name in enumerate(dom.names):
         if region_level[r] > 0:
-            p, _ = dom.samples(h0 / 2 ** region_level[r] / 2, regions=[r], ordered=False)
-            ssrc.append((_points_kd(p), int(region_level[r]), nbuf))
+            if exact_src:
+                src = _NearSource(_core.TriMesh(np.ascontiguousarray(dom.tris[dom.region == r])).distance_below)
+            else:
+                p, _ = dom.samples(h0 / 2 ** region_level[r] / 2, regions=[r], ordered=False)
+                src = _points_kd(p)
+            ssrc.append((src, int(region_level[r]), nbuf))
     if cfg.get("autoGapRefinement"):
         nacross, lag = _auto_gap_spec(cfg, sref)
         groups, nun = _auto_gap_samples(dom, h0, region_level, nacross, lag)
@@ -1936,19 +2060,12 @@ def generate(cfg, log=print):
         # fluid thinner than `thickness` (slot tips, narrow channels): refine its walls to `level`
         lg = int(gr["level"])
         tg = float(gr["thickness"])
-        p, ti = dom.samples(h0 / 2 ** lg, ordered=False)       # a point set (KD-tree below)
-        # unit normals per triangle, then per sample (the same rows as computing them for
-        # every sample, without a (samples, 3, 3) array)
-        T_ = dom.tris
-        nrm = np.cross(T_[:, 1] - T_[:, 0], T_[:, 2] - T_[:, 0])
-        nrm /= np.maximum(np.linalg.norm(nrm, axis=1), 1e-300)[:, None]
-        nrm = nrm[ti]
-        eps = 0.02 * h0 / 2 ** lg
-        into = np.where(dom.inside(p - eps * nrm)[:, None], -nrm, nrm)    # towards the fluid
-        thin, nun = _thin_gap(dom, p, into, tg, eps)
+        p, nun, ncand = _gap_refinement_samples(dom, h0 / 2 ** lg, tg)
+        if ncand is not None:
+            log(f"gap refinement: walls near fluid thinner than {tg:g} on {ncand} of {len(dom.tris)}"
+                f" triangles (a first look every {2 * tg:g})")
         if nun:
             log(f"gap refinement: {nun} wall samples not resolved (walk along a wall)")
-        p = p[thin]
         if len(p):
             ssrc.append((_points_kd(p), lg, nbuf))
         log(f"gap refinement: {len(p)} wall samples where the fluid is thinner than {tg:g} -> level {lg}")
@@ -1962,13 +2079,19 @@ def generate(cfg, log=print):
         if float(cfg["concaveSnapMax"]) > float(cfg["featureSnapMax"]) else None
     if flevel > 0:
         if len(seg):
-            fp = sample_segments(seg, h0 / 2 ** flevel / 2)
-            ssrc.append((_points_kd(fp), int(flevel), nbuf))
+            if exact_src:
+                src = _NearSource(_core.SegSet(np.ascontiguousarray(seg, float)).distance_below)
+            else:
+                src = _points_kd(sample_segments(seg, h0 / 2 ** flevel / 2))
+            ssrc.append((src, int(flevel), nbuf))
             log(f"feature edges: {len(seg)} segments -> level {flevel}")
     for z in zones:
         if z["surfaceLevel"] > 0:
-            p, _ = _samples_set(z["geom"], h0 / 2 ** z["surfaceLevel"] / 2)
-            ssrc.append((_points_kd(p), z["surfaceLevel"], nbuf))
+            if exact_src:
+                src = _NearSource(_zone_distance_below(z["geom"]))
+            else:
+                src = _points_kd(_samples_set(z["geom"], h0 / 2 ** z["surfaceLevel"] / 2)[0])
+            ssrc.append((src, z["surfaceLevel"], nbuf))
         wp = z["wallProximity"]
         if wp:
             # the zone surface closer than `distance` to the STL: refine to `level` there only
@@ -2008,6 +2131,30 @@ def generate(cfg, log=print):
         oc.refine(ssrc, vsrc, log=lambda s: log(s), keep_fn=keep_fn)
         sgn = np.array(list(itertools.product((-1, 0, 1), repeat=3)), float)   # 27 points
         corner = np.all(sgn != 0, axis=1)
+        # The passes below take the signed distance at the corners of cells: neighbouring
+        # cells share many of them, bit for bit, and the passes test the same cells
+        # again.  Distances kept by point (the same values, fewer queries).
+        sd_cache = dom.point_cache()
+        # near the STL (approx_below at 0.9 h + rmax), per leaf, kept through the
+        # splits: a leaf's answer depends on the leaf alone (-1: not asked yet)
+        near_v = None
+
+        def near_leaves(sel):
+            """approx_below for the leaves sel, asking only those not asked before"""
+            nonlocal near_v
+            if near_v is None or len(near_v) != len(oc.lev):
+                near_v = np.full(len(oc.lev), -1, np.int8)
+            todo = sel[near_v[sel] < 0]
+            near_v[todo] = dom.approx_below(oc.centers(todo), 0.9 * oc.leaf_sizes(todo) + dom._rmax)
+            return near_v[sel] > 0
+
+        def follow_split():
+            """carry near_v over a split (oc.track() before it)"""
+            nonlocal near_v
+            if near_v is not None:
+                nv = np.full(len(oc.lev), -1, np.int8)
+                nv[:len(oc.src)] = near_v[oc.src]
+                near_v = nv
         n_old = 0      # after a pass: the leaves before this index were tested there, unsplit
         for it in range(max(nfill_g, nfill_w)):
             near = oc.lev < oc.Lmax
@@ -2015,7 +2162,7 @@ def generate(cfg, log=print):
             # (the tests depend on the cell alone, and they only drop out pass by pass)
             near[:n_old] = False
             ni = np.flatnonzero(near)                 # centres and sizes of these leaves only
-            near[ni] = dom.approx_below(oc.centers(ni), 0.9 * oc.leaf_sizes(ni) + dom._rmax)
+            near[ni] = near_leaves(ni)
             mark = np.zeros(len(oc.lev), bool)
             nh = nw = 0
             if it < nfill_g:
@@ -2041,6 +2188,7 @@ def generate(cfg, log=print):
             oc.split(mark)
             oc.balance(lambda s: None)
             n_old = len(oc.src)
+            follow_split()
             oc.untrack()
             log(f"thin gaps / walls: split {nh} cells with fluid inside but no fluid corner,"
                 f" {nw} with a solid wall inside but no solid corner")
@@ -2057,9 +2205,9 @@ def generate(cfg, log=print):
             if cand_old is not None:
                 near[:len(cand_old)] = False           # unsplit leaves: as in the pass before
             ni = np.flatnonzero(near)
-            near[ni] = dom.approx_below(oc.centers(ni), 0.9 * oc.leaf_sizes(ni) + dom._rmax)
+            near[ni] = near_leaves(ni)
             cand = np.nonzero(near)[0]
-            fr, cut = _fluid_fraction(dom, oc.centers(cand), oc.leaf_sizes(cand))
+            fr, cut = _fluid_fraction(dom, oc.centers(cand), oc.leaf_sizes(cand), cache=sd_cache)
             cand = cand[cut & (fr > 0) & (fr < thr)]
             if cand_old is not None:                   # the unsplit leaves come first
                 cand = np.concatenate([np.flatnonzero(cand_old), cand])
@@ -2075,9 +2223,11 @@ def generate(cfg, log=print):
             oc.split(mark)
             oc.balance(lambda s: None)
             cand_old = is_cand[oc.src]
+            follow_split()
             oc.untrack()
         if n_tc:
             log(f"thin cut cells at level transitions: split {nsplit}")
+        sd_cache = near_v = None
     T(f"octree ({len(oc.lev)} leaves)")
     ssrc = vsrc = None                  # done with them (memory: the samples' KD-trees)
     M = oc.build_cells()
@@ -2271,7 +2421,8 @@ def generate(cfg, log=print):
     # Far feature snaps (tol_f .. tol_f2) and free projections of hanging vertices are
     # kept only where the octree cells stay valid after all vertices (including the
     # hanging ones) have moved; otherwise they are forbidden for the vertices of the
-    # broken cells and the stage is repeated.
+    # broken cells, and those vertices and the ones of the cells around them are snapped
+    # again (the other vertices keep where the pass put them).
     pts0 = pts.copy(); phi_d0 = phi_d.copy()
     hp2 = np.where(hanging[:, None], hang_par, -1)
     # the hanging vertices by constraint size, coarsest first (ascending ids within a size)
@@ -2279,13 +2430,31 @@ def generate(cfg, log=print):
     h_idx = h_idx[np.argsort(-hang_size[h_idx], kind="stable")]
     h_lev = np.flatnonzero(np.diff(hang_size[h_idx])) + 1
     h_lev = np.concatenate([[0], h_lev, [len(h_idx)]]).tolist() if len(h_idx) else [0]
+    # the features of the conforming zones (the same for every pass)
+    zone_feats = []
+    for z in zones:
+        g = z["geom"]
+        if not z["conforming"]:
+            zone_feats.append(None)
+        elif isinstance(g, Cylinder):
+            zone_feats.append(FeatureSet(cylinder_features(g, hmin / 4), L=g.L))
+        else:
+            zone_feats.append(FeatureSet(g.s.feature_edges(cfg["featureAngle"]), L=g.L))
+    movable_all = movable
+    redo = None                    # vertices snapped again in this pass (None: all)
+    onf_d = np.zeros(len(pts), bool)                       # on the STL features
+    onf_z = [np.zeros(len(pts), bool) for _ in zones]      # on the zones' features
+    phi_z = None
+    nredo = []
     for attempt in range(5):
         if attempt:
-            pts[:] = pts0; phi_d = phi_d0.copy()
-            snapped[:] = False; far_snap[:] = False; free_snap[:] = False; ccv_far[:] = False; slide_far[:] = False
-            msgs.clear()
+            pts[redo] = pts0[redo]; phi_d[redo] = phi_d0[redo]
+            for a_ in (snapped, far_snap, free_snap, ccv_far, slide_far, onf_d, *onf_z):
+                a_[redo] = False
+            movable = movable_all & redo
+            n_msgs = len(msgs)
         # ---- 1) regular (non-hanging) vertices: features, then surfaces
-        on_feat_d = snap_features(dom_feat, phi_d, "STL", dom_ccv)
+        onf_d[snap_features(dom_feat, phi_d, "STL", dom_ccv)] = True
         snap = movable & ~snapped & (np.abs(phi_d) < tol_v) & (phi_d != 0)
         # A cut cell must keep a vertex on either side.  In a fluid gap (a solid wall)
         # about one cell thick the cell's vertices on that side can all lie near the two
@@ -2307,6 +2476,8 @@ def generate(cfg, log=print):
             # a wall unsnapped, they cut skewed slivers)
             mid = cpk + 0.5 * np.where(thin, width, 0.0)[:, None] * dirk
             mv = thin & (np.linalg.norm(mid - pts[kv], axis=1) < 0.4 * vh_min[kv])
+            if redo is not None:
+                mv &= redo[kv]            # the vertices kept from the pass before stay
             j = kv[mv]
             snap[j] = False
             pts[j] = mid[mv]
@@ -2325,9 +2496,7 @@ def generate(cfg, log=print):
             # them in a cell without a solid vertex: the cut keeps it, the edge is
             # chamfered.  The nearest wall vertex slides along its wall onto the edge.
             lim = np.where(no_far, tol_f, tol_cc)
-            onf = np.zeros(len(pts), bool)
-            onf[on_feat_d] = True
-            sel = np.nonzero(movable & (phi_d == 0) & ~onf)[0]
+            sel = np.nonzero(movable & (phi_d == 0) & ~onf_d)[0]
             cp, d = dom_ccv.closest(pts[sel])
             ok = (d < lim[sel]) & (d > 1e-6 * hmin)
             sel, cp, d = sel[ok], cp[ok], d[ok]
@@ -2350,28 +2519,31 @@ def generate(cfg, log=print):
                 sel, cp, d = sel[first], cp[first], d[first]
                 far_snap[sel] = slide_far[sel] = d >= tol_f[sel]
                 pts[sel] = cp
-                on_feat_d = np.concatenate([on_feat_d, sel])
+                onf_d[sel] = True
             msgs.append(f"slid {len(sel)} wall vertices along their wall onto the concave STL feature edges")
-        phi_z = []
-        zone_feats = []
-        on_feat_z = []
-        for z in zones:
+        # the zones' level sets: of every vertex in the first pass, of the vertices
+        # snapped again later (the others keep theirs)
+        rows = slice(None) if redo is None else np.flatnonzero(redo)
+        if phi_z is None:
+            phi_z = [None] * len(zones)
+        for zi, z in enumerate(zones):
             g = z["geom"]
+            q_ = pts[rows]
             if isinstance(g, SurfaceZone):
-                nearz = g.s.approx_below(pts, np.sqrt(3) * vh_max + g.s._rmax + hmin)
-                pz = g.sdf(pts, exact_mask=nearz, far_value=g.L)
+                nearz = g.s.approx_below(q_, np.sqrt(3) * vh_max[rows] + g.s._rmax + hmin)
+                pr = g.sdf(q_, exact_mask=nearz, far_value=g.L)
             else:
-                pz = g.sdf(pts)
+                pr = g.sdf(q_)
+            if redo is None:
+                phi_z[zi] = pr
+            else:
+                phi_z[zi][rows] = pr
+            pz = phi_z[zi]
             if not z["conforming"]:           # cells are assigned by centre later: no snapping
-                zone_feats.append(None); on_feat_z.append(np.zeros(0, np.int64)); phi_z.append(pz)
                 continue
-            if isinstance(g, Cylinder):
-                zf = FeatureSet(cylinder_features(g, hmin / 4), L=g.L)
-            else:
-                zf = FeatureSet(g.s.feature_edges(cfg["featureAngle"]), L=g.L)
-            zone_feats.append(zf)
+            zf = zone_feats[zi]
             before = snapped.copy()           # vertices already on the STL are not moved
-            on_feat_z.append(snap_features(zf, pz, f"zone '{z['name']}'"))
+            onf_z[zi][snap_features(zf, pz, f"zone '{z['name']}'")] = True
             sz = movable & ~snapped & (np.abs(pz) < tol_v) & (pz != 0)
             cp, _, _ = g.closest(pts[sz])
             pts[sz] = cp
@@ -2381,7 +2553,6 @@ def generate(cfg, log=print):
             if moved.any():   # re-evaluate the domain level set where vertices moved
                 phi_d[moved] = dom.sdf(pts[moved])
             msgs.append(f"snapped {int(sz.sum())} vertices onto zone '{z['name']}'")
-            phi_z.append(pz)
 
         # ---- 2) hanging vertices, coarsest constraint first: follow the (moved) parents,
         # then slide along the coarse edge / within the coarse face onto a surface.  If the
@@ -2392,6 +2563,10 @@ def generate(cfg, log=print):
         nslide = nvirt = nfree = 0
         for l0, l1 in zip(h_lev[:-1], h_lev[1:]):
             idx = h_idx[l0:l1]
+            if redo is not None:
+                idx = idx[redo[idx]]
+                if not len(idx):
+                    continue
             par = hang_par[idx]
             isface = par[:, 2] != par[:, 0]
             # to the face centres / edge midpoints
@@ -2465,20 +2640,26 @@ def generate(cfg, log=print):
                 nslide += int(ok.sum()); nvirt += int((~ok).sum())
         msgs.append(f"hanging nodes: {nslide - nfree} slid onto a surface along their edge/face,"
                     f" {nfree} projected freely, {nvirt} treated as on-surface")
+        if attempt:
+            del msgs[n_msgs:]                 # the counts of the first pass are logged
+            movable = movable_all
         if not (far_snap.any() or free_snap.any()):
             break
-        mv_ = (pts != pts0).any(1)           # hanging vertices move with their parents too
-        tl = np.nonzero(leaf_any(mv_))[0]
+        # the leaves to check: those with a vertex that moved (in a later pass: one that
+        # was snapped again; the other leaves are as the pass before left them)
+        mv_ = (pts != pts0).any(1) if redo is None else redo
+        lk = leaf_any(mv_)
+        tl = np.nonzero(lk)[0]
         badl = tl[_leaf_bad(pts, tl, fptr, fverts, cptr, csize)] if len(tl) else tl
         if ccv_far.any():
             # a vertex pushed onto a concave edge must not straighten a face corner either
-            tc = np.nonzero(leaf_any(ccv_far))[0]
+            tc = np.nonzero(leaf_any(ccv_far) & lk)[0]
             badl = np.union1d(badl, tc[_leaf_bad(pts, tc, fptr, fverts, cptr, csize, flat_at=ccv_far)])
         if slide_far.any():
             # a slid vertex often lands on the line of the wall vertices next to it (the
             # cell becomes a wedge with a straight face corner, still convex and uncut):
             # only a corner pushed clearly past straight breaks the cell
-            tc = np.nonzero(leaf_any(slide_far))[0]
+            tc = np.nonzero(leaf_any(slide_far) & lk)[0]
             badl = np.union1d(badl, tc[_leaf_bad(pts, tc, fptr, fverts, cptr, csize, flat_at=slide_far,
                                                  flat_angle=-1.0)])
         if not len(badl):
@@ -2494,10 +2675,27 @@ def generate(cfg, log=print):
             break
         no_far[resp] = True
         no_free[respf] = True
+        # snapped again: the vertices of the leaves around those vertices, and the
+        # hanging vertices that follow them
+        vm = np.zeros(len(pts), bool)
+        vm[vb] = True
+        redo = np.zeros(len(pts), bool)
+        redo[leaf_verts(leaf_any(vm))] = True
+        for _ in range(3):
+            ch_ = hanging & (redo[np.maximum(hp2, 0)] & (hp2 >= 0)).any(1)
+            if not (ch_ & ~redo).any():
+                break
+            redo |= ch_
+        nredo.append((len(badl), int(redo.sum())))
     for m_ in msgs:
         log(m_)
+    for nb_, nv_ in nredo:
+        log(f"far snaps that broke {nb_} cells not allowed: {nv_} vertices around them snapped again"
+            " (the counts above are those of the first pass)")
     if (tol_cc > tol_f).any():
         log(f"far feature snaps: {int(far_snap.sum())} kept, {int(no_far.sum())} not allowed (cells would break)")
+    on_feat_d = np.flatnonzero(onf_d)
+    on_feat_z = [np.flatnonzero(m_) for m_ in onf_z]
     phi_d[(phi_d != 0) & (np.abs(phi_d) < 1e-9 * vh_min)] = 0.0
     for pz in phi_z:
         pz[(pz != 0) & (np.abs(pz) < 1e-9 * vh_min)] = 0.0
@@ -3190,25 +3388,19 @@ def generate(cfg, log=print):
     small = removed = ids = order = alive = bad_piece = zone_of = parent = members = None
     bulk_members = cptr = p = None
 
-    # ------------------------------------------------------------ assembly (all numpy)
-    bn = fn[bsel]
-    pn = p_n                                  # the pieces' faces, flattened above
-    o_n = np.concatenate([bn, pn])
-    o_ptr = np.concatenate([[0], np.cumsum(o_n)])
-    if _core is not None and hasattr(_core, "take_ranges"):
-        # the bulk faces' vertices, then the pieces': one array (no index arrays)
-        o_verts = _core.take_ranges(np.ascontiguousarray(fverts, np.int64), np.ascontiguousarray(fptr[bsel], np.int64),
-                                    np.ascontiguousarray(fptr[bsel + 1], np.int64), np.ascontiguousarray(p_verts, np.int64))
+    # ------------------------------------------------------------ assembly
+    if _core is not None and hasattr(_core, "assemble_occurrences"):
+        # the arrays of _assemble_occurrences_py, in parallel (faceops.rs)
+        i64 = lambda a: np.ascontiguousarray(a, np.int64)            # noqa: E731
+        o_n, o_ptr, o_verts, o_cell, o_key = _core.assemble_occurrences(
+            i64(fn), i64(fptr), i64(fverts), i64(bsel), i64(p_n), i64(p_verts), i64(leaf_cid), i64(f_cell),
+            i64(piece_cid), i64(py_cell), i64(f_key), i64(py_key))
     else:
-        b_off = np.repeat(fptr[bsel] - np.concatenate([[0], np.cumsum(bn)[:-1]]), bn)
-        b_verts = fverts[np.arange(int(bn.sum())) + b_off]
-        o_verts = np.concatenate([b_verts, p_verts])
-        del b_off, b_verts
-    o_cell = np.concatenate([leaf_cid[f_cell[bsel]], piece_cid[py_cell]])
-    o_key = np.concatenate([f_key[bsel], py_key])
+        o_n, o_ptr, o_verts, o_cell, o_key = _assemble_occurrences_py(
+            fn, fptr, fverts, bsel, p_n, p_verts, leaf_cid, f_cell, piece_cid, py_cell, f_key, py_key)
     del p_verts
     # the octree's faces and the cut pieces are in o_* now
-    fverts = fptr = fn = f_key = f_cell = pieces = bsel = bn = pn = p_n = None
+    fverts = fptr = fn = f_key = f_cell = pieces = bsel = p_n = None
     leaf_cid = piece_cid = py_key = py_cell = None
     if _core is not None and hasattr(_core, "pair_faces"):
         # the same pairing and order in Rust (sortutil.rs)

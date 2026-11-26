@@ -457,3 +457,132 @@ pub fn take_ranges<'py>(
     });
     Ok(out.into_pyarray(py))
 }
+
+/// assemble_occurrences(fn, fptr, fverts, bsel, p_n, p_verts, leaf_cid, f_cell, piece_cid,
+/// py_cell, f_key, py_key) -> (o_n, o_ptr, o_verts, o_cell, o_key): the face occurrences of
+/// the uncut leaves (octree faces bsel) followed by those of the cut pieces, as the
+/// assembly in mesher.generate concatenates them (sizes, offsets, vertices, final cell
+/// and face key of each occurrence), in parallel
+#[pyfunction]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn assemble_occurrences<'py>(
+    py: Python<'py>,
+    fn_: PyReadonlyArray1<'py, i64>,
+    fptr: PyReadonlyArray1<'py, i64>,
+    fverts: PyReadonlyArray1<'py, i64>,
+    bsel: PyReadonlyArray1<'py, i64>,
+    p_n: PyReadonlyArray1<'py, i64>,
+    p_verts: PyReadonlyArray1<'py, i64>,
+    leaf_cid: PyReadonlyArray1<'py, i64>,
+    f_cell: PyReadonlyArray1<'py, i64>,
+    piece_cid: PyReadonlyArray1<'py, i64>,
+    py_cell: PyReadonlyArray1<'py, i64>,
+    f_key: PyReadonlyArray1<'py, i64>,
+    py_key: PyReadonlyArray1<'py, i64>,
+) -> PyResult<(
+    Bound<'py, PyArray1<i64>>,
+    Bound<'py, PyArray1<i64>>,
+    Bound<'py, PyArray1<i64>>,
+    Bound<'py, PyArray1<i64>>,
+    Bound<'py, PyArray1<i64>>,
+)> {
+    let (fnn, fp, fv, bs) = (fn_.as_slice()?, fptr.as_slice()?, fverts.as_slice()?, bsel.as_slice()?);
+    let (pn, pv) = (p_n.as_slice()?, p_verts.as_slice()?);
+    let (lc, fc, pc, pyc) = (leaf_cid.as_slice()?, f_cell.as_slice()?, piece_cid.as_slice()?, py_cell.as_slice()?);
+    let (fk, pk) = (f_key.as_slice()?, py_key.as_slice()?);
+    let nf = fnn.len();
+    let bad = fp.len() != nf + 1 || fc.len() != nf || fk.len() != nf
+        || pyc.len() != pn.len() || pk.len() != pn.len()
+        || bs.par_iter().any(|&f| f < 0 || f as usize >= nf || fc[f as usize] < 0 || fc[f as usize] as usize >= lc.len())
+        || pyc.par_iter().any(|&c| c < 0 || c as usize >= pc.len())
+        || pn.iter().sum::<i64>() as usize != pv.len()
+        || fp.par_windows(2).any(|w| w[0] < 0 || w[1] < w[0] || w[1] as usize > fv.len());
+    if bad {
+        return Err(pyo3::exceptions::PyValueError::new_err("assemble_occurrences: inconsistent arrays"));
+    }
+    let nb = bs.len();
+    let (o_n, o_ptr, o_verts, o_cell, o_key) = py.detach(|| {
+        let mut o_n = vec![0i64; nb + pn.len()];
+        o_n[..nb].par_iter_mut().zip(bs.par_iter()).for_each(|(o, &f)| *o = fnn[f as usize]);
+        o_n[nb..].copy_from_slice(pn);
+        let mut o_ptr = Vec::with_capacity(o_n.len() + 1);
+        o_ptr.push(0i64);
+        let mut acc = 0i64;
+        for &k in &o_n {
+            acc += k;
+            o_ptr.push(acc);
+        }
+        let nbv = o_ptr[nb] as usize;
+        let mut o_verts = vec![0i64; acc as usize];
+        {
+            let (head, rest) = o_verts.split_at_mut(nbv);
+            rest.copy_from_slice(pv);
+            // chunks of faces, each written to its own part of head
+            const CH: usize = 4096;
+            let nch = nb.div_ceil(CH);
+            let mut parts: Vec<&mut [i64]> = Vec::with_capacity(nch);
+            let mut r: &mut [i64] = head;
+            for c in 0..nch {
+                let len = (o_ptr[((c + 1) * CH).min(nb)] - o_ptr[c * CH]) as usize;
+                let (x, y) = std::mem::take(&mut r).split_at_mut(len);
+                parts.push(x);
+                r = y;
+            }
+            parts.into_par_iter().enumerate().for_each(|(c, part)| {
+                let mut k = 0;
+                for &f in &bs[c * CH..((c + 1) * CH).min(nb)] {
+                    let (a, b) = (fp[f as usize] as usize, fp[f as usize + 1] as usize);
+                    part[k..k + b - a].copy_from_slice(&fv[a..b]);
+                    k += b - a;
+                }
+            });
+        }
+        let mut o_cell = vec![0i64; nb + pn.len()];
+        o_cell[..nb].par_iter_mut().zip(bs.par_iter()).for_each(|(o, &f)| *o = lc[fc[f as usize] as usize]);
+        o_cell[nb..].par_iter_mut().zip(pyc.par_iter()).for_each(|(o, &c)| *o = pc[c as usize]);
+        let mut o_key = vec![0i64; nb + pn.len()];
+        o_key[..nb].par_iter_mut().zip(bs.par_iter()).for_each(|(o, &f)| *o = fk[f as usize]);
+        o_key[nb..].copy_from_slice(pk);
+        (o_n, o_ptr, o_verts, o_cell, o_key)
+    });
+    Ok((o_n.into_pyarray(py), o_ptr.into_pyarray(py), o_verts.into_pyarray(py), o_cell.into_pyarray(py),
+        o_key.into_pyarray(py)))
+}
+
+/// cell_reach(C[n, 3], Cf[m, 3], owner[m], neighbour[nI]) -> r[n]: per cell the longest
+/// line from its centre to the centres of its faces (0 for a cell without faces), as
+///   r = zeros(n); maximum.at(r, owner, |Cf - C[owner]|); maximum.at(r, neighbour, |Cf[:nI] - C[neighbour]|)
+/// with |x| = sqrt((x0² + x1²) + x2²) as np.linalg.norm(axis=1).  The lengths are >= 0,
+/// so their bits order as the values: the maxima are taken on the bits, in parallel.
+#[pyfunction]
+pub fn cell_reach<'py>(
+    py: Python<'py>,
+    c: numpy::PyReadonlyArray2<'py, f64>,
+    cf: numpy::PyReadonlyArray2<'py, f64>,
+    owner: PyReadonlyArray1<'py, i64>,
+    neighbour: PyReadonlyArray1<'py, i64>,
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    let (c, cf) = (crate::points_ref(&c)?, crate::points_ref(&cf)?);
+    let (own, nei) = (owner.as_slice()?, neighbour.as_slice()?);
+    let n = c.len();
+    if own.len() != cf.len() || nei.len() > own.len() || own.par_iter().chain(nei.par_iter()).any(|&x| x < 0 || x as usize >= n) {
+        return Err(pyo3::exceptions::PyValueError::new_err("inconsistent cell / face arrays"));
+    }
+    let r: Vec<f64> = py.detach(|| {
+        let r: Vec<AtomicU64> = (0..n).into_par_iter().map(|_| AtomicU64::new(0)).collect();
+        let len = |f: usize, k: usize| -> f64 {
+            let (a, b) = (cf[f], c[k]);
+            let (x, y, z) = (a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+            ((x * x + y * y) + z * z).sqrt()
+        };
+        own.par_iter().enumerate().for_each(|(f, &o)| {
+            r[o as usize].fetch_max(len(f, o as usize).to_bits(), Ordering::Relaxed);
+        });
+        nei.par_iter().enumerate().for_each(|(f, &q)| {
+            r[q as usize].fetch_max(len(f, q as usize).to_bits(), Ordering::Relaxed);
+        });
+        r.into_par_iter().map(|x| f64::from_bits(x.into_inner())).collect()
+    });
+    Ok(r.into_pyarray(py))
+}

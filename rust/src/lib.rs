@@ -27,6 +27,7 @@ mod sampling;
 mod centroids;
 mod cylinder;
 mod nearest;
+mod ptcache;
 
 pub(crate) type V3 = [f64; 3];
 
@@ -147,6 +148,46 @@ impl Bvh {
             }
         }
         best
+    }
+}
+
+impl Bvh {
+    /// squared distance to the closest primitive if below r2 (else infinity): closest()
+    /// with r2 as the first bound, so the nodes farther than that are never opened
+    fn closest_below<F: Fn(usize) -> f64>(&self, p: V3, r2: f64, f: F) -> f64 {
+        let mut best = r2;
+        let mut found = false;
+        if self.nodes.is_empty() {
+            return f64::INFINITY;
+        }
+        let mut stack: Stk<(u32, f64)> = Stk::new();
+        stack.push((0, box_d2(&self.nodes[0], p)));
+        while let Some((ni, bd)) = stack.pop() {
+            if bd >= best {
+                continue;
+            }
+            let nd = &self.nodes[ni as usize];
+            if nd.count > 0 {
+                for &q in &self.prims[nd.start as usize..(nd.start + nd.count) as usize] {
+                    let d2 = f(q as usize);
+                    if d2 < best {
+                        best = d2;
+                        found = true;
+                    }
+                }
+            } else {
+                let (a, b) = (nd.start, nd.right);
+                let (da, db) = (box_d2(&self.nodes[a as usize], p), box_d2(&self.nodes[b as usize], p));
+                if da <= db {
+                    stack.push((b, db));
+                    stack.push((a, da));
+                } else {
+                    stack.push((a, da));
+                    stack.push((b, db));
+                }
+            }
+        }
+        if found { best } else { f64::INFINITY }
     }
 }
 
@@ -797,6 +838,71 @@ impl TriMesh {
         Ok(r.into_pyarray(py))
     }
 
+    /// distance_below(p[n, 3], r) -> d[n]: the distance to the surface where it is below
+    /// r, infinity elsewhere (a KD-tree query of points on the surface with
+    /// distance_upper_bound = r, without the points)
+    fn distance_below<'py>(&self, py: Python<'py>, p: PyReadonlyArray2<'py, f64>, r: f64) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let pts = points_ref(&p)?;
+        let r2 = r * r;
+        let d: Vec<f64> = py.detach(|| {
+            pts.par_iter()
+                .map(|&q| {
+                    self.bvh
+                        .closest_below(q, r2, |i| {
+                            let [a, b, c] = self.t[i];
+                            dist2(q, closest_tri(q, a, b, c))
+                        })
+                        .sqrt()
+                })
+                .collect()
+        });
+        Ok(d.into_pyarray(py))
+    }
+
+    /// distance_below_each(p[n, 3], r[n]) -> d[n]: distance_below with a radius per point
+    fn distance_below_each<'py>(
+        &self,
+        py: Python<'py>,
+        p: PyReadonlyArray2<'py, f64>,
+        r: PyReadonlyArray1<'py, f64>,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let pts = points_ref(&p)?;
+        let r = r.as_slice()?;
+        if r.len() != pts.len() {
+            return Err(pyo3::exceptions::PyValueError::new_err("p and r differ in length"));
+        }
+        let d: Vec<f64> = py.detach(|| {
+            pts.par_iter()
+                .zip(r.par_iter())
+                .map(|(&q, &ri)| {
+                    self.bvh
+                        .closest_below(q, ri * ri, |i| {
+                            let [a, b, c] = self.t[i];
+                            dist2(q, closest_tri(q, a, b, c))
+                        })
+                        .sqrt()
+                })
+                .collect()
+        });
+        Ok(d.into_pyarray(py))
+    }
+
+    /// sdf() through a PointCache: points asked before (the same bits) are not computed again
+    fn sdf_cached<'py>(
+        &self,
+        py: Python<'py>,
+        p: PyReadonlyArray2<'py, f64>,
+        cache: &Bound<'py, ptcache::PointCache>,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let pts = points_ref(&p)?;
+        let mut c = cache.borrow_mut();
+        let map = &mut c.map;
+        let r: Vec<f64> = py.detach(|| {
+            ptcache::cached_eval(map, &pts, |q| self.sdf_one(q).to_bits()).into_iter().map(f64::from_bits).collect()
+        });
+        Ok(r.into_pyarray(py))
+    }
+
     /// parity of +x ray crossings: true inside the closed surface
     fn inside<'py>(&self, py: Python<'py>, p: PyReadonlyArray2<'py, f64>) -> PyResult<Bound<'py, PyArray1<bool>>> {
         let pts = points(&p)?;
@@ -942,14 +1048,17 @@ impl TriMesh {
                     if !self.inside_one(axpy(p, eps, n)) {
                         return (false, false);
                     }
+                    // no wall within the ball around the probe segment [eps, tg]: the
+                    // fluid goes on (the fixed steps below would all stay inside too).
+                    // Most samples end here, so this test comes before them.
+                    let r = 0.5 * (tg - eps);
+                    if !(self.closest_one(axpy(p, eps + r, n)).0.sqrt() < r) {
+                        return (false, false);
+                    }
                     for k in 1..9 {
                         if !self.inside_one(axpy(p, k as f64 * tg / 8.0, n)) {
                             return (true, false);
                         }
-                    }
-                    let r = 0.5 * (tg - eps);
-                    if !(self.closest_one(axpy(p, eps + r, n)).0.sqrt() < r) {
-                        return (false, false);
                     }
                     let mut t = eps;
                     for _ in 0..max_steps {
@@ -1095,6 +1204,19 @@ impl SegSet {
         let mid: Vec<V3> = s.iter().map(|e| [0.5 * (e[0][0] + e[1][0]), 0.5 * (e[0][1] + e[1][1]), 0.5 * (e[0][2] + e[1][2])]).collect();
         let half = s.iter().map(|e| 0.5 * dist2(e[0], e[1]).sqrt()).fold(0.0, f64::max);
         Ok(SegSet { s, bvh, mid, half })
+    }
+
+    /// distance_below(p[n, 3], r) -> d[n]: the distance to the segments where it is
+    /// below r, infinity elsewhere
+    fn distance_below<'py>(&self, py: Python<'py>, p: PyReadonlyArray2<'py, f64>, r: f64) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let pts = points_ref(&p)?;
+        let r2 = r * r;
+        let d: Vec<f64> = py.detach(|| {
+            pts.par_iter()
+                .map(|&q| self.bvh.closest_below(q, r2, |i| dist2(q, closest_seg(q, self.s[i][0], self.s[i][1]))).sqrt())
+                .collect()
+        });
+        Ok(d.into_pyarray(py))
     }
 
     /// (closest points[n, 3], distances[n]) - exact
@@ -1497,6 +1619,7 @@ fn tets_ok(points: PyReadonlyArray2<'_, f64>, polys: Vec<Vec<usize>>, cf: PyRead
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tets_ok, m)?)?;
     m.add_class::<TriMesh>()?;
+    m.add_class::<ptcache::PointCache>()?;
     m.add_class::<SegSet>()?;
     m.add_class::<dcut::CutKernel>()?;
     m.add_class::<dcut::CutCaches>()?;
@@ -1534,6 +1657,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(faceops::leaf_any, m)?)?;
     m.add_function(wrap_pyfunction!(faceops::leaf_lost, m)?)?;
     m.add_function(wrap_pyfunction!(faceops::seg_any, m)?)?;
+    m.add_function(wrap_pyfunction!(faceops::cell_reach, m)?)?;
     m.add_function(wrap_pyfunction!(faceops::corner_minmax, m)?)?;
     m.add_function(wrap_pyfunction!(faceops::hang_follow, m)?)?;
     m.add_function(wrap_pyfunction!(faceops::leaf_vertices, m)?)?;
@@ -1541,6 +1665,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(faceops::leaf_mean, m)?)?;
     m.add_function(wrap_pyfunction!(faceops::piece_geometry, m)?)?;
     m.add_function(wrap_pyfunction!(faceops::take_ranges, m)?)?;
+    m.add_function(wrap_pyfunction!(faceops::assemble_occurrences, m)?)?;
     m.add_function(wrap_pyfunction!(dcut::pieces_volume_bad, m)?)?;
     m.add_function(wrap_pyfunction!(fhook::feature_hook_py, m)?)?;
     Ok(())

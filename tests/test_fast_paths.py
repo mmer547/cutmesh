@@ -683,6 +683,33 @@ class RustFaceOps(unittest.TestCase):
         with self.assertRaises(ValueError):
             geometry._core.take_ranges(src, np.array([0]), np.array([len(src) + 1]))
 
+    @unittest.skipUnless(hasattr(geometry._core, "assemble_occurrences"), "Rust extension not built")
+    def test_assemble_occurrences(self):
+        # the face occurrences of the uncut leaves, then the pieces', as the NumPy version
+        rng = np.random.default_rng(3)
+        nf, nleaf, npc = 500, 80, 40
+        fn = rng.integers(3, 7, nf)
+        fptr = np.concatenate([[0], np.cumsum(fn)])
+        fverts = rng.integers(0, 1000, int(fptr[-1]))
+        f_cell = rng.integers(0, nleaf, nf)
+        f_key = rng.integers(0, 10 ** 6, nf)
+        bsel = np.sort(rng.choice(nf, 300, replace=False))
+        p_n = rng.integers(3, 9, 120)
+        p_verts = rng.integers(0, 1000, int(p_n.sum()))
+        py_cell = rng.integers(0, npc, len(p_n))
+        py_key = rng.integers(0, 10 ** 6, len(p_n))
+        leaf_cid = rng.integers(-1, 100, nleaf)
+        piece_cid = rng.integers(-1, 100, npc)
+        args = (fn, fptr, fverts, bsel, p_n, p_verts, leaf_cid, f_cell, piece_cid, py_cell, f_key, py_key)
+        ref = mesher._assemble_occurrences_py(*args)
+        got = geometry._core.assemble_occurrences(*[np.ascontiguousarray(a, np.int64) for a in args])
+        for a, b in zip(got, ref):
+            np.testing.assert_array_equal(a, b)
+        with self.assertRaises(ValueError):
+            geometry._core.assemble_occurrences(*[np.ascontiguousarray(a, np.int64) for a in args[:3]],
+                                                np.array([nf], np.int64),
+                                                *[np.ascontiguousarray(a, np.int64) for a in args[4:]])
+
     @unittest.skipUnless(hasattr(geometry._core, "nearest_kept"), "Rust extension not built")
     def test_nearest_kept(self):
         # mesher._nearest_in through the grid search: the KD-tree's distances bit for bit
@@ -1105,6 +1132,22 @@ class RustSegAny(unittest.TestCase):
             for p in (0.001, 0.1, 0.9):
                 m = rng.random(ptr[-1]) < p
                 np.testing.assert_array_equal(geometry._core.seg_any(m, ptr), np.logical_or.reduceat(m, ptr[:-1]))
+
+
+class RustCellReach(unittest.TestCase):
+    """_core.cell_reach against diagnose._cell_reach's NumPy code"""
+
+    def test_same_as_numpy(self):
+        from cutmesh import diagnose
+        rng = np.random.default_rng(17)
+        for n, m, nI in ((1, 1, 0), (40, 100, 60), (20000, 70000, 50000)):
+            C = rng.normal(size=(n, 3)) * rng.uniform(1e-4, 1e3)
+            Cf = C[rng.integers(0, n, m)] + rng.normal(size=(m, 3)) * rng.uniform(1e-6, 10.0)
+            own = rng.integers(0, max(1, n - 3), m).astype(np.int64)      # the last cells may have no face
+            nei = rng.integers(0, n, nI).astype(np.int64)
+            a = geometry._core.cell_reach(C, Cf, own, nei)
+            b = diagnose._cell_reach(C, Cf, own, nei, use_rs=False)
+            self.assertEqual(a.tobytes(), b.tobytes())
 
 
 class RustCornerMinMax(unittest.TestCase):
