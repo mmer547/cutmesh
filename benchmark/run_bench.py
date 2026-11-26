@@ -477,8 +477,9 @@ def compare(results, baseline, same_mesh=False, use_gate=False):
     """Lines describing cases that got worse (or better) than the baseline.
     Lines starting with WORSE are regressions (exit code 1); the others are information.
     same_mesh: a mesh whose hash differs from the baseline's is a regression too.
-    use_gate: apply the quality gate (gate()) to every case: a case that fails it, or that
-    has no result to judge, is a regression."""
+    use_gate: apply the quality gate (gate()) to every case: a case that fails it, that has
+    no result to judge, or that the baseline judged and this run skipped, is a regression
+    (skipped in both: not judged)."""
     from mesh_hash import diff
     old = {r["name"]: r for r in baseline.get("results", [])}
     out = []
@@ -491,6 +492,9 @@ def compare(results, baseline, same_mesh=False, use_gate=False):
         o = old.get(r["name"])
         if use_gate and r["status"] != "SKIP" and (not o or o["status"] == "SKIP"):
             out.append(f"WORSE  {r['name']}: gate: not in the baseline")
+        if use_gate and r["status"] == "SKIP" and o and o["status"] != "SKIP":
+            # judged in the baseline, never checked here (an STL missing in this environment)
+            out.append(f"WORSE  {r['name']}: gate: skipped in this run (baseline {o['status']})")
         if not o or r["status"] == "SKIP" or o["status"] == "SKIP":
             continue
         if use_gate:

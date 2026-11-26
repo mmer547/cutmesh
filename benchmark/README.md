@@ -102,6 +102,8 @@ run_bench.py SUITE --baseline OLD/results.json --gate        # 品質ゲート�
 境界層や特徴線がないケースでは、`layers`・`featureEdges` が `null` と記録され、その項目は判定しません。
 基準かこの実行のどちらかで測れていない項目（測定の失敗 `metricsError`、`--no-metrics`、この記録より前の `results.json`）は、
 合格にせず `WORSE ... not measured` になります。その場合は基準を測り直してください。
+基準で判定したケースがこの実行で `SKIP` になった（STL がない環境など）ときも、`WORSE ... skipped in this run` になります
+（両方で `SKIP` のケースは判定しません）。
 
 `baseCellSize` を指定しないケースは「外接箱の最長辺 / `cellsAcross`」（既定 24）で決めます。
 Thingi10K などは単位や大きさがばらばらなので、この方法で揃えます。

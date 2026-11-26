@@ -131,6 +131,19 @@ class QualityGate(unittest.TestCase):
         self.assertTrue(any(s.startswith("WORSE  b: gate: faces skewness > 4") for s in lines), lines)
         self.assertIn("WORSE  c: gate: not in the baseline", lines)
 
+    def test_compare_skipped(self):
+        # judged in the baseline but skipped here: not a pass; skipped in both: not judged
+        skip = {"name": "a", "status": "SKIP", "notes": ["STL not found"]}
+        base = {"platform": "another machine", "results": [gres("a")]}
+        lines = run_bench.compare([skip], base, use_gate=True)
+        self.assertIn("WORSE  a: gate: skipped in this run (baseline PASS)", lines)
+        base = {"platform": "another machine", "results": [dict(skip)]}
+        lines = run_bench.compare([skip], base, use_gate=True)
+        self.assertFalse(any(s.startswith("WORSE") for s in lines), lines)
+        # without --gate a skip is not a regression (as before)
+        base = {"platform": "another machine", "results": [gres("a")]}
+        self.assertFalse(any(s.startswith("WORSE") for s in run_bench.compare([skip], base)))
+
 
 class MeshMetrics(unittest.TestCase):
     def test_feature_edges(self):
