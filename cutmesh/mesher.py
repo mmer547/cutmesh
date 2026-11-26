@@ -16,7 +16,7 @@ from .cutcell import CutContext, split_components
 from .polymesh import write_polymesh
 from .featclip import PlaneClip, clip_cell, clipped_face, make_alloc
 from .config import validate_config, check_names, ConfigError  # noqa: F401
-from . import quality
+from . import quality, __version__
 from . import diagnose
 
 
@@ -2009,6 +2009,7 @@ def _thin_gap_py(dom, p, into, tg, eps, max_steps=512):
 @paused_gc
 def generate(cfg, log=print):
     T = Timer(log)
+    log(f"cutmesh {__version__}")
     validate_config(cfg, log)
     dom = Surface(read_stl(_rel(cfg, cfg["domain"])), log=log, what="domain STL")
     check_names(cfg, dom.names, log)

@@ -574,9 +574,18 @@ def parts_table(results):
     return md + [""]
 
 
+def _cutmesh_version():
+    try:
+        from cutmesh import __version__
+        return __version__
+    except ImportError:
+        return None
+
+
 def write_reports(outdir, suite, results, args, cmp_lines):
     payload = {"suite": suite["name"], "date": time.strftime("%Y-%m-%d %H:%M:%S"),
                "python": sys.version.split()[0], "platform": platform_id(), "args": vars(args),
+               "cutmesh": _cutmesh_version(),
                "results": results}
     with open(os.path.join(outdir, "results.json"), "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=1, default=float)
