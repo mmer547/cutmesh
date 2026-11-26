@@ -24,6 +24,18 @@ def _face_geometry(points, faces):
     return quality.face_geometry(points, ff)
 
 
+def _cell_reach(C, Cf, owner, neighbour, use_rs=True):
+    """per cell the longest line from its centre to its face centres (0 without faces)"""
+    if use_rs and _core is not None and hasattr(_core, "cell_reach"):
+        return _core.cell_reach(np.ascontiguousarray(C, float), np.ascontiguousarray(Cf, float),
+                                np.ascontiguousarray(owner, np.int64), np.ascontiguousarray(neighbour, np.int64))
+    nI = len(neighbour)
+    reach = np.zeros(len(C))
+    np.maximum.at(reach, owner, np.linalg.norm(Cf - C[owner], axis=1))
+    np.maximum.at(reach, neighbour, np.linalg.norm(Cf[:nI] - C[neighbour], axis=1))
+    return reach
+
+
 def _free_distance(dom, C, Cf, owner, neighbour):
     """per cell centre in the fluid: its distance to the STL less the ray shift of
     inside() (-inf outside).  A line from the centre shorter than that stays inside.
@@ -32,10 +44,7 @@ def _free_distance(dom, C, Cf, owner, neighbour):
     without the closest point (a search that stops at that radius)."""
     margin = dom.inside_shift + 1e-9 * dom.L
     if hasattr(dom._rs, "distance_below_each"):
-        nI = len(neighbour)
-        reach = np.zeros(len(C))
-        np.maximum.at(reach, owner, np.linalg.norm(Cf - C[owner], axis=1))
-        np.maximum.at(reach, neighbour, np.linalg.norm(Cf[:nI] - C[neighbour], axis=1))
+        reach = _cell_reach(C, Cf, owner, neighbour)
         dC = dom._rs.distance_below_each(np.ascontiguousarray(C, float), np.ascontiguousarray(reach + margin, float))
     else:
         _, dC, _ = dom.closest(C)

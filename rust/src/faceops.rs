@@ -548,3 +548,41 @@ pub fn assemble_occurrences<'py>(
     Ok((o_n.into_pyarray(py), o_ptr.into_pyarray(py), o_verts.into_pyarray(py), o_cell.into_pyarray(py),
         o_key.into_pyarray(py)))
 }
+
+/// cell_reach(C[n, 3], Cf[m, 3], owner[m], neighbour[nI]) -> r[n]: per cell the longest
+/// line from its centre to the centres of its faces (0 for a cell without faces), as
+///   r = zeros(n); maximum.at(r, owner, |Cf - C[owner]|); maximum.at(r, neighbour, |Cf[:nI] - C[neighbour]|)
+/// with |x| = sqrt((x0² + x1²) + x2²) as np.linalg.norm(axis=1).  The lengths are >= 0,
+/// so their bits order as the values: the maxima are taken on the bits, in parallel.
+#[pyfunction]
+pub fn cell_reach<'py>(
+    py: Python<'py>,
+    c: numpy::PyReadonlyArray2<'py, f64>,
+    cf: numpy::PyReadonlyArray2<'py, f64>,
+    owner: PyReadonlyArray1<'py, i64>,
+    neighbour: PyReadonlyArray1<'py, i64>,
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    let (c, cf) = (crate::points_ref(&c)?, crate::points_ref(&cf)?);
+    let (own, nei) = (owner.as_slice()?, neighbour.as_slice()?);
+    let n = c.len();
+    if own.len() != cf.len() || nei.len() > own.len() || own.par_iter().chain(nei.par_iter()).any(|&x| x < 0 || x as usize >= n) {
+        return Err(pyo3::exceptions::PyValueError::new_err("inconsistent cell / face arrays"));
+    }
+    let r: Vec<f64> = py.detach(|| {
+        let r: Vec<AtomicU64> = (0..n).into_par_iter().map(|_| AtomicU64::new(0)).collect();
+        let len = |f: usize, k: usize| -> f64 {
+            let (a, b) = (cf[f], c[k]);
+            let (x, y, z) = (a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+            ((x * x + y * y) + z * z).sqrt()
+        };
+        own.par_iter().enumerate().for_each(|(f, &o)| {
+            r[o as usize].fetch_max(len(f, o as usize).to_bits(), Ordering::Relaxed);
+        });
+        nei.par_iter().enumerate().for_each(|(f, &q)| {
+            r[q as usize].fetch_max(len(f, q as usize).to_bits(), Ordering::Relaxed);
+        });
+        r.into_par_iter().map(|x| f64::from_bits(x.into_inner())).collect()
+    });
+    Ok(r.into_pyarray(py))
+}

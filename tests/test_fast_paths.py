@@ -1134,6 +1134,22 @@ class RustSegAny(unittest.TestCase):
                 np.testing.assert_array_equal(geometry._core.seg_any(m, ptr), np.logical_or.reduceat(m, ptr[:-1]))
 
 
+class RustCellReach(unittest.TestCase):
+    """_core.cell_reach against diagnose._cell_reach's NumPy code"""
+
+    def test_same_as_numpy(self):
+        from cutmesh import diagnose
+        rng = np.random.default_rng(17)
+        for n, m, nI in ((1, 1, 0), (40, 100, 60), (20000, 70000, 50000)):
+            C = rng.normal(size=(n, 3)) * rng.uniform(1e-4, 1e3)
+            Cf = C[rng.integers(0, n, m)] + rng.normal(size=(m, 3)) * rng.uniform(1e-6, 10.0)
+            own = rng.integers(0, max(1, n - 3), m).astype(np.int64)      # the last cells may have no face
+            nei = rng.integers(0, n, nI).astype(np.int64)
+            a = geometry._core.cell_reach(C, Cf, own, nei)
+            b = diagnose._cell_reach(C, Cf, own, nei, use_rs=False)
+            self.assertEqual(a.tobytes(), b.tobytes())
+
+
 class RustCornerMinMax(unittest.TestCase):
     def test_same_as_numpy(self):
         rng = np.random.default_rng(3)
