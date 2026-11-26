@@ -496,22 +496,25 @@ def _leaf_bad_py(P, leaves, fptr, fverts, cptr, csize, flat_at=None, flat_angle=
     return (np.bincount(owner_, badf.astype(int), len(leaves)) > 0) | (vv <= 0)
 
 
-def _wall_skewness(P, faces, cf, sf, cc):
+def _wall_skewness(P, faces, cf, sf, cc, limit=None):
     """checkMesh's skewness of each face (vertex lists faces, centres cf, area vectors sf)
-    taken as a boundary face of the cell with centre cc: the distance of the face centre
-    from the face normal through cc, divided by the extent of the face that way (at
-    least 0.4 x the distance of cc from the face plane)"""
+    taken as a boundary face of the cell with centre cc (one per face, or one for all):
+    the distance of the face centre from the face normal through cc, divided by the
+    extent of the face that way (at least 0.4 x the distance of cc from the face plane).
+    limit: faces whose bound (that distance / 0.4 x the plane distance) is at most this
+    get the bound instead of the exact value (enough to compare with limit)"""
     cf = np.asarray(cf, float); sf = np.asarray(sf, float)
     cpf = cf - np.asarray(cc, float)
     n = sf / np.maximum(np.linalg.norm(sf, axis=1), 1e-300)[:, None]
     d = n * np.einsum("ij,ij->i", n, cpf)[:, None]
     sv = cpf - (np.einsum("ij,ij->i", sf, cpf) / (np.einsum("ij,ij->i", sf, d) + 1e-300))[:, None] * d
     msv = np.linalg.norm(sv, axis=1)
-    svh = sv / (msv + 1e-300)[:, None]
     fd = 0.4 * np.linalg.norm(d, axis=1)
-    for i, (_, p) in enumerate(faces):
-        fd[i] = max(fd[i], float(np.abs((P[p] - cf[i]) @ svh[i]).max()))
-    return msv / (fd + 1e-300)
+    sk = msv / (fd + 1e-300)
+    for i in (range(len(faces)) if limit is None else np.flatnonzero(sk > limit).tolist()):
+        svh = sv[i] / (msv[i] + 1e-300)
+        sk[i] = msv[i] / (max(fd[i], float(np.abs((P[faces[i][1]] - cf[i]) @ svh).max())) + 1e-300)
+    return sk
 
 
 def _tets_ok(P, faces, cf, cc, vmin, use_rs=True):
@@ -3411,21 +3414,19 @@ def generate(cfg, log=print):
     tet_cand = []
     skewed = set()
     roots = np.nonzero(proot == np.arange(nP))[0]
-    # the large convex cells are fine unless pieces were merged into them (a union of
-    # thin slabs along a wall can have its wall faces far off its centre)
+    # the large convex cells are fine, unless small pieces were merged into them (a
+    # union of thin slabs along a wall, below a hex in volume, can have its wall faces
+    # far off its centre): those are looked at for the skewness only
     has_m = np.zeros(nP, bool)
     has_m[[k for k in members if k < nP]] = True
-    roots = roots[~((gvol[roots] >= beta * hexvol[roots]) & ~np.asarray(bad_piece, bool)[roots]) | has_m[roots]]
+    big = (gvol[roots] >= beta * hexvol[roots]) & ~np.asarray(bad_piece, bool)[roots]
+    skew_only = set(roots[big & has_m[roots] & (gvol[roots] < hexvol[roots])].tolist())
+    roots = roots[~big | np.isin(roots, list(skew_only))]
+    sk_cells = []                       # (root, faces, centres, area vectors, centre)
     for r in roots.tolist():
         keep_, cf_, sf_, V_, cc_ = poly_geom(node_faces(r))
-        if V_ > 0 and _tets_ok(P, keep_, cf_, cc_, 1e-3 * V_):
-            hi = np.flatnonzero(_wall_skewness(P, keep_, cf_, sf_, cc_) > 4.0)
-            if not len(hi) or min(face_neighbour(keep_[i][0], {r}) for i in hi.tolist()) >= 0:
-                continue                      # no wall face over the limit
-            nb_ = [face_neighbour(fid, {r}) for fid, _ in keep_]
-            exposed = {v for (_, p), b in zip(keep_, nb_) if b >= 0 for v in p}
-            tet_cand.append((r, sorted(exposed), csize[pieces[r][1]]))
-            skewed.add(r)
+        if r in skew_only or (V_ > 0 and _tets_ok(P, keep_, cf_, cc_, 1e-3 * V_)):
+            sk_cells.append((r, keep_, cf_, sf_, cc_))        # the skewness below
             continue
         nb_ = [face_neighbour(fid, {r}) for fid, _ in keep_]
         if min(nb_) >= 0:
@@ -3436,6 +3437,24 @@ def generate(cfg, log=print):
         else:
             exposed = {v for (_, p), b in zip(keep_, nb_) if b >= 0 for v in p}
             tet_cand.append((r, sorted(exposed), hc))
+    if sk_cells:
+        # wall faces skewed over checkMesh's limit: all the cells' faces at once
+        nf_ = np.array([len(x[1]) for x in sk_cells])
+        sk = _wall_skewness(P, [f for x in sk_cells for f in x[1]], np.concatenate([x[2] for x in sk_cells]),
+                            np.concatenate([x[3] for x in sk_cells]),
+                            np.repeat(np.array([x[4] for x in sk_cells], float), nf_, axis=0), limit=4.0)
+        over = np.flatnonzero(np.logical_or.reduceat(sk > 4.0, np.concatenate([[0], np.cumsum(nf_)[:-1]])))
+        st_ = np.concatenate([[0], np.cumsum(nf_)])
+        for k in over.tolist():
+            r, keep_ = sk_cells[k][0], sk_cells[k][1]
+            hi = np.flatnonzero(sk[st_[k]:st_[k + 1]] > 4.0)
+            nb_ = [face_neighbour(fid, {r}) for fid, _ in keep_]
+            if min(nb_[i] for i in hi.tolist()) >= 0:
+                continue                      # internal faces only
+            exposed = {v for (_, p), b in zip(keep_, nb_) if b >= 0 for v in p}
+            tet_cand.append((r, sorted(exposed), csize[pieces[r][1]]))
+            skewed.add(r)
+    sk_cells = None
     if tet_cand:
         ev = np.array(sorted({v for _, ex, _ in tet_cand for v in ex}), np.int64)
         _, dv, _ = dom.closest(P[ev])
