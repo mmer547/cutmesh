@@ -28,12 +28,24 @@ https://mmer547.github.io/cutmesh/ ）にあります。
 
 ## インストール
 
+**wheel（おすすめ）**: [GitHub の Releases](https://github.com/mmer547/cutmesh/releases) から、自分の OS 用の
+wheel（`cutmesh-<版>-cp39-abi3-<OS>.whl`。Linux・Windows・macOS、Python 3.9 以上で共通）をダウンロードしてインストールします。
+Rust 拡張が入っているので、ビルドは要りません。PyPI には公開していません。
+
 ```bash
-pip install -e .                      # オフライン環境では --no-build-isolation（要 wheel）
-python tools/build_rust.py            # 任意: Rust 拡張のビルド（下記「高速化」）
+pip install cutmesh-0.9.0-cp39-abi3-win_amd64.whl     # ダウンロードした wheel のファイル名
+cutmesh --version
 ```
 
-インストールしない場合はプロジェクト直下から実行するか、`PYTHONPATH` に `cutmesh` の親ディレクトリを通してください。
+**ソースから**: Rust ツールチェーン（cargo）があれば、`pip install .`（`maturin` でビルドされる）で Rust 拡張ごと入ります。
+
+```bash
+pip install -e .                      # 開発用（Rust 拡張もビルドされる）
+python tools/build_rust.py            # インストールせずに、リポジトリ直下から使う場合の Rust 拡張のビルド（下記「高速化」）
+```
+
+インストールしない場合はリポジトリ直下から `python -m cutmesh` で実行するか、`PYTHONPATH` にリポジトリのディレクトリを通してください。
+Rust 拡張がなくても Python/NumPy の処理で動きます（大幅に遅い）。
 
 ## 使い方
 

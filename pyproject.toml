@@ -1,11 +1,12 @@
 [build-system]
-requires = ["setuptools>=61"]
-build-backend = "setuptools.build_meta"
+# the Rust extension (rust/, module cutmesh._core) is built into the wheel by maturin
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
 
 [project]
 name = "cutmesh"
 dynamic = ["version"]
-description = "Octree cut-cell mesher for OpenFOAM: polyhedral meshes inside watertight STLs, with rotating zones cut into the mesh (cellZone + interface faceZone), cylindrical base meshes and boundary layers. Python, optional Rust extension (prototype)."
+description = "Octree cut-cell mesher for OpenFOAM: polyhedral meshes inside watertight STLs, with rotating zones cut into the mesh (cellZone + interface faceZone), cylindrical base meshes and boundary layers. Python with a Rust extension."
 license = {text = "MIT"}
 requires-python = ">=3.9"
 dependencies = ["numpy", "scipy"]
@@ -16,11 +17,10 @@ plot = ["matplotlib"]
 [project.scripts]
 cutmesh = "cutmesh.__main__:main"
 
-[tool.setuptools]
-packages = ["cutmesh"]
-
-[tool.setuptools.dynamic]
-version = {attr = "cutmesh.__version__"}
-
-[tool.setuptools.package-data]
-cutmesh = ["_core*.pyd", "_core*.so"]
+[tool.maturin]
+# the package cutmesh/ at the top of the repository, the extension from rust/ as cutmesh._core;
+# the version is rust/Cargo.toml's (kept equal to cutmesh.__version__, tests/test_version.py)
+manifest-path = "rust/Cargo.toml"
+module-name = "cutmesh._core"
+python-source = "."
+exclude = ["cutmesh/_core*.so", "cutmesh/_core*.pyd", "cutmesh/__pycache__/**"]

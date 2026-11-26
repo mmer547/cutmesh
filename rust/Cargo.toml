@@ -12,7 +12,8 @@ crate-type = ["cdylib"]
 
 [dependencies]
 numpy = "0.30.0"
-pyo3 = { version = "0.30.1", features = ["extension-module"] }
+# abi3: one extension (and one wheel per platform) for every Python from 3.9
+pyo3 = { version = "0.30.1", features = ["extension-module", "abi3-py39"] }
 rayon = "1.12.0"
 
 [profile.release]

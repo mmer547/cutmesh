@@ -27,12 +27,24 @@ The documentation site includes a manual and mesh images from the examples. [Eng
 
 ## Installation
 
+**Wheel (recommended).** Download the wheel for your OS from the
+[GitHub releases](https://github.com/mmer547/cutmesh/releases) (`cutmesh-<version>-cp39-abi3-<platform>.whl`, for Linux,
+Windows, or macOS and any Python 3.9 or later) and install it. The Rust extension is built in. cutmesh is not on PyPI.
+
 ```bash
-pip install -e .                      # Offline: use --no-build-isolation (requires wheel)
-python tools/build_rust.py            # Optional: build the Rust extension (see Rust acceleration below)
+pip install cutmesh-0.9.0-cp39-abi3-win_amd64.whl     # the file name of the wheel you downloaded
+cutmesh --version
 ```
 
-To run from the source tree, use the repository root as the working directory or add it to `PYTHONPATH`.
+**From source.** With a Rust toolchain (cargo), `pip install .` builds the Rust extension with `maturin`.
+
+```bash
+pip install -e .                      # Development install (builds the Rust extension too)
+python tools/build_rust.py            # Rust build for running from the source tree without installing (see Rust acceleration below)
+```
+
+To run from the source tree, use `python -m cutmesh` from the repository root or add it to `PYTHONPATH`. Without the Rust
+extension, cutmesh falls back to slower Python/NumPy code.
 
 ## Usage
 

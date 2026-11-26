@@ -1,5 +1,5 @@
 """cutmesh: octree cut-cell meshes for OpenFOAM from watertight STLs."""
 
-# The version of cutmesh, kept here only (pyproject.toml reads it; rust/Cargo.toml is kept
-# the same, checked by tests/test_version.py).
+# The version of cutmesh.  rust/Cargo.toml carries the same (maturin takes the wheel's version
+# from there; tests/test_version.py checks that both agree).
 __version__ = "0.8.0"

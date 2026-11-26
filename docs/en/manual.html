@@ -68,11 +68,15 @@ All settings go into one JSON file, <code>meshDict.json</code>.</p>
 
 <h2 id="install">Installation</h2>
 <p>Mesh generation requires Python 3.9 or later, NumPy, and SciPy. Use Matplotlib to plot cross-sections. OpenFOAM is optional.</p>
+<p><strong>Wheel (recommended).</strong> Download the wheel for your OS from the <a href="https://github.com/mmer547/cutmesh/releases">GitHub releases</a> (<code>cutmesh-&lt;version&gt;-cp39-abi3-&lt;platform&gt;.whl</code>, for Linux, Windows, or macOS and any Python 3.9 or later) and install it. The Rust extension is built in. cutmesh is not on PyPI.</p>
+<pre><code>pip install cutmesh-0.9.0-cp39-abi3-win_amd64.whl     # the file name of the wheel you downloaded
+cutmesh --version</code></pre>
+<p><strong>From source.</strong> With a Rust toolchain (cargo), <code>pip install .</code> builds the Rust extension with <code>maturin</code>.</p>
 <pre><code>git clone https://github.com/mmer547/cutmesh.git
 cd cutmesh
-pip install -e .                      # Offline: use --no-build-isolation (requires wheel)
-python tools/build_rust.py            # Optional Rust build (about 100× faster on the stirred tank example)</code></pre>
-<p>To run from the source tree, use <code>python -m cutmesh</code> from the repository root or add the repository directory to <code>PYTHONPATH</code>.</p>
+pip install -e .                      # Development install (builds the Rust extension too)
+python tools/build_rust.py            # Rust build for running from the source tree without installing</code></pre>
+<p>To run from the source tree, use <code>python -m cutmesh</code> from the repository root or add the repository directory to <code>PYTHONPATH</code>. Without the Rust extension, cutmesh falls back to Python/NumPy code (about 100× slower on the stirred tank example).</p>
 
 <h2 id="usage">Usage</h2>
 <pre><code>cutmesh meshDict.json [-case DIR] [-noCheck]    # python -m cutmesh also works</code></pre>
