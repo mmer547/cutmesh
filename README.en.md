@@ -513,8 +513,11 @@ orientation is inconsistent.
   too close to a wall to reach the center are snapped as usual. `fillThinGaps` is available for Cartesian grids.
 - To preserve sub-cell walls, `fillThinWalls` refines cells with no corner in the solid. If snapping solid-side
   vertices to both faces would leave a cell with no solid corners, move the vertex to the middle of the wall thickness.
-  Remaining connections through the wall generate `checkLeaks` warnings. Run `python -m cutmesh.diagnose meshDict.json [CASE]`
-  for an existing mesh. Re-entrant corners where walls meet can remain chamfered.
+  Cells with solid corners are split too where a thin wall meets another wall (a plate under a ceiling) and separates two
+  of their fluid corners. Remaining connections through the wall generate `checkLeaks` warnings. Run
+  `python -m cutmesh.diagnose meshDict.json [CASE]` for an existing mesh. A line next to the free end of a wall (a sharp
+  edge where the solid juts into the fluid) within the cell's reach does not count: around that end the fluid meets within
+  one cell anyway. Re-entrant corners where walls meet can remain chamfered.
 - Cylinder rims and concave edges can be chamfered at cell scale, which usually has little effect on interfaces.
   `exactFeatureCut` captures convex edges. Where a convex edge meets a concave edge or a curved surface near a nonconvex
   cell, the standard cut can leave a chamfer. At sharp concave edges, solid-side vertices are snapped onto the edge

@@ -51,11 +51,39 @@ def _free_distance(dom, C, Cf, owner, neighbour):
     return np.where(dom.inside(C), dC - margin, -np.inf)
 
 
-def through_wall(dom, points, faces, owner, neighbour, samples=16, cos_opposite=-0.5, geom=None, mark=None):
+def wall_ends(dom, feature_angle):
+    """the free ends of the walls for through_wall(ends=...): the sharp edges where the
+    solid juts into the fluid (feature_edges' concave edges, concave seen from the
+    fluid), or None without any"""
+    from .geometry import FeatureSet
+    ends = FeatureSet(dom.feature_edges(feature_angle, concave_only=True), L=dom.L)
+    return ends if ends._kd is not None else None
+
+
+def _not_at_ends(mids, lens, ends, stats):
+    """the lines (midpoints, lengths) with no wall end nearer than twice their length"""
+    mids = np.asarray(mids, float).reshape(-1, 3)
+    keep = np.ones(len(mids), bool)
+    if len(mids):
+        _, d = ends.closest(mids)
+        keep = ~(np.asarray(d) < 2.0 * np.asarray(lens))
+    if stats is not None:
+        stats["atWallEnds"] = int((~keep).sum())
+    return int(keep.sum()), mids[keep]
+
+
+def through_wall(dom, points, faces, owner, neighbour, samples=16, cos_opposite=-0.5, geom=None, mark=None,
+                 ends=None, stats=None):
     """(number of cell-centre -> face-centre lines through a wall, their midpoints).
     geom (a dict): receives the face centres and area vectors, the cell centres and
     volumes (Cf, Sf, C, V) for a later quality check of the same mesh.
-    mark(part): ends a part of the timing (mesher.Timer.mark)"""
+    mark(part): ends a part of the timing (mesher.Timer.mark)
+    ends: the free ends of the walls (an object with closest(p) -> (points, distances),
+    e.g. geometry.FeatureSet of the sharp edges where the solid juts into the fluid).
+    A line through a wall whose end lies within the reach of the cell (nearer to the
+    line's midpoint than twice its length: the line runs from the centre to a face, about
+    half the cell) does not count: the fluid on the two sides meets around that end
+    within the cell (at the free end of a thin wall).  stats (a dict): receives "atWallEnds", the lines not counted so."""
     mark = mark or (lambda part: None)
     nI = len(neighbour)
     if getattr(dom, "_rs", None) is None and dom._kd is None:
@@ -73,6 +101,12 @@ def through_wall(dom, points, faces, owner, neighbour, samples=16, cos_opposite=
         # the lines built, filtered and sampled in Rust (the same lines, in the same order)
         free = _free_distance(dom, C, Cf, owner, neighbour)
         mark("distance of the cell centres to the STL")
+        if ends is not None and hasattr(dom._rs, "through_wall_cells_len"):
+            n, mids, lens = dom._rs.through_wall_cells_len(
+                np.ascontiguousarray(C, float), np.ascontiguousarray(Cf, float),
+                np.ascontiguousarray(owner, np.int64), np.ascontiguousarray(neighbour, np.int64),
+                np.ascontiguousarray(free, float), np.ascontiguousarray(tn, float), int(samples), float(cos_opposite))
+            return _not_at_ends(mids, lens, ends, stats)
         return dom._rs.through_wall_cells(np.ascontiguousarray(C, float), np.ascontiguousarray(Cf, float),
                                           np.ascontiguousarray(owner, np.int64), np.ascontiguousarray(neighbour, np.int64),
                                           np.ascontiguousarray(free, float), np.ascontiguousarray(tn, float),
@@ -125,8 +159,11 @@ def main(argv=None):
     case = argv[1] if len(argv) > 1 else _rel(cfg, cfg.get("case", "."))
     dom = Surface(read_stl(_rel(cfg, cfg["domain"])), log=print, what="domain STL")
     m = read_mesh(case)
-    n, X = through_wall(dom, m["points"], m["faces"], m["owner"], m["neighbour"])
-    print(f"lines from cell centres to face centres through a solid wall: {n}")
+    st = {}
+    n, X = through_wall(dom, m["points"], m["faces"], m["owner"], m["neighbour"],
+                        ends=wall_ends(dom, cfg["featureAngle"]), stats=st)
+    print(f"lines from cell centres to face centres through a solid wall: {n}"
+          + (f" ({st['atWallEnds']} more next to the free end of a wall not counted)" if st.get("atWallEnds") else ""))
     for x in X[:20]:
         print(f"    at ({x[0]:.6g} {x[1]:.6g} {x[2]:.6g})")
     return 1 if n else 0

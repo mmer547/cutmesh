@@ -1769,53 +1769,96 @@ def _fluid_fraction(dom, c, h, n=6, cache=None):
     return (phi < 0).mean(1), (sd.min(1) < 0) & (sd.max(1) > 0)
 
 
-def _thin_wall_cells(dom, c, h, cache=None):
-    """Cells (centres c, sizes h) with no corner in the solid that contain a solid wall:
-    on one of 13 lines through the cell the surface is entered and left again with
-    opposite normals (the two faces of a wall; a convex edge of the solid, poking into
-    the cell, has its face normals at 90 degrees or less and does not count).
-    cache: dom.point_cache() for the corner distances"""
-    D = np.array([d for d in itertools.product((-1, 0, 1), repeat=3)
-                  if any(d) and next(x for x in d if x) > 0], float)            # 13
-    corners = np.array(list(itertools.product((-1, 1), repeat=3)), float)
-    q = (c[:, None, :] + 0.5 * h[:, None, None] * corners[None]).reshape(-1, 3)
-    thr = np.repeat(1e-3 * h, 8)
-    if hasattr(getattr(dom, "_rs", None), "distance_below_each"):
-        # a corner in the solid (sdf > thr): outside, and no wall within thr (a search
-        # that stops at thr; the distance itself is not needed)
-        solid = ~dom.inside(q)
-        io = np.flatnonzero(solid)
-        d = dom._rs.distance_below_each(np.ascontiguousarray(q[io], float), np.ascontiguousarray(thr[io], float))
-        solid[io] = d > thr[io]
-    else:
-        sd = dom.sdf(q) if cache is None else dom.sdf(q, cache=cache)
-        solid = sd > thr
-    no_solid = ~solid.reshape(len(c), 8).any(1)
-    idx = np.nonzero(no_solid)[0]
-    out = np.zeros(len(c), bool)
-    if len(idx) and dom._rs is not None:
-        # the 13 lines stay within 0.5 sqrt(3) h of the centre: no crossing farther out
-        _, dc, _ = dom.closest(c[idx])
-        idx = idx[dc <= (0.5 * np.sqrt(3) + 1e-6) * h[idx]]
-    if not len(idx):
-        return out
-    A = (c[idx][:, None, :] - 0.5 * h[idx][:, None, None] * D[None]).reshape(-1, 3)
-    B = (c[idx][:, None, :] + 0.5 * h[idx][:, None, None] * D[None]).reshape(-1, 3)
-    T = dom.tris
-    tn = np.cross(T[:, 1] - T[:, 0], T[:, 2] - T[:, 0])
-    tn /= np.maximum(np.linalg.norm(tn, axis=1), 1e-300)[:, None]
+_CORNERS = np.array(list(itertools.product((-1, 1), repeat=3)), float)
+_CUBE_EDGES = [(a, b) for a in range(8) for b in range(a + 1, 8)
+               if np.abs(_CORNERS[a] - _CORNERS[b]).sum() == 2]                       # 12
+_CORNER_PAIRS = np.array([(a, b) for a in range(8) for b in range(a + 1, 8)])          # 28
+
+
+def _through_wall_segments(dom, A, B):
+    """Segments A-B that enter the solid and leave it again through faces with opposite
+    normals (they cross a wall; a corner of the solid gives normals at 90 degrees or less)."""
+    out = np.zeros(len(A), bool)
     seg, t, tri = dom.segment_hits(A, B)
     if not len(seg):
         return out
-    n = tn[tri]
+    T = dom.tris
+    n = np.cross(T[tri, 1] - T[tri, 0], T[tri, 2] - T[tri, 0])
+    n /= np.maximum(np.linalg.norm(n, axis=1), 1e-300)[:, None]
     enter = np.einsum("ij,ij->i", n, (B - A)[seg]) > 0       # outward normal along the line
     # drop repeated crossings (a line through a shared edge or vertex hits two triangles)
     keep = np.ones(len(seg), bool)
     keep[1:] = ~((seg[1:] == seg[:-1]) & (np.abs(t[1:] - t[:-1]) < 1e-9) & (enter[1:] == enter[:-1]))
     seg, n, enter = seg[keep], n[keep], enter[keep]
     pair = (seg[1:] == seg[:-1]) & enter[:-1] & ~enter[1:] & (np.einsum("ij,ij->i", n[:-1], n[1:]) < -0.5)
-    hit = unique(seg[:-1][pair]) // len(D)
-    out[idx[hit]] = True
+    out[seg[:-1][pair]] = True
+    return out
+
+
+def _thin_wall_cells(dom, c, h, cache=None):
+    """Cells (centres c, sizes h) in which a solid wall would vanish:
+    - no corner in the solid, and on one of 13 lines through the cell the surface is
+      entered and left again with opposite normals (the two faces of a wall; a convex
+      edge of the solid, poking into the cell, has its face normals at 90 degrees or less
+      and does not count), or
+    - some corners in the solid, but two fluid corners joined by fluid cell edges have
+      such a wall between them (a thin wall meeting another wall: a fin under a ceiling).
+    cache: dom.point_cache() for the corner distances"""
+    D = np.array([d for d in itertools.product((-1, 0, 1), repeat=3)
+                  if any(d) and next(x for x in d if x) > 0], float)            # 13
+    corners = _CORNERS
+    q = (c[:, None, :] + 0.5 * h[:, None, None] * corners[None]).reshape(-1, 3)
+    thr = np.repeat(1e-3 * h, 8)
+    if hasattr(getattr(dom, "_rs", None), "distance_below_each"):
+        # a corner in the solid (sdf > thr) / in the fluid (sdf < -thr): its side, and no
+        # wall within thr (a search that stops at thr; the distance itself is not needed)
+        ins = dom.inside(q)
+        off = ~(dom._rs.distance_below_each(np.ascontiguousarray(q, float), np.ascontiguousarray(thr, float)) <= thr)
+        solid, fluid = ~ins & off, ins & off
+    else:
+        sd = dom.sdf(q) if cache is None else dom.sdf(q, cache=cache)
+        solid, fluid = sd > thr, sd < -thr
+    solid = solid.reshape(len(c), 8)
+    # corners on the wall (within thr) are neither: two bodies touching along an edge
+    # on a lattice plane would otherwise join their fluid corners through it
+    fluid = fluid.reshape(len(c), 8)
+    out = np.zeros(len(c), bool)
+    # the 13 lines and the corner pairs stay within 0.5 sqrt(3) h of the centre: a cell
+    # farther from the STL has no crossing
+    near = np.zeros(len(c), bool)
+    cand = np.flatnonzero(~solid.all(1))
+    if len(cand) and dom._rs is not None:
+        _, dc, _ = dom.closest(c[cand])
+        near[cand[dc <= (0.5 * np.sqrt(3) + 1e-6) * h[cand]]] = True
+    else:
+        near[cand] = True
+    idx = np.flatnonzero(near & ~solid.any(1))
+    if len(idx):
+        A = (c[idx][:, None, :] - 0.5 * h[idx][:, None, None] * D[None]).reshape(-1, 3)
+        B = (c[idx][:, None, :] + 0.5 * h[idx][:, None, None] * D[None]).reshape(-1, 3)
+        hit = np.nonzero(_through_wall_segments(dom, A, B))[0] // len(D)
+        out[idx[hit]] = True
+    # corners in the solid, but two fluid corners joined by fluid cell edges (the cut
+    # keeps them in one cell) with a wall between them
+    idx = np.flatnonzero(near & solid.any(1) & (fluid.sum(1) >= 2))
+    if not len(idx):
+        return out
+    fl = fluid[idx]
+    lab = np.where(fl, np.arange(8)[None], 8)
+    for _ in range(4):                                   # components over the 12 cube edges
+        for a, b in _CUBE_EDGES:
+            j = fl[:, a] & fl[:, b]
+            m = np.minimum(lab[j, a], lab[j, b])
+            lab[j, a] = m
+            lab[j, b] = m
+    ci, cj = _CORNER_PAIRS[:, 0], _CORNER_PAIRS[:, 1]
+    sel = fl[:, ci] & fl[:, cj] & (lab[:, ci] == lab[:, cj])
+    cell, pr = np.nonzero(sel)
+    if not len(cell):
+        return out
+    P = c[idx][cell, None, :] + 0.5 * h[idx][cell, None, None] * corners[_CORNER_PAIRS[pr]]
+    hit = _through_wall_segments(dom, P[:, 0], P[:, 1])
+    out[idx[unique(cell[hit])]] = True
     return out
 
 
@@ -3057,6 +3100,9 @@ def generate(cfg, log=print):
             f" {nbad} pieces not convex; {nback} cells left to the level-set cut where a neighbour"
             f" could not be clipped)")
     T.mark("exact feature cut: clipping")
+    # the leaves cut exactly at a feature edge (the sliver stage keeps their cells)
+    clipped_leaf = np.zeros(nleaf, bool)
+    clipped_leaf[list(clip)] = True
     pieces = _Pieces.concat(pieces)
     next_id = ctx.next_id
     log(f"domain cut: {len(cut_leaves)} cut cells, {int(bulk_alive.sum()) + len(pieces)} cells kept"
@@ -3425,6 +3471,9 @@ def generate(cfg, log=print):
     sk_cells = []                       # (root, faces, centres, area vectors, centre)
     for r in roots.tolist():
         keep_, cf_, sf_, V_, cc_ = poly_geom(node_faces(r))
+        if not keep_:                     # every face shared within the node: no cell left
+            removed[r] = True
+            continue
         if r in skew_only or (V_ > 0 and _tets_ok(P, keep_, cf_, cc_, 1e-3 * V_)):
             sk_cells.append((r, keep_, cf_, sf_, cc_))        # the skewness below
             continue
@@ -3447,6 +3496,8 @@ def generate(cfg, log=print):
         st_ = np.concatenate([[0], np.cumsum(nf_)])
         for k in over.tolist():
             r, keep_ = sk_cells[k][0], sk_cells[k][1]
+            if clipped_leaf[pieces.leaf[[r] + members.get(r, [])]].any():
+                continue                      # cut exactly at a feature edge: removing it dents the edge
             hi = np.flatnonzero(sk[st_[k]:st_[k + 1]] > 4.0)
             nb_ = [face_neighbour(fid, {r}) for fid, _ in keep_]
             if min(nb_[i] for i in hi.tolist()) >= 0:
@@ -3644,7 +3695,14 @@ def generate(cfg, log=print):
         # fluid joined through a solid wall (thinner than the cells there) breaks the
         # simulation: report it loudly
         geom = dict(points=Pout, faces=faces, owner=owner, neighbour=neighbour)
-        nw, Xw = diagnose.through_wall(dom, Pout, faces, owner, neighbour, geom=geom, mark=T.mark)
+        # lines next to the free end of a wall (the fluid meets around it within the cell)
+        # do not count
+        lst = {}
+        nw, Xw = diagnose.through_wall(dom, Pout, faces, owner, neighbour, geom=geom, mark=T.mark,
+                                       ends=diagnose.wall_ends(dom, cfg["featureAngle"]), stats=lst)
+        if lst.get("atWallEnds"):
+            log(f"leak check: {lst['atWallEnds']} lines through a wall next to its free end not counted"
+                " (the fluid meets around the end within the cell)")
         if nw:
             log(f"WARNING: leak check: {nw} cell-to-face lines cross a solid wall (fluid on both"
                 f" sides joined; refine there), e.g. at " + ", ".join(

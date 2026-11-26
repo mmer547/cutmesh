@@ -566,6 +566,26 @@ impl TriMesh {
 
     /// diagnose.through_wall's test of one line a -> b: its samples outside, the closest
     /// triangles at the first and the last of them, opposite normals -> the midpoint
+    /// the cell-centre -> face-centre lines through a wall (through_wall_cells): their
+    /// midpoints and lengths
+    #[allow(clippy::too_many_arguments)]
+    fn wall_lines_of_cells(&self, cc: &[V3], ff: &[V3], ow: &[i64], nb: &[i64], fr: &[f64], nrm: &[V3],
+                           samples: usize, cos_opposite: f64) -> Vec<(V3, f64)> {
+        let ts: Vec<f64> = (0..samples).map(|k| (k as f64 + 0.5) / samples as f64).collect();
+        let tl = ts[samples - 1];
+        let res: Vec<Option<(V3, f64)>> = (0..ow.len() + nb.len())
+            .into_par_iter()
+            .filter_map(|i| {
+                let (cell, f) = if i < ow.len() { (ow[i] as usize, i) } else { (nb[i - ow.len()] as usize, i - ow.len()) };
+                let (a, b) = (cc[cell], ff[f]);
+                let d = sub(b, a);
+                let full = ((d[0] * d[0] + d[1] * d[1]) + d[2] * d[2]).sqrt();
+                if full * tl >= fr[cell] { Some(self.wall_line(a, b, &ts, nrm, cos_opposite).map(|m| (m, full))) } else { None }
+            })
+            .collect();
+        res.into_iter().flatten().collect()
+    }
+
     fn wall_line(&self, a: V3, b: V3, ts: &[f64], nrm: &[V3], cos_opposite: f64) -> Option<V3> {
         let samples = ts.len();
         let d = sub(b, a);
@@ -1105,22 +1125,37 @@ impl TriMesh {
         {
             return Err(pyo3::exceptions::PyValueError::new_err("inconsistent line data"));
         }
-        let ts: Vec<f64> = (0..samples).map(|k| (k as f64 + 0.5) / samples as f64).collect();
-        let tl = ts[samples - 1];
-        let res: Vec<Option<V3>> = py.detach(|| {
-            (0..ow.len() + nb.len())
-                .into_par_iter()
-                .filter_map(|i| {
-                    let (cell, f) = if i < ow.len() { (ow[i] as usize, i) } else { (nb[i - ow.len()] as usize, i - ow.len()) };
-                    let (a, b) = (cc[cell], ff[f]);
-                    let d = sub(b, a);
-                    let ln = ((d[0] * d[0] + d[1] * d[1]) + d[2] * d[2]).sqrt() * tl;
-                    if ln >= fr[cell] { Some(self.wall_line(a, b, &ts, &nrm, cos_opposite)) } else { None }
-                })
-                .collect()
-        });
-        let mids: Vec<V3> = res.into_iter().flatten().collect();
+        let res = py.detach(|| self.wall_lines_of_cells(&cc, &ff, ow, nb, fr, &nrm, samples, cos_opposite));
+        let mids: Vec<V3> = res.into_iter().map(|(m, _)| m).collect();
         Ok((mids.len(), vec3_array(py, mids)?))
+    }
+
+    /// through_wall_cells(...) -> (hits, mids[k, 3], lengths[k]): the same lines, with the
+    /// length of each (centre to face centre)
+    #[allow(clippy::too_many_arguments)]
+    fn through_wall_cells_len<'py>(
+        &self,
+        py: Python<'py>,
+        c: PyReadonlyArray2<'py, f64>,
+        cf: PyReadonlyArray2<'py, f64>,
+        owner: PyReadonlyArray1<'py, i64>,
+        neighbour: PyReadonlyArray1<'py, i64>,
+        free: PyReadonlyArray1<'py, f64>,
+        tn: PyReadonlyArray2<'py, f64>,
+        samples: usize,
+        cos_opposite: f64,
+    ) -> PyResult<(usize, Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<f64>>)> {
+        let (cc, ff, nrm) = (points(&c)?, points(&cf)?, points(&tn)?);
+        let (ow, nb, fr) = (owner.as_slice()?, neighbour.as_slice()?, free.as_slice()?);
+        if nrm.len() != self.t.len() || samples == 0 || ow.len() != ff.len() || nb.len() > ow.len() || fr.len() != cc.len()
+            || ow.iter().chain(nb.iter()).any(|&x| x < 0 || x as usize >= cc.len())
+        {
+            return Err(pyo3::exceptions::PyValueError::new_err("inconsistent line data"));
+        }
+        let res = py.detach(|| self.wall_lines_of_cells(&cc, &ff, ow, nb, fr, &nrm, samples, cos_opposite));
+        let lens: Vec<f64> = res.iter().map(|r| r.1).collect();
+        let mids: Vec<V3> = res.into_iter().map(|(m, _)| m).collect();
+        Ok((mids.len(), vec3_array(py, mids)?, lens.into_pyarray(py)))
     }
 
     /// the sampling of diagnose.through_wall for each line a -> b on its own: the samples

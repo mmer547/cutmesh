@@ -24,6 +24,7 @@ from cutmesh.geometry import write_stl_ascii                  # noqa: E402
 from cutmesh.mesher import load_config, generate              # noqa: E402
 from cutmesh.geometry import Surface, read_stl                # noqa: E402
 from cutmesh.diagnose import through_wall                     # noqa: E402
+from cutmesh.geometry import FeatureSet                       # noqa: E402
 
 
 def voxel_stl(path, filled, v):
@@ -245,6 +246,26 @@ class ThinWalls(unittest.TestCase):
         n, vr = self.mesh(0.3 * self.h, 2.2 * self.h, fill=0)
         self.assertGreater(n, 0)                              # the leak check sees the bypass
         self.assertGreater(vr, 1.01)
+
+    def test_plate_meeting_floor_and_ceiling(self):
+        # a plate thinner than the cells from the floor to the ceiling, open at one end:
+        # the cells at the floor and the ceiling have corners in the solid there, but the
+        # plate still separates two of their fluid corners (the junction leak of the
+        # synthetic thin_walls case).  Around the plate's free end the fluid meets anyway.
+        h, v = self.h, self.h / 20
+        G = np.ones((120, 120, 155), bool)                   # 6h x 6h x 7.75h of fluid
+        y0, y1 = int(round(2.6 * h / v)), int(round((2.6 + 0.3) * h / v))   # 26 leaks without the junction test
+        G[:100, y0:y1, :] = False                            # plate, open beyond x = 5h
+        with tempfile.TemporaryDirectory() as d:
+            voxel_stl(os.path.join(d, "w.stl"), G, v)
+            _write_json(os.path.join(d, "m.json"), {"domain": "w.stl", "baseCellSize": h,
+                        "surfaceRefinement": {"default": 0}, "featureLevel": 0, "checkLeaks": False})
+            R = generate(load_config(os.path.join(d, "m.json")), log=lambda s: None)
+            dom = Surface(read_stl(os.path.join(d, "w.stl")))
+        ends = FeatureSet(dom.feature_edges(30.0, concave_only=True), L=dom.L)
+        st = {}
+        n, _ = through_wall(dom, R["points"], R["faces"], R["owner"], R["neighbour"], ends=ends, stats=st)
+        self.assertEqual(n, 0, st)
 
     def test_plate_thinner_than_the_samples(self):
         n, vr = self.mesh(0.15 * self.h, 2.4 * self.h, fill=3)
