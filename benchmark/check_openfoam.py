@@ -90,11 +90,23 @@ def mesh_cases(out, only):
         for n in names:
             cmd += ["--only", n]
         t0 = time.time()
-        subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
-        print(f"  mesh showcase ({len(names)} cases) {time.time() - t0:6.1f} s", flush=True)
+        p = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+        print(f"  mesh showcase ({len(names)} cases) exit {p.returncode} {time.time() - t0:6.1f} s", flush=True)
+        # a case whose run failed (an error after the mesh was written, a crash, a
+        # timeout, a broken mesh) counts as a failed meshing even when its files are
+        # there: only PASS / WARN are checked
+        status = {}
+        try:
+            with open(os.path.join(sc, "results.json"), encoding="utf-8") as f:
+                status = {r["name"]: r.get("status") for r in json.load(f)["results"]}
+        except (OSError, ValueError, KeyError):
+            pass
         for n in names:
             case = os.path.join(sc, "cases", n, "case")
-            ok = os.path.isfile(os.path.join(case, "constant", "polyMesh", "owner"))
+            ok = (status.get(n) in ("PASS", "WARN")
+                  and os.path.isfile(os.path.join(case, "constant", "polyMesh", "owner")))
+            if not ok:
+                print(f"  mesh {n:26s} FAILED ({status.get(n, 'no result')})", flush=True)
             cases[n] = case if ok else None
     return cases
 

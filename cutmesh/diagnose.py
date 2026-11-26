@@ -97,7 +97,8 @@ def through_wall(dom, points, faces, owner, neighbour, samples=16, cos_opposite=
     T = dom.tris
     tn = np.cross(T[:, 1] - T[:, 0], T[:, 2] - T[:, 0])
     tn /= np.maximum(np.linalg.norm(tn, axis=1), 1e-300)[:, None]
-    if getattr(dom, "_rs", None) is not None and hasattr(dom._rs, "through_wall_cells"):
+    if (getattr(dom, "_rs", None) is not None and hasattr(dom._rs, "through_wall_cells")
+            and (ends is None or hasattr(dom._rs, "through_wall_cells_len"))):
         # the lines built, filtered and sampled in Rust (the same lines, in the same order)
         free = _free_distance(dom, C, Cf, owner, neighbour)
         mark("distance of the cell centres to the STL")
@@ -125,9 +126,15 @@ def through_wall(dom, points, faces, owner, neighbour, samples=16, cos_opposite=
         A, B = A[keep], B[keep]
     if getattr(dom, "_rs", None) is not None and hasattr(dom._rs, "through_wall"):
         # the same samples and tests per line, in parallel
-        return dom._rs.through_wall(np.ascontiguousarray(A, float), np.ascontiguousarray(B, float),
+        n, X = dom._rs.through_wall(np.ascontiguousarray(A, float), np.ascontiguousarray(B, float),
                                     np.ascontiguousarray(tn, float), int(samples), float(cos_opposite))
-    hits, mids = 0, []
+        if ends is None:
+            return n, X
+        # the lengths of the lines found, by their midpoints (the same arithmetic: equal bits)
+        X = np.asarray(X, float).reshape(-1, 3)
+        length = {m.tobytes(): l_ for m, l_ in zip(0.5 * (A + B), np.linalg.norm(B - A, axis=1))}
+        return _not_at_ends(X, np.array([length[m.tobytes()] for m in X]), ends, stats)
+    hits, mids, lens = 0, [], []
     for s0 in range(0, len(A), 200000):
         a, b = A[s0:s0 + 200000], B[s0:s0 + 200000]
         Q = a[:, None, :] + ts[None, :, None] * (b - a)[:, None, :]
@@ -142,7 +149,10 @@ def through_wall(dom, points, faces, owner, neighbour, samples=16, cos_opposite=
         wall = np.einsum("ij,ij->i", tn[t1], tn[t2]) < cos_opposite
         hits += int(wall.sum())
         mids.append(0.5 * (a[h[wall]] + b[h[wall]]))
+        lens.append(np.linalg.norm(b[h[wall]] - a[h[wall]], axis=1))
     X = np.concatenate(mids) if mids else np.zeros((0, 3))
+    if ends is not None:
+        return _not_at_ends(X, np.concatenate(lens) if lens else np.zeros(0), ends, stats)
     return hits, X
 
 
