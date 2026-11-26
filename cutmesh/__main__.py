@@ -1,6 +1,8 @@
 """cutmesh meshDict.json [-case DIR] [-noCheck]
+cutmesh --version
 (or python -m cutmesh ...; `pip install -e .` once makes both work from any folder)"""
 import sys
+from . import __version__
 from .mesher import run
 from .config import ConfigError
 from .geometry import STLError
@@ -15,6 +17,8 @@ def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv or argv[0] in ("-h", "--help"):
         print(__doc__); return 0
+    if argv[0] in ("--version", "-version"):
+        print(f"cutmesh {__version__}"); return 0
     case, check, files = None, True, []
     i = 0
     while i < len(argv):

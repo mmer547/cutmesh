@@ -40,6 +40,10 @@
 
 <h2 id="news">News</h2>
 <ul class="news">
+  <li><time datetime="2026-11-26">2026-11-26</time><span class="ver">v0.7.1</span>
+    <p><strong>Housekeeping.</strong> The log and the benchmark results now break the long stages (octree, snapping, STL and rotating-zone cuts, assembly and others) down into their parts.
+    The version is kept in one place and shown by <code>cutmesh --version</code> and on the first line of the log. Meshes are unchanged.
+    Speed work ends with v0.7.0; next come reliability and packaging toward v1.0.0 (see the <a href="https://github.com/mmer547/cutmesh/issues/59">roadmap</a>).</p></li>
   <li><time datetime="2026-11-26">2026-11-26</time><span class="ver">v0.7.0</span>
     <p><strong>Performance improvements, step 3.</strong> Speed-ups that may change the mesh slightly, each checked by a quality gate. Octree refinement tests the exact distance to the surfaces, feature edges and cylinders instead of sample points. The <code>gapRefinement</code> test looks at every wall coarsely first and samples finely only where it finds a thin gap. A snap that breaks a cell is redone only around that cell. The octree tests, cell assembly and leak check also do less work.
     On the public tilted stirred-tank benchmark (about 1 million cells, 4 cores), runtime fell from 28.3 to about 20 seconds. The cylindrical base mesh example went from 74.6 to 24.4 seconds, and geometry preparation for a gap example with <code>gapRefinement</code> from 50.6 to 8.8 seconds (memory 6.2 to 1.4 GB).

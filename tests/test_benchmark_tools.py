@@ -176,5 +176,27 @@ class MeshMetrics(unittest.TestCase):
         self.assertIsNone(mesh_metrics.layer_coverage(lines[:1]))
 
 
+class StepParts(unittest.TestCase):
+    def test_timer_parts(self):
+        import time as _time
+        sys.path.insert(0, os.path.dirname(HERE))
+        from cutmesh.mesher import Timer
+        lines = []
+        T = Timer(lines.append)
+        T.mark("a"); T.mark("b"); T.mark("a")
+        _time.sleep(0.02)
+        T("stage (12 cells)")
+        T("next")                                  # no marks: no parts
+        self.assertEqual([p[:2] for p in T.parts], [("stage (12 cells)", "a"), ("stage (12 cells)", "b"),
+                                                     ("stage (12 cells)", "other")])
+        self.assertGreaterEqual(T.parts[2][2], 0.015)
+        self.assertTrue(any(s.strip().startswith("a: ") for s in lines))
+
+    def test_parts_table(self):
+        md = run_bench.parts_table([{"name": "x", "parts": [["octree", "balance", 0.25]]}, {"name": "y"}])
+        self.assertIn("| x | octree | balance | 0.25 |", md)
+        self.assertEqual(run_bench.parts_table([{"name": "y"}]), [])
+
+
 if __name__ == "__main__":
     unittest.main()

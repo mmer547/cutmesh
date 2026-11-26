@@ -51,16 +51,19 @@ def _free_distance(dom, C, Cf, owner, neighbour):
     return np.where(dom.inside(C), dC - margin, -np.inf)
 
 
-def through_wall(dom, points, faces, owner, neighbour, samples=16, cos_opposite=-0.5, geom=None):
+def through_wall(dom, points, faces, owner, neighbour, samples=16, cos_opposite=-0.5, geom=None, mark=None):
     """(number of cell-centre -> face-centre lines through a wall, their midpoints).
     geom (a dict): receives the face centres and area vectors, the cell centres and
-    volumes (Cf, Sf, C, V) for a later quality check of the same mesh."""
+    volumes (Cf, Sf, C, V) for a later quality check of the same mesh.
+    mark(part): ends a part of the timing (mesher.Timer.mark)"""
+    mark = mark or (lambda part: None)
     nI = len(neighbour)
     if getattr(dom, "_rs", None) is None and dom._kd is None:
         dom.build_search(0.01 * dom.L)          # Python closest-point search (no Rust)
     Cf, Sf = _face_geometry(points, faces)
     nC = int(max(owner.max(), neighbour.max() if nI else 0)) + 1
     C, V = quality.cell_geometry(nC, owner, neighbour, Cf, Sf)
+    mark("face and cell geometry")
     if geom is not None:
         geom.update(Cf=Cf, Sf=Sf, C=C, V=V)
     T = dom.tris
@@ -69,6 +72,7 @@ def through_wall(dom, points, faces, owner, neighbour, samples=16, cos_opposite=
     if getattr(dom, "_rs", None) is not None and hasattr(dom._rs, "through_wall_cells"):
         # the lines built, filtered and sampled in Rust (the same lines, in the same order)
         free = _free_distance(dom, C, Cf, owner, neighbour)
+        mark("distance of the cell centres to the STL")
         return dom._rs.through_wall_cells(np.ascontiguousarray(C, float), np.ascontiguousarray(Cf, float),
                                           np.ascontiguousarray(owner, np.int64), np.ascontiguousarray(neighbour, np.int64),
                                           np.ascontiguousarray(free, float), np.ascontiguousarray(tn, float),
