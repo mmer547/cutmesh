@@ -149,37 +149,44 @@ class Octree:
         return len(idx)
 
     # ------------------------------------------------------------ refinement
-    def refine(self, surface_sources, volume_sources, log=print, keep_fn=None):
+    def refine(self, surface_sources, volume_sources, log=print, keep_fn=None, mark=None):
         """surface_sources: list of (cKDTree, level, nbuf)
         volume_sources: list of (sdf_function, level, nbuf)
         keep_fn(centers, half_diag) -> bool: False for cells certainly outside the
-        domain; those are never split (they are discarded later anyway)."""
+        domain; those are never split (they are discarded later anyway).
+        mark(part): ends a part of the timing (Timer.mark)"""
+        mark = mark or (lambda part: None)
         for l in range(self.Lmax):
             sel = np.nonzero(self.lev == l)[0]
             if len(sel) == 0:
                 continue
             c = self.centers(sel)
             hd = 0.5 * np.sqrt(3) * self.h(l)
-            mark = np.zeros(len(sel), bool)
+            sp = np.zeros(len(sel), bool)
             for kd, Ls, nbuf in surface_sources:
                 if Ls <= l:
                     continue
                 R = sum(nbuf * self.h(q) for q in range(l + 1, Ls))
                 d, _ = kd.query(c, distance_upper_bound=R + hd, workers=-1)
-                mark |= d < R + hd
+                sp |= d < R + hd
+            mark("refine: surface sources")
             for sdf, Lv, nbuf in volume_sources:
                 if Lv <= l:
                     continue
                 R = sum(nbuf * self.h(q) for q in range(l + 1, Lv))
-                mark |= sdf_below(sdf, c, R + hd)
-            if keep_fn is not None and mark.any():
-                mi = np.nonzero(mark)[0]
-                mark[mi[~keep_fn(c[mi], hd)]] = False
+                sp |= sdf_below(sdf, c, R + hd)
+            mark("refine: volume sources")
+            if keep_fn is not None and sp.any():
+                mi = np.nonzero(sp)[0]
+                sp[mi[~keep_fn(c[mi], hd)]] = False
+            mark("refine: inside the domain")
             full = np.zeros(len(self.lev), bool)
-            full[sel[mark]] = True
+            full[sel[sp]] = True
             ns = self.split(full)
+            mark("refine: split")
             log(f"  level {l}->{l + 1}: split {ns} cells, total {len(self.lev)}")
         self.balance(log)
+        mark("balance")
 
     def balance(self, log=print):
         if _core is not None and hasattr(_core, "balance"):

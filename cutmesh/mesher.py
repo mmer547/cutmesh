@@ -56,8 +56,21 @@ DEFAULTS = {
 
 
 class Timer:
+    """T(name) ends a stage: logs and records its time (steps).  T.mark(part) inside a
+    stage ends a part of it (the time since the stage began or the last mark; a part
+    marked again adds up); the parts are logged under the stage line and recorded in
+    parts as (stage, part, seconds), the time after the last mark as "other"."""
+
     def __init__(self, log):
         self.t0 = time.time(); self.t = self.t0; self.log = log; self.steps = []
+        self.parts = []
+        self._tm = self.t0
+        self._pend = {}
+
+    def mark(self, part):
+        now = time.time()
+        self._pend[part] = self._pend.get(part, 0.0) + now - self._tm
+        self._tm = now
 
     def __call__(self, name):
         now = time.time()
@@ -69,7 +82,14 @@ class Timer:
         except Exception:
             mem = ""
         self.log(f"[{now - self.t0:7.2f}s] {name} ({now - self.t:.2f}s{mem})")
-        self.t = now
+        if self._pend:
+            if now - self._tm > 0.005:
+                self._pend["other"] = self._pend.get("other", 0.0) + now - self._tm
+            for part, dt in self._pend.items():
+                self.parts.append((name, part, dt))
+                self.log(f"            {part}: {dt:.2f}s")
+        self._pend = {}
+        self.t = self._tm = now
 
 
 def load_config(path):
@@ -1997,6 +2017,7 @@ def generate(cfg, log=print):
         raise STLError(f"strictInput: the domain STL has {rp['openEdges']} open and "
                          f"{rp['nonManifoldEdges']} non-manifold edges (see the log)")
     zones = build_zones(cfg, log)
+    T.mark("read and check the input")
     h0 = float(cfg["baseCellSize"])
     sref = cfg["surfaceRefinement"]
     default_level = int(sref.get("default", 0))
@@ -2029,12 +2050,14 @@ def generate(cfg, log=print):
     elif bm.get("type", "cartesian") != "cartesian":
         raise ValueError(f"baseMesh type {bm.get('type')!r}: 'cartesian' or 'cylindrical'")
 
+    T.mark("base mesh layout")
     # ------------------------------------------------------------ search structures
     dom.build_search(2 * hmin)
     for z in zones:
         if isinstance(z["geom"], SurfaceZone):
             z["geom"].s.build_search(2 * hmin)
     check_zone_overlap(zones, 2 * hmin)
+    T.mark("search structures")
     nbuf = int(cfg["bufferLayers"])
     ssrc, vsrc = [], []
     exact_src = _exact_sources()
@@ -2046,6 +2069,7 @@ def generate(cfg, log=print):
                 p, _ = dom.samples(h0 / 2 ** region_level[r] / 2, regions=[r], ordered=False)
                 src = _points_kd(p)
             ssrc.append((src, int(region_level[r]), nbuf))
+    T.mark("surface sources")
     if cfg.get("autoGapRefinement"):
         nacross, lag = _auto_gap_spec(cfg, sref)
         groups, nun = _auto_gap_samples(dom, h0, region_level, nacross, lag)
@@ -2055,6 +2079,7 @@ def generate(cfg, log=print):
         if nun:
             log(f"auto gap refinement: {nun} wall samples in gaps narrower than {nacross:g} cells"
                 f" of level {lag} (raise maxLevel to resolve them)")
+    T.mark("auto gap refinement")
     gr = cfg.get("gapRefinement")
     if gr:
         # fluid thinner than `thickness` (slot tips, narrow channels): refine its walls to `level`
@@ -2069,6 +2094,7 @@ def generate(cfg, log=print):
         if len(p):
             ssrc.append((_points_kd(p), lg, nbuf))
         log(f"gap refinement: {len(p)} wall samples where the fluid is thinner than {tg:g} -> level {lg}")
+    T.mark("gap refinement")
     seg = dom.feature_edges(cfg["featureAngle"])
     dom_feat = FeatureSet(seg, L=dom.L)
     # Concave edges (the solid juts into the fluid) are chamfered by the cut, unlike convex
@@ -2110,6 +2136,7 @@ def generate(cfg, log=print):
                          z["volumeLevel"], nbuf))
     for g, lv in regions:
         vsrc.append((g.sdf, lv, nbuf))
+    T.mark("feature edges and zone sources")
     T("geometry / search structures")
 
     # ------------------------------------------------------------ octree
@@ -2119,7 +2146,7 @@ def generate(cfg, log=print):
         return ~(out & far)
     if cyl is not None:
         oc = cyl
-        oc.refine(ssrc, vsrc, log=lambda s: log(s), keep_fn=keep_fn)
+        oc.refine(ssrc, vsrc, log=lambda s: log(s), keep_fn=keep_fn, mark=T.mark)
     else:
         pad = int(cfg["padding"])
         lo = dom.bbmin - pad * h0
@@ -2128,7 +2155,8 @@ def generate(cfg, log=print):
         nfill_w = int(cfg["fillThinWalls"])
         oc = Octree(lo, h0, n, Lmax + max(1 if nfill_g else 0, nfill_w))
         log(f"root grid {n.tolist()}")
-        oc.refine(ssrc, vsrc, log=lambda s: log(s), keep_fn=keep_fn)
+        T.mark("root grid")
+        oc.refine(ssrc, vsrc, log=lambda s: log(s), keep_fn=keep_fn, mark=T.mark)
         sgn = np.array(list(itertools.product((-1, 0, 1), repeat=3)), float)   # 27 points
         corner = np.all(sgn != 0, axis=1)
         # The passes below take the signed distance at the corners of cells: neighbouring
@@ -2163,6 +2191,7 @@ def generate(cfg, log=print):
             near[:n_old] = False
             ni = np.flatnonzero(near)                 # centres and sizes of these leaves only
             near[ni] = near_leaves(ni)
+            T.mark("near the STL")
             mark = np.zeros(len(oc.lev), bool)
             nh = nw = 0
             if it < nfill_g:
@@ -2175,6 +2204,7 @@ def generate(cfg, log=print):
                 hole = ~ins[:, corner].any(1) & ins[:, ~corner].any(1)
                 mark[cand[hole]] = True
                 nh = int(hole.sum())
+                T.mark("thin gaps")
             if it < nfill_w:
                 # a solid wall inside the cell with no corner in the solid vanishes: the
                 # fluid on both sides joins (a bypass).  Split until a corner lands in it.
@@ -2182,6 +2212,7 @@ def generate(cfg, log=print):
                 wall = _thin_wall_cells(dom, oc.centers(cand), oc.leaf_sizes(cand))
                 mark[cand[wall]] = True
                 nw = int(wall.sum())
+                T.mark("thin walls")
             if not mark.any():
                 break
             oc.track()
@@ -2190,6 +2221,7 @@ def generate(cfg, log=print):
             n_old = len(oc.src)
             follow_split()
             oc.untrack()
+            T.mark("splits")
             log(f"thin gaps / walls: split {nh} cells with fluid inside but no fluid corner,"
                 f" {nw} with a solid wall inside but no solid corner")
         n_tc = int(cfg["thinCutCells"])
@@ -2206,6 +2238,7 @@ def generate(cfg, log=print):
                 near[:len(cand_old)] = False           # unsplit leaves: as in the pass before
             ni = np.flatnonzero(near)
             near[ni] = near_leaves(ni)
+            T.mark("near the STL")
             cand = np.nonzero(near)[0]
             fr, cut = _fluid_fraction(dom, oc.centers(cand), oc.leaf_sizes(cand), cache=sd_cache)
             cand = cand[cut & (fr > 0) & (fr < thr)]
@@ -2213,7 +2246,9 @@ def generate(cfg, log=print):
                 cand = np.concatenate([np.flatnonzero(cand_old), cand])
             is_cand = np.zeros(len(oc.lev), bool)
             is_cand[cand] = True
+            T.mark("thin cut cells: fluid fraction")
             fine = _finer_nearby(oc, cand)
+            T.mark("thin cut cells: finer neighbours")
             mark = np.zeros(len(oc.lev), bool)
             mark[cand[fine]] = True
             if not mark.any():
@@ -2223,6 +2258,7 @@ def generate(cfg, log=print):
             oc.split(mark)
             oc.balance(lambda s: None)
             cand_old = is_cand[oc.src]
+            T.mark("splits")
             follow_split()
             oc.untrack()
         if n_tc:
@@ -2231,6 +2267,7 @@ def generate(cfg, log=print):
     T(f"octree ({len(oc.lev)} leaves)")
     ssrc = vsrc = None                  # done with them (memory: the samples' KD-trees)
     M = oc.build_cells()
+    T.mark("build cells")
     nleaf = len(M["cell_size"])
     leaves_total = nleaf
     pts = M["points"]
@@ -2293,6 +2330,7 @@ def generate(cfg, log=print):
     free_hang = cfg["hangingSnap"] == "free"
     near = dom.approx_below(pts, np.sqrt(3) * vh_max + dom._rmax + hmin)
     phi_d = dom.sdf(pts, exact_mask=near, far_value=dom.L, exact_within=alpha * h0 + 2 * hmin)
+    T.mark("level set of the STL")
     movable = ~hanging
     tol_v = alpha * vh_min
     tol_f = float(cfg["featureSnapTolerance"]) * vh_min
@@ -2643,6 +2681,7 @@ def generate(cfg, log=print):
         if attempt:
             del msgs[n_msgs:]                 # the counts of the first pass are logged
             movable = movable_all
+        T.mark("snapping again (broken cells)" if attempt else "snapping")
         if not (far_snap.any() or free_snap.any()):
             break
         # the leaves to check: those with a vertex that moved (in a later pass: one that
@@ -2662,6 +2701,7 @@ def generate(cfg, log=print):
             tc = np.nonzero(leaf_any(slide_far) & lk)[0]
             badl = np.union1d(badl, tc[_leaf_bad(pts, tc, fptr, fverts, cptr, csize, flat_at=slide_far,
                                                  flat_angle=-1.0)])
+        T.mark("cell checks")
         if not len(badl):
             break
         fo = np.concatenate([np.arange(cptr[c], cptr[c + 1]) for c in badl.tolist()])
@@ -2754,12 +2794,14 @@ def generate(cfg, log=print):
     c_sc = cell_any(f_sc)
     c_cs = cell_any(~fpos & fneg & (fz >= 3))
     del fz, fneg, fpos, signs_d
+    T.mark("classify and set up")
     ctx.zero_edge, drop = surface_contact(dom, pts, phi_d, [c for c in cl + cb if c_sc[c]], leaf_faces, csize,
                                           face_ok=lambda ci: f_sc[cptr[ci]:cptr[ci + 1]].tolist(),
                                           csr=(cptr, fptr, fverts, f_key, f_sc))
     del f_sc
     log(f"surface contact: {sum(v == 1 for v in ctx.zero_edge.values())} face edges in the solid,"
         f" {sum(len(s) for s in drop.values())} wall faces dropped from solid-side cells")
+    T.mark("surface contact")
     # faces partly on the wall: split; the contact part is kept by the fluid-side cell
     splits = contact_splits(dom, pts, phi_d, [c for c in cl + cb if c_cs[c]], leaf_faces, csize,
                             csr=(cptr, fptr, fverts, f_key))
@@ -2814,6 +2856,7 @@ def generate(cfg, log=print):
 
     split_cells = set(ci for ci, _ in split_keep)
     log(f"surface contact: {len(splits)} faces split into fluid and wall parts")
+    T.mark("contact splits")
     # uncut cells dropping a face or a part of one are cut (closed by the cut)
     opened = sorted(set(ci for ci in drop if bulk_alive[ci])
                     | set(ci for (ci, _), k in split_keep.items() if not k and bulk_alive[ci]))
@@ -2931,6 +2974,7 @@ def generate(cfg, log=print):
                     bulk_alive[ci] = False
                     items.append((take_clipped(leaf_faces(ci)), ci))
                     cl.append(ci)
+    T.mark("exact feature cut: cells")
     res, nsh, nfb = cut_with_fallback(ctx, items, False, hk, csize, P0=pts, faces_of=leaf_faces,
                                       leaf_csr=(cptr, fptr, fverts, f_key))
     del items
@@ -2939,6 +2983,7 @@ def generate(cfg, log=print):
     else:
         kpieces = _Pieces.from_lists([[comp, ci, -1] for ci, (negc, _) in zip(cl, res) for comp in negc])
     del res
+    T.mark("cut kernel")
     pieces = [pieces, kpieces, []]     # split cells, cut cells, clipped cells (below)
     del kpieces
     if clip:
@@ -2989,6 +3034,7 @@ def generate(cfg, log=print):
             f" keeping a sliver, {nfac} slivers along faceted walls and {ngap} in thin gaps dropped,"
             f" {nbad} pieces not convex; {nback} cells left to the level-set cut where a neighbour"
             f" could not be clipped)")
+    T.mark("exact feature cut: clipping")
     pieces = _Pieces.concat(pieces)
     next_id = ctx.next_id
     log(f"domain cut: {len(cut_leaves)} cut cells, {int(bulk_alive.sum()) + len(pieces)} cells kept"
@@ -3047,6 +3093,7 @@ def generate(cfg, log=print):
         tocut = pieces.take(np.flatnonzero(straddle))
         kept = pieces.take(np.flatnonzero(~straddle))
         nc = len(tocut)
+        T.mark("classify")
         if rust_cut:
             (it, side, *rcsr), newpts, newpar, next_id = _core.cut_batch_csr(P, pz, next_id, *tocut.csr(), True, {})
             zsh = zfb = 0
@@ -3073,6 +3120,7 @@ def generate(cfg, log=print):
             del res, tl, positions, ctx
         pieces = _Pieces.concat([kept, cutp])
         del tocut, kept, cutp
+        T.mark("cut kernel")
         if len(newv):
             isfeat = par[:, 0] < 0            # feature points: already exact
             on_curve = (~isfeat) & on_dom[np.maximum(par[:, 0], 0)] & on_dom[np.maximum(par[:, 1], 0)]
@@ -3089,6 +3137,7 @@ def generate(cfg, log=print):
                 c1, _, _ = dom.closest(P[cv]); P[cv] = c1
             on_dom = np.concatenate([on_dom, np.zeros(len(P) - len(on_dom), bool)])
             on_dom[cv] = True
+            T.mark("new points onto the surfaces")
         log(f"zone '{z['name']}': {nc} cut cells, total {int(bulk_alive.sum()) + len(pieces)}"
             + (f", {zsh} cells follow the rims ({zfb} fell back to chamfers)" if zh else ""))
         T(f"zone cut '{z['name']}'")
@@ -3109,6 +3158,7 @@ def generate(cfg, log=print):
     if nbad_bulk:
         log(f"{nbad_bulk} snapped uncut cells are non-convex -> merge candidates")
 
+    T.mark("distorted uncut cells")
     # ------------------------------------------------------------ small-cell merging
     nP = len(pieces)
     # bulk neighbour of an original octree face key
@@ -3265,6 +3315,7 @@ def generate(cfg, log=print):
         c = (d @ sT)[:, 0, 0] / (np.sqrt((d @ dT)[:, 0, 0]) * np.sqrt((s @ sT)[:, 0, 0]) + 1e-300)
         return min(1.0, float(c.min()))
 
+    T.mark("merging: set up")
     merged = rejected = 0
     rust_merge = _rust_merge_ok()
     if rust_merge:
@@ -3315,6 +3366,7 @@ def generate(cfg, log=print):
     log(f"merged {merged} cut cells ({nsmall} small < {beta:g} of hex volume,"
         f" {len(small) - nsmall} non-convex); {rejected} left as they are"
         f" (no merge partner keeps the cell valid)")
+    T.mark("merging")
     # the root of every piece (find for all: parents followed until they stay)
     par_a = np.asarray(parent, np.int64)
     proot = par_a.copy()
@@ -3365,6 +3417,7 @@ def generate(cfg, log=print):
         log(f"removed {int(removed.sum())} invalid wall slivers"
             f" ({float(np.sum(np.maximum(gvol[removed], 0))) * 1e9:.3g} mm^3)")
 
+    T.mark("wall slivers")
     # ------------------------------------------------------------ final cell numbering
     # nodes: bulk leaves (alive) and root pieces; ordered by parent leaf
     alive = np.nonzero(bulk_alive)[0]
@@ -3398,6 +3451,7 @@ def generate(cfg, log=print):
     else:
         o_n, o_ptr, o_verts, o_cell, o_key = _assemble_occurrences_py(
             fn, fptr, fverts, bsel, p_n, p_verts, leaf_cid, f_cell, piece_cid, py_cell, f_key, py_key)
+    T.mark("numbering and face occurrences")
     del p_verts
     # the octree's faces and the cut pieces are in o_* now
     fverts = fptr = fn = f_key = f_cell = pieces = bsel = p_n = None
@@ -3411,6 +3465,7 @@ def generate(cfg, log=print):
     else:
         i_occ, i_own, i_nei, b_occ, b_own = _pair_faces_py(o_key, o_cell, log)
     o_key = o_cell = None
+    T.mark("pair faces")
     T("assembly and small-cell merging")
 
     def gather(occs):
@@ -3452,6 +3507,7 @@ def generate(cfg, log=print):
             log(f"WARNING: the fluid has {len(big)} separate regions (volumes {', '.join(f'{v:.3g}' for v in big[:6])})"
                 " - check for gaps closed by the mesh")
 
+    T.mark("isolated fluid regions")
     # ------------------------------------------------------------ patches
     bnn, bverts = gather(b_occ)
     ffb = quality.FlatFaces((bnn, bverts))
@@ -3469,6 +3525,7 @@ def generate(cfg, log=print):
         if abs(dv) > float(cfg["volumeCheckTolerance"]):
             log(f"WARNING: mesh volume differs from the STL volume by {dv:+.1%} - the STL may be open or"
                 f" self-intersecting, or fluid thinner than the cells was cut off")
+    T.mark("volume check")
     _, dd, tid = dom.closest(bC)
     reg = dom.region[tid]
     log(f"boundary faces: max distance of face centre from STL {dd.max():.3g}"
@@ -3488,12 +3545,14 @@ def generate(cfg, log=print):
     all_occ = np.concatenate([i_occ, b_occ[b_order]])
     owner = np.concatenate([i_own, b_own[b_order]])
     neighbour = i_nei
+    T.mark("patches (nearest STL triangle)")
     nn_, vv = gather(all_occ)
     del o_verts
     o_ptr = o_n = all_occ = i_occ = b_occ = b_own = b_order = reg = vol = bC = tid = dd = None
     if cfg["mergeWallFaces"]:
         nn_, vv, owner, patches, nj = merge_coplanar_wall_faces(P, nn_, vv, owner, len(neighbour), patches)
         log(f"wall faces: {nj} coplanar pieces joined to their neighbour in the same cell")
+    T.mark("face lists and coplanar wall faces")
 
     # ------------------------------------------------------------ zones
     if any(not z["conforming"] for z in zones):
@@ -3516,6 +3575,7 @@ def generate(cfg, log=print):
         fz = np.nonzero(zo != zn)[0]
         face_zones[z["name"] + "_interface"] = (fz, ~zo[fz])   # flip: normal points into zone
 
+    T.mark("zones")
     # ------------------------------------------------------------ compact points
     used = np.zeros(len(P), bool)
     used[vv] = True
@@ -3528,7 +3588,7 @@ def generate(cfg, log=print):
         # fluid joined through a solid wall (thinner than the cells there) breaks the
         # simulation: report it loudly
         geom = dict(points=Pout, faces=faces, owner=owner, neighbour=neighbour)
-        nw, Xw = diagnose.through_wall(dom, Pout, faces, owner, neighbour, geom=geom)
+        nw, Xw = diagnose.through_wall(dom, Pout, faces, owner, neighbour, geom=geom, mark=T.mark)
         if nw:
             log(f"WARNING: leak check: {nw} cell-to-face lines cross a solid wall (fluid on both"
                 f" sides joined; refine there), e.g. at " + ", ".join(

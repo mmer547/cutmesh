@@ -157,6 +157,7 @@ def worker(job_path):
         q = {k: v for k, v in R.get("quality", {}).items() if not k.startswith("_")}
         res["quality"] = q
         res["steps"] = {name: round(dt, 3) for name, dt in R["timer"].steps}
+        res["parts"] = [[step_name(st), part, round(dt, 3)] for st, part, dt in getattr(R["timer"], "parts", [])]
         try:
             from mesh_hash import mesh_hash
             res["meshHash"] = mesh_hash(os.path.join(wd, "case"))
@@ -563,6 +564,16 @@ def steps_table(results):
     return md + [""]
 
 
+def parts_table(results):
+    """Markdown table: seconds per part of a step (Timer.mark), one row per case, step and part."""
+    rows = [(r["name"], st, part, dt) for r in results for st, part, dt in (r.get("parts") or [])]
+    if not rows:
+        return []
+    md = ["## time per part of a step [s]", "", "| case | step | part | time |", "|---|---|---|---|"]
+    md += [f"| {c} | {st} | {part} | {dt:.2f} |" for c, st, part, dt in rows]
+    return md + [""]
+
+
 def write_reports(outdir, suite, results, args, cmp_lines):
     payload = {"suite": suite["name"], "date": time.strftime("%Y-%m-%d %H:%M:%S"),
                "python": sys.version.split()[0], "platform": platform_id(), "args": vars(args),
@@ -590,7 +601,7 @@ def write_reports(outdir, suite, results, args, cmp_lines):
                   f"{x['maxNonOrth']} | {x['nNonOrth70']} | {x['maxSkewness']} | {x['nSkew4']} | "
                   f"{x['volErr']} | {x['edgeOver02']} | {x['edgeP95']} | {x['layersFull']} | {x['input']} | "
                   f"{x['notes'].replace('|', '/')} |")
-    md += [""] + steps_table(results)
+    md += [""] + steps_table(results) + parts_table(results)
     with open(os.path.join(outdir, "summary.md"), "w", encoding="utf-8") as f:
         f.write("\n".join(md) + "\n")
     return payload, counts, unexpected

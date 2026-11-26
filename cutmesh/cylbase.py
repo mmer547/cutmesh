@@ -485,10 +485,13 @@ class CylindricalBase:
         return np.mod(s, 4.0)
 
     # ------------------------------------------------------------------ refinement
-    def refine(self, surface_sources, volume_sources, log=print, keep_fn=None):
+    def refine(self, surface_sources, volume_sources, log=print, keep_fn=None, mark=None):
+        mark = mark or (lambda part: None)
         for b in self.blocks:
             b.refine_physical(surface_sources, volume_sources, self.h0, log, keep_fn)
+        mark("refine (blocks)")
         self._balance_interfaces(log)
+        mark("balance (block interfaces)")
 
     def _leaf_size(self, b, idx):
         _, E, _ = b._geometry(idx)
