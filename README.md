@@ -23,8 +23,8 @@ https://mmer547.github.io/cutmesh/ ）にあります。
 - **依存が少ない**: Python 3.9+, numpy, scipy（断面図に matplotlib）。メッシュ生成に OpenFOAM は不要。
   Rust 拡張でメッシュ生成のほぼ全段階を並列化できる（任意、攪拌槽の例で約 100 倍速い）
 
-> メッシュ品質は `checkMesh` と同じ式の自前チェック（`cutmesh/quality.py`）で確認していますが、
-> OpenFOAM 本体での検証は限られています。使用前に手元で `checkMesh` を実行してください。
+> メッシュ品質は `checkMesh` と同じ式の自前チェック（`cutmesh/quality.py`）で確認しています。OpenFOAM 本体
+> （v2512）の `checkMesh` は公開の例にだけ CI でかけているので、自分の形状では使用前に手元で `checkMesh` を実行してください。
 
 ## インストール
 
@@ -347,8 +347,9 @@ polyMesh は既定でバイナリ（OpenFOAM の `writeFormat binary` と同じ�
 （`points`・`faces`・`owner`・`neighbour`）がバイナリになり、`boundary`・`cellZones`・`faceZones` は短いので
 ASCII のままです（形式はファイルごとのヘッダーで示すので、混在してよい）。中身を目で確かめたいときや、
 ASCII しか読めないツールに渡すときは `"writeFormat": "ascii"` にします。OpenFOAM の `foamFormatConvert` でも変換できます。
-形式は OpenFOAM のソース（`UListIO`・`CompactIOList`・`ISstream`）に合わせて書いていますが、OpenFOAM 本体で
-読み込めることはまだ確認していません。読めない場合は `"writeFormat": "ascii"` に戻してください。
+形式は OpenFOAM のソース（`UListIO`・`CompactIOList`・`ISstream`）に合わせて書いています。OpenFOAM v2512 の
+`checkMesh` で読めることを、攪拌槽の例とショーケースで CI が毎回確かめています（`benchmark/check_openfoam.py`）。
+ほかの版で読めない場合は `"writeFormat": "ascii"` に戻してください。
 
 - ヘッダーは `format binary;`、`arch "LSB;label=32;scalar=64";`（ラベル 32 ビット、倍精度）。`faces` は OpenFOAM が
   バイナリで使う `faceCompactList`（オフセットの列と頂点番号の列）。ラベルが 32 ビットに収まらないメッシュは

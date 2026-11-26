@@ -1,0 +1,60 @@
+# Do the public examples pass OpenFOAM's checkMesh?  Meshes the stirred-tank examples and the
+# showcase suite and runs checkMesh of OpenFOAM (the opencfd/openfoam-default image) on each
+# (benchmark/check_openfoam.py).  Fails when a mesh fails checkMesh and is not listed in
+# benchmark/checkmesh_known.json, or when OpenFOAM cannot read it.
+name: checkMesh
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checkmesh-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checkmesh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: Install the Python packages
+        run: python -m pip install numpy==2.4.6 scipy==1.17.1 matplotlib==3.11.2
+
+      - name: Build the Rust extension
+        run: python tools/build_rust.py
+
+      - name: Pull OpenFOAM
+        run: docker pull -q opencfd/openfoam-default:2512
+
+      - name: Mesh the examples and run checkMesh
+        run: python benchmark/check_openfoam.py --docker opencfd/openfoam-default:2512 --out checkmesh_out
+
+      - name: Summary
+        if: always()
+        run: cat checkmesh_out/summary.md >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Keep the logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: checkmesh-logs
+          path: |
+            checkmesh_out/*.log
+            checkmesh_out/summary.md
+          if-no-files-found: ignore

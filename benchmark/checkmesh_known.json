@@ -1,0 +1,4 @@
+{
+ "_comment": "cases of check_openfoam.py known to fail OpenFOAM's checkMesh, with the reason; v0.8.0 empties this list",
+ "tank_stator_1mm": "8 faces with skewness > 4 (max 4.97), checkMesh v2512, 2026-11-26"
+}

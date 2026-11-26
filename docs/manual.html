@@ -311,8 +311,8 @@ ASCII しか読めないツールに渡すときは <code>"writeFormat": "ascii"
   <li><code>python -m cutmesh.layers</code> は入力と同じ形式で書く（<code>-ascii</code> / <code>-binary</code> で指定もできる）。</li>
 </ul>
 <div class="warn">
-  <p>バイナリの形式は OpenFOAM のソースに合わせて書いていますが、OpenFOAM 本体で読めることはまだ確認していません。読めない場合は
-  <code>"writeFormat": "ascii"</code> にするか、OpenFOAM の <code>foamFormatConvert</code> で変換してください。</p>
+  <p>バイナリの形式は OpenFOAM のソースに合わせて書いています。OpenFOAM v2512 の <code>checkMesh</code> で読めることを、公開の例で CI が確かめています。
+  ほかの版で読めない場合は <code>"writeFormat": "ascii"</code> にするか、OpenFOAM の <code>foamFormatConvert</code> で変換してください。</p>
 </div>
 
 <h2 id="rust">高速化（Rust 拡張）</h2>

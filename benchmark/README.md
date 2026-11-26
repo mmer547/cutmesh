@@ -26,6 +26,7 @@ PASS したケースの polyMesh は削除します（`--keep` で残す）。�
 | `run_bench.py` | スイートを実行して判定・集計する。1 ケース 1 プロセス（落ちても固まっても他のケースは続く）、タイムアウト付き |
 | `render_mesh.py` | メッシュの画像: `overview.png`（壁面を 2 方向から、パッチごとに色分け）と `cut.png`（x 方向の中央より奥のセルだけを残した 3D 図 + x・y・z の中央断面）。checkMesh の基準を満たさないセル（体積 ≤ 0、非直交性 > 70°、歪度 > 4）は赤。`run_bench.py` が毎回呼ぶ（`--no-images` で省略）。単独でも `python benchmark/render_mesh.py <case>` で使える |
 | `mesh_hash.py` | 書き出した polyMesh の各ファイルの SHA-256。2 つのケースが同じメッシュかを比べる（`--save` / `--check` で保存した値とも比べられる）。`run_bench.py` が毎回記録する。値はマシンごとに違う（CPU・NumPy・OS で丸めが変わる）ので、同じマシンで作ったものどうしを比べる |
+| `check_openfoam.py` | 攪拌槽の例と `showcase` のメッシュを作り、OpenFOAM の `checkMesh` をかける（既定は Docker の `opencfd/openfoam-default:2512`、`--native` で手元の OpenFOAM）。`Mesh OK.` にならないケースが `checkmesh_known.json` にないと終了コード 1。CI（`.github/workflows/checkmesh.yml`）が毎回実行する |
 | `same_mesh.py` | 2 つのチェックアウト（例: main とプルリクエスト）のコードで、攪拌槽の例と `showcase` を同じマシンで作って比べる。CI（`.github/workflows/same-mesh.yml`）がプルリクエストごとに実行する |
 | `stl_check.py` | 入力 STL の診断: 開いた辺、非多様体の辺、向きの不一致、潰れた三角形、重複した三角形、部品の数、オイラー標数、符号付き体積 |
 | `make_synthetic.py` | 人工形状 25 個と実用的な形状 8 個（`showcase`）を `data/synthetic/` に生成 |
