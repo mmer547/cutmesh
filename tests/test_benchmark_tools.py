@@ -99,6 +99,31 @@ class QualityGate(unittest.TestCase):
         self.assertEqual(run_bench.gate(err, err), [])
         self.assertEqual(run_bench.gate(err, gres()), ["no quality report"])
 
+    def test_not_applicable(self):
+        # no layers / no feature edges in the case (None in both runs): those checks are skipped
+        o = gres(layers=None, featureEdges=None)
+        self.assertEqual(run_bench.gate(gres(layers=None, featureEdges=None), o), [])
+
+    def test_not_measured(self):
+        # a measure missing (a baseline from before the measures, a failed measurement): no pass
+        o = gres()
+        for drop in ("layers", "featureEdges"):
+            for side in ("base", "run"):
+                a, b = gres(), gres()
+                del (a if side == "base" else b)[drop]
+                g = run_bench.gate(b, a)
+                self.assertTrue(len(g) == 1 and "not measured" in g[0], (drop, side, g))
+        for side in ("base", "run"):
+            a, b = gres(), gres()
+            r = a if side == "base" else b
+            del r["layers"], r["featureEdges"]
+            r["metricsError"] = "ValueError: x"
+            g = run_bench.gate(b, a)
+            self.assertTrue(len(g) == 1 and "no measures" in g[0] and "ValueError" in g[0], (side, g))
+        # a quality failure is still reported with them
+        g = run_bench.gate(gres(quality={"nSkew4": 9}, metricsError="E"), o)
+        self.assertEqual(len(g), 2, g)
+
     def test_compare(self):
         base = {"platform": "another machine", "results": [gres("a"), gres("b")]}
         lines = run_bench.compare([gres("a"), gres("b", quality={"nSkew4": 9}), gres("c")], base, use_gate=True)
@@ -128,6 +153,10 @@ class MeshMetrics(unittest.TestCase):
                  "addLayers: 10 layer cells, total 20 cells; wall points with full thickness 93.5%,"
                  " reduced 5.0%, none 1.5% (1.0s)"]
         self.assertEqual(mesh_metrics.smallest_cell(lines), 0.00065)
+        # a cylindrical base that lowers it: its value (the last one)
+        cyl = lines[:1] + ["smallest cell of the cylindrical base 0.000412"] + lines[1:]
+        self.assertEqual(mesh_metrics.smallest_cell(cyl), 0.000412)
+        self.assertEqual(mesh_metrics.smallest_cell(["boundary faces: max distance 0.1 (1.54 x smallest cell)"]), None)
         self.assertEqual(mesh_metrics.layer_coverage(lines), {"full": 93.5, "reduced": 5.0, "none": 1.5})
         self.assertIsNone(mesh_metrics.layer_coverage(lines[:1]))
 

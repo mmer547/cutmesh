@@ -98,6 +98,11 @@ run_bench.py SUITE --baseline OLD/results.json --gate        # 品質ゲート�
 （測るのは 1 ケース 1 秒未満。`--no-metrics` で省けます）。基準と同じく判定状態が悪くなったケース（`PASS -> WARN` など）も
 `WORSE` になります。両方で拒否される入力（`dirty_open_box_strict` など）は判定状態の比較に任せます。
 
+最小セルは、円柱ベースで小さくなったとき（ログの `smallest cell of the cylindrical base`）はその値を使います。
+境界層や特徴線がないケースでは、`layers`・`featureEdges` が `null` と記録され、その項目は判定しません。
+基準かこの実行のどちらかで測れていない項目（測定の失敗 `metricsError`、`--no-metrics`、この記録より前の `results.json`）は、
+合格にせず `WORSE ... not measured` になります。その場合は基準を測り直してください。
+
 `baseCellSize` を指定しないケースは「外接箱の最長辺 / `cellsAcross`」（既定 24）で決めます。
 Thingi10K などは単位や大きさがばらばらなので、この方法で揃えます。
 

@@ -97,19 +97,17 @@ def probe_cells(R, probes, n=400):
 
 def measure(res, R, lines, meshdict_path):
     """the measures of the quality gate that the quality check does not give: the smallest
-    cell, the layer coverage (with addLayers) and the feature-edge deviation"""
+    cell, the layer coverage (with addLayers) and the feature-edge deviation.  A measure
+    that does not apply is stored as None (no layers in the case, no feature edges in the
+    domain); a measure that could not be taken is left out, and the gate fails on it."""
     import mesh_metrics as mm
     h = mm.smallest_cell(lines)
     if h:
         res["hmin"] = h
-    lc = mm.layer_coverage(lines)
-    if lc:
-        res["layers"] = lc
+    res["layers"] = mm.layer_coverage(lines)
     if h:
-        fe = mm.feature_edge_deviation(R["points"], R["faces"], len(R["neighbour"]),
-                                       mm.domain_feature_segments(meshdict_path), h)
-        if fe:
-            res["featureEdges"] = fe
+        res["featureEdges"] = mm.feature_edge_deviation(R["points"], R["faces"], len(R["neighbour"]),
+                                                        mm.domain_feature_segments(meshdict_path), h)
 
 
 def _peak_memory_mb():
@@ -421,6 +419,18 @@ def gate(r, o):
         dc = qb["nCells"] / qa["nCells"] - 1.0
         if abs(dc) > GATE_CELLS:
             out.append(f"cells {qa['nCells']} -> {qb['nCells']} ({dc:+.1%})")
+    # the layer coverage and the feature edges must have been measured in both runs (None:
+    # measured, but not applicable to the case); a missing one is not a pass
+    missing = []
+    for res, which in ((o, "the baseline"), (r, "this run")):
+        if res.get("metricsError"):
+            missing.append(f"no measures in {which} ({res['metricsError']})")
+        else:
+            missing += [f"{what} not measured in {which}"
+                        for key, what in (("layers", "layer coverage"), ("featureEdges", "feature-edge deviation"))
+                        if key not in res]
+    if missing:
+        return out + missing
     la, lb = o.get("layers"), r.get("layers")
     if la:
         if not lb:

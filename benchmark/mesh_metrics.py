@@ -12,7 +12,8 @@ import numpy as np
 from scipy.spatial import cKDTree
 
 LAYER_RE = re.compile(r"wall points with full thickness ([\d.]+)%, reduced ([\d.]+)%, none ([\d.]+)%")
-HMIN_RE = re.compile(r"smallest cell ([0-9.eE+-]+)")
+# "smallest cell 0.001" and, where a cylindrical base lowers it, "smallest cell of the cylindrical base 0.0008"
+HMIN_RE = re.compile(r"smallest cell (?:of the cylindrical base )?([0-9.eE+-]+)")
 
 
 def smallest_cell(lines):
