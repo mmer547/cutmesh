@@ -2,4 +2,4 @@
 
 # The version of cutmesh, kept here only (pyproject.toml reads it; rust/Cargo.toml is kept
 # the same, checked by tests/test_version.py).
-__version__ = "0.7.1"
+__version__ = "0.8.0"

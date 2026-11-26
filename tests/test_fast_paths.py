@@ -535,6 +535,42 @@ class RustLeakCheck(unittest.TestCase):
         self.assertEqual(n0, n1)
         np.testing.assert_array_equal(X0, X1)
 
+    def test_wall_ends_on_every_path(self):
+        # lines next to the free ends of a plate are not counted, whichever kernel runs:
+        # through_wall_cells_len, through_wall (an older extension), the NumPy loop
+        from test_thin_gaps import voxel_stl
+        from cutmesh.diagnose import through_wall, wall_ends
+        h, v = 0.01, 0.0005
+        G = np.ones((120, 120, 180), bool)
+        G[:100, 41:47, 0:120] = False              # free ends at x = 5h and z = 6h
+        with tempfile.TemporaryDirectory() as d:
+            voxel_stl(os.path.join(d, "w.stl"), G, v)
+            with open(os.path.join(d, "m.json"), "w") as f:
+                json.dump({"domain": "w.stl", "baseCellSize": h, "surfaceRefinement": {"default": 0},
+                           "featureLevel": 0, "fillThinWalls": 0, "checkLeaks": False}, f)
+            R = mesher.generate(mesher.load_config(os.path.join(d, "m.json")), log=lambda s: None)
+            dom = geometry.Surface(geometry.read_stl(os.path.join(d, "w.stl")))
+        ends = wall_ends(dom, 30.0)
+        args = (R["points"], R["faces"], R["owner"], R["neighbour"])
+        res = []
+        rs = dom._rs
+        for hide in ((), ("through_wall_cells_len",), ("through_wall", "through_wall_cells", "through_wall_cells_len")):
+            class Hidden:
+                def __getattr__(self, k, hide=hide):
+                    if k in hide:
+                        raise AttributeError(k)
+                    return getattr(rs, k)
+            dom._rs = Hidden() if hide else rs
+            st = {}
+            n, X = through_wall(dom, *args, ends=ends, stats=st)
+            res.append((n, np.asarray(X)[np.lexsort(np.asarray(X).T[::-1])], st["atWallEnds"]))
+        dom._rs = rs
+        self.assertGreater(res[0][0], 0)
+        self.assertGreater(res[0][2], 0)
+        for n, X, k in res[1:]:
+            self.assertEqual((n, k), (res[0][0], res[0][2]))
+            np.testing.assert_array_equal(X, res[0][1])
+
 
 @unittest.skipUnless(geometry.rust_available() and hasattr(geometry._core, "merge_wall_faces"),
                      "Rust extension not built")

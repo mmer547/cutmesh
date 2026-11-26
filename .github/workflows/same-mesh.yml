@@ -2,11 +2,14 @@
 # the same runner and meshes the stirred-tank examples and the showcase suite with both
 # (benchmark/same_mesh.py); fails when a mesh differs.  Mesh files depend on the machine,
 # so both sides are made here instead of comparing with stored hashes.
-# A pull request that changes meshes on purpose fails this check: say so in the pull request.
+# A pull request that changes meshes on purpose: give it the label "mesh-change" (and say so
+# in the pull request); the differences are still listed in the log and the job summary, but
+# the check passes.  Adding or removing the label runs the check again.
 name: same mesh
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
 
 permissions:
   contents: read
@@ -50,7 +53,21 @@ jobs:
           python head/tools/build_rust.py
 
       - name: Mesh with both and compare
-        run: python head/benchmark/same_mesh.py base head --out same_mesh_out
+        id: compare
+        continue-on-error: ${{ contains(github.event.pull_request.labels.*.name, 'mesh-change') }}
+        run: python head/benchmark/same_mesh.py base head --out same_mesh_out | tee same_mesh_out.txt; exit ${PIPESTATUS[0]}
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            if [ "${{ steps.compare.outcome }}" = "failure" ]; then
+              echo "### Meshes differ from the base branch (label mesh-change: intended)"
+            fi
+            echo '```'
+            tail -n 25 same_mesh_out.txt 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Keep the logs
         if: always()

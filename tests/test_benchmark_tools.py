@@ -198,5 +198,16 @@ class StepParts(unittest.TestCase):
         self.assertEqual(run_bench.parts_table([{"name": "y"}]), [])
 
 
+class CheckMeshVerdict(unittest.TestCase):
+    def test_judge(self):
+        import check_openfoam as co
+        self.assertEqual(co.judge("    Face pyramids OK.\n\nMesh OK.\n\nEnd\n", 0), ("ok", []))
+        st, failed = co.judge(" ***Max skewness = 4.97, 8 highly skew faces detected\n\nFailed 1 mesh checks.\n", 0)
+        self.assertEqual(st, "failed")
+        self.assertTrue(failed[0].startswith("***Max skewness"))
+        self.assertEqual(co.judge("--> FOAM FATAL IO ERROR:\nbad format\n", 1)[0], "error")
+        self.assertEqual(co.judge("", 139)[0], "error")
+
+
 if __name__ == "__main__":
     unittest.main()

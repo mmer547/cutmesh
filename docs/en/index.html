@@ -40,6 +40,11 @@
 
 <h2 id="news">News</h2>
 <ul class="news">
+  <li><time datetime="2026-11-27">2026-11-27</time><span class="ver">v0.8.0</span>
+    <p><strong>Reliability.</strong> CI now runs OpenFOAM's <code>checkMesh</code> (v2512) on all 15 stirred-tank and showcase examples, and every one reports "Mesh OK". This also confirms that OpenFOAM reads cutmesh's binary format.
+    Thin slivers with wall faces skewed over 4, including cells merged from small pieces, are removed where the wall does not dent (the 1 mm gap example went from 8 such faces to 0).
+    Leaks where a wall thinner than the smallest cell meets another wall, such as a plate under a ceiling, are fixed (the synthetic <code>thin_walls</code> case went from 518 to 0).
+    Pull requests that change meshes on purpose can pass the mesh-comparison check with the <code>mesh-change</code> label.</p></li>
   <li><time datetime="2026-11-26">2026-11-26</time><span class="ver">v0.7.1</span>
     <p><strong>Housekeeping.</strong> The log and the benchmark results now break the long stages (octree, snapping, STL and rotating-zone cuts, assembly and others) down into their parts.
     The version is kept in one place and shown by <code>cutmesh --version</code> and on the first line of the log. Meshes are unchanged.

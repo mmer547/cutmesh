@@ -23,8 +23,8 @@ https://mmer547.github.io/cutmesh/ ）にあります。
 - **依存が少ない**: Python 3.9+, numpy, scipy（断面図に matplotlib）。メッシュ生成に OpenFOAM は不要。
   Rust 拡張でメッシュ生成のほぼ全段階を並列化できる（任意、攪拌槽の例で約 100 倍速い）
 
-> メッシュ品質は `checkMesh` と同じ式の自前チェック（`cutmesh/quality.py`）で確認していますが、
-> OpenFOAM 本体での検証は限られています。使用前に手元で `checkMesh` を実行してください。
+> メッシュ品質は `checkMesh` と同じ式の自前チェック（`cutmesh/quality.py`）で確認しています。OpenFOAM 本体
+> （v2512）の `checkMesh` は公開の例にだけ CI でかけているので、自分の形状では使用前に手元で `checkMesh` を実行してください。
 
 ## インストール
 
@@ -347,8 +347,9 @@ polyMesh は既定でバイナリ（OpenFOAM の `writeFormat binary` と同じ�
 （`points`・`faces`・`owner`・`neighbour`）がバイナリになり、`boundary`・`cellZones`・`faceZones` は短いので
 ASCII のままです（形式はファイルごとのヘッダーで示すので、混在してよい）。中身を目で確かめたいときや、
 ASCII しか読めないツールに渡すときは `"writeFormat": "ascii"` にします。OpenFOAM の `foamFormatConvert` でも変換できます。
-形式は OpenFOAM のソース（`UListIO`・`CompactIOList`・`ISstream`）に合わせて書いていますが、OpenFOAM 本体で
-読み込めることはまだ確認していません。読めない場合は `"writeFormat": "ascii"` に戻してください。
+形式は OpenFOAM のソース（`UListIO`・`CompactIOList`・`ISstream`）に合わせて書いています。OpenFOAM v2512 の
+`checkMesh` で読めることを、攪拌槽の例とショーケースで CI が毎回確かめています（`benchmark/check_openfoam.py`）。
+ほかの版で読めない場合は `"writeFormat": "ascii"` に戻してください。
 
 - ヘッダーは `format binary;`、`arch "LSB;label=32;scalar=64";`（ラベル 32 ビット、倍精度）。`faces` は OpenFOAM が
   バイナリで使う `faceCompactList`（オフセットの列と頂点番号の列）。ラベルが 32 ビットに収まらないメッシュは
@@ -490,7 +491,7 @@ REPAIR: domain STL: removed 20 zero-area triangles, 50 duplicated triangles (one
 - STLは水密（閉じた・向きの揃った）である必要あり。面積 0 や重複した三角形は読み込み時に除くが（ログに `REPAIR:`）、開いた辺・自己交差は直さない（開いた辺は警告、自己交差は体積チェックの警告で分かることが多い）
 - セルより薄い形状（薄翼・バッフル板）は、その厚さ程度まで細分化が必要
 - セルより薄い流体の隙間は、閉じないように扱う: 格子の面の間を通る隙間は `fillThinGaps` で細分化し、頂点の面が中を通る隙間では、スナップで壁に寄せるとセルが流体の頂点を失う場合に、その頂点を隙間の中央へ動かす（壁に近すぎて中央へ動かせない頂点は、そのままスナップする）。円筒ベースでは `fillThinGaps` は未対応
-- セルより薄い固体の壁は、消えないように扱う（消えると両側の流体がつながり、計算が破綻する）: 角の頂点が壁に入らないセルは `fillThinWalls` で細分化し、固体側の頂点がスナップで両面に寄せられてセルが固体の頂点を失う場合は、その頂点を壁の厚みの中央へ動かす。それでも残るつながりは `checkLeaks` の警告で分かる（`python -m cutmesh.diagnose meshDict.json [CASE]` で既存のメッシュも検査できる）。壁と別の壁が交わる入隅では、面取りが残ることがある
+- セルより薄い固体の壁は、消えないように扱う（消えると両側の流体がつながり、計算が破綻する）: 角の頂点が壁に入らないセルは `fillThinWalls` で細分化し、固体側の頂点がスナップで両面に寄せられてセルが固体の頂点を失う場合は、その頂点を壁の厚みの中央へ動かす。固体の角を持つセルでも、薄い壁が別の壁と交わる所（天井の下の板など）で流体の角どうしの間に壁があれば分割する。それでも残るつながりは `checkLeaks` の警告で分かる（`python -m cutmesh.diagnose meshDict.json [CASE]` で既存のメッシュも検査できる）。壁の自由端（固体が突き出した特徴線）がセルの範囲内にある線は、端を回ってもセル 1 つ以内でつながるので数えない。壁と別の壁が交わる入隅では、面取りが残ることがある
 - 円筒の縁（リム）や凹の鋭角部はセル寸法程度で面取りされる（界面としては実用上問題小）。
   凸の鋭角部は厳密カット（`exactFeatureCut`）で捉える。凸のエッジが凹のエッジや曲面と交わる所の近く
   （周りが凸でないセルの隣）は従来のカットに戻るので、面取りが残ることがある。凹の鋭角部は、固体側の節点を

@@ -311,8 +311,8 @@ Set <code>"writeFormat": "ascii"</code> to inspect the files by hand or use them
   <li><code>python -m cutmesh.layers</code> writes the input format by default. Override it with <code>-ascii</code> or <code>-binary</code>.</li>
 </ul>
 <div class="warn">
-  <p>The binary format follows the OpenFOAM source. Reading it with OpenFOAM itself has yet to be verified. If reading fails,
-  set <code>"writeFormat": "ascii"</code> or convert using OpenFOAM's <code>foamFormatConvert</code>.</p>
+  <p>The binary format follows the OpenFOAM source. CI checks that OpenFOAM v2512's <code>checkMesh</code> reads the public examples.
+  If another version cannot read it, set <code>"writeFormat": "ascii"</code> or convert using OpenFOAM's <code>foamFormatConvert</code>.</p>
 </div>
 
 <h2 id="rust">Rust acceleration</h2>

@@ -22,8 +22,8 @@ The documentation site includes a manual and mesh images from the examples. [Eng
   Mesh generation works without OpenFOAM. The optional Rust extension parallelizes nearly every meshing stage
   and makes the stirred tank example about 100× faster.
 
-> The built-in mesh quality checks (`cutmesh/quality.py`) use the same formulas as `checkMesh`. Testing with OpenFOAM
-> itself is limited. Run `checkMesh` locally before using a mesh.
+> The built-in mesh quality checks (`cutmesh/quality.py`) use the same formulas as `checkMesh`. CI runs OpenFOAM's own
+> `checkMesh` (v2512) on the public examples only, so run `checkMesh` locally on meshes of your own geometry.
 
 ## Installation
 
@@ -356,8 +356,9 @@ cutmesh writes polyMesh in binary by default, using the OpenFOAM `writeFormat bi
 `owner`, and `neighbour` files are binary. The smaller `boundary`, `cellZones`, and `faceZones` files are ASCII. Each file's
 header declares its format, so these formats can be mixed. Set `"writeFormat": "ascii"` to inspect the files with a text
 editor or pass them to an ASCII-only tool. OpenFOAM's `foamFormatConvert` can also convert them. The layout follows OpenFOAM's
-`UListIO`, `CompactIOList`, and `ISstream` sources. Reading the files with OpenFOAM itself has yet to be verified. If it fails,
-use `"writeFormat": "ascii"`.
+`UListIO`, `CompactIOList`, and `ISstream` sources. CI checks on every change that OpenFOAM v2512's `checkMesh` reads the
+stirred-tank examples and the showcase (`benchmark/check_openfoam.py`). If another version cannot read them, use
+`"writeFormat": "ascii"`.
 
 - The header specifies `format binary;` and `arch "LSB;label=32;scalar=64";` (32-bit labels and double precision).
   Binary `faces` uses OpenFOAM's `faceCompactList` format, with arrays of offsets and vertex indices. Meshes whose
@@ -512,8 +513,11 @@ orientation is inconsistent.
   too close to a wall to reach the center are snapped as usual. `fillThinGaps` is available for Cartesian grids.
 - To preserve sub-cell walls, `fillThinWalls` refines cells with no corner in the solid. If snapping solid-side
   vertices to both faces would leave a cell with no solid corners, move the vertex to the middle of the wall thickness.
-  Remaining connections through the wall generate `checkLeaks` warnings. Run `python -m cutmesh.diagnose meshDict.json [CASE]`
-  for an existing mesh. Re-entrant corners where walls meet can remain chamfered.
+  Cells with solid corners are split too where a thin wall meets another wall (a plate under a ceiling) and separates two
+  of their fluid corners. Remaining connections through the wall generate `checkLeaks` warnings. Run
+  `python -m cutmesh.diagnose meshDict.json [CASE]` for an existing mesh. A line next to the free end of a wall (a sharp
+  edge where the solid juts into the fluid) within the cell's reach does not count: around that end the fluid meets within
+  one cell anyway. Re-entrant corners where walls meet can remain chamfered.
 - Cylinder rims and concave edges can be chamfered at cell scale, which usually has little effect on interfaces.
   `exactFeatureCut` captures convex edges. Where a convex edge meets a concave edge or a curved surface near a nonconvex
   cell, the standard cut can leave a chamfer. At sharp concave edges, solid-side vertices are snapped onto the edge

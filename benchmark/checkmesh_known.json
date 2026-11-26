@@ -1,0 +1,3 @@
+{
+ "_comment": "cases of check_openfoam.py known to fail OpenFOAM's checkMesh, with the reason (none since v0.8.0)"
+}
