@@ -3,7 +3,7 @@
 [日本語](README.md) | **English**
 
 cutmesh generates octree-based polyhedral meshes **inside** watertight STL geometry and writes OpenFOAM's
-`constant/polyMesh` directly. It cuts octree cells against the STL to create wall faces. The mesher is a prototype under development.
+`constant/polyMesh` directly. It cuts octree cells against the STL to create wall faces.
 
 The documentation site includes a manual and mesh images from the examples. [English documentation](https://mmer547.github.io/cutmesh/en/)
 

@@ -40,6 +40,9 @@
 
 <h2 id="news">更新情報</h2>
 <ul class="news">
+  <li><time datetime="2026-11-27">2026-11-27</time><span class="ver">v1.0.0</span>
+    <p><strong>最初の安定版。</strong>meshDict の仕様を固定しました。1.x のあいだ、キーの削除・改名・意味の変更はしません（<a href="manual.html#compat">meshDict の互換性</a>）。1.0 のキーと型・選択肢・必須のキーの一覧をテストに持ち、壊れる変更はテストで止まります。
+    v1.0 の条件（CI がすべて通る、既知のリークがない、公開の例が OpenFOAM の <code>checkMesh</code> を通る、wheel で配布、meshDict の仕様の固定）をすべて満たしました。版ごとの変更を <a href="https://github.com/mmer547/cutmesh/blob/main/CHANGELOG.md">CHANGELOG</a> にまとめました。メッシュは変わりません。</p></li>
   <li><time datetime="2026-11-27">2026-11-27</time><span class="ver">v0.9.0</span>
     <p><strong>配布。</strong>Rust 拡張を組み込んだ wheel（Linux・Windows・macOS、Python 3.9 以上で共通）を作り、<a href="https://github.com/mmer547/cutmesh/releases">GitHub の Releases</a> に置くようにしました。ダウンロードして <code>pip install</code> するだけで、ビルドなしに速い版が入ります（PyPI には公開しません）。
     1.0 以降の <a href="manual.html#compat">meshDict の互換性の方針</a>を決め、廃止・改名したキーを読み替えて警告する仕組みを入れました。メッシュは変わりません。</p></li>
@@ -82,7 +85,7 @@
     <p>最初の版。STL の内部の八分木カットセルメッシュ、OpenFOAM の polyMesh の書き出し、回転ゾーンの切り出し、
     境界層（プリズム層）、Rust 拡張による幾何計算の高速化。</p></li>
 </ul>
-<p class="news-note">版と日付は、過去のコミットの区切りに後から割り振ったものです（まだ v1.0 前の開発版です）。</p>
+<p class="news-note">v0.1.0〜v0.4.0 の版と日付は、過去のコミットの区切りに後から割り振ったものです。版ごとの変更は <a href="https://github.com/mmer547/cutmesh/blob/main/CHANGELOG.md">CHANGELOG</a> にもあります。</p>
 
 <h2>特徴</h2>
 <div class="cards">
@@ -142,7 +145,7 @@ cutmesh meshDict.json                 # → case/constant/polyMesh</code></pre>
 </div>
 
 <div class="note">
-  <p>開発中のプロトタイプです。メッシュ品質は <code>checkMesh</code> と同じ式の自前チェックで確認していますが、OpenFOAM 本体での検証は限られています。使う前に手元で <code>checkMesh</code> を実行してください。</p>
+  <p>メッシュ品質は <code>checkMesh</code> と同じ式の自前チェックで確認しています。OpenFOAM 本体（v2512）の <code>checkMesh</code> は公開の例にだけ CI でかけているので、自分の形状では使う前に手元で <code>checkMesh</code> を実行してください。</p>
 </div>
 </main>
 

@@ -1,0 +1,698 @@
+{
+ "version": "1.0.0",
+ "keys": {
+  ".": {
+   "type": [
+    "object"
+   ],
+   "required": [
+    "baseCellSize",
+    "domain"
+   ]
+  },
+  "domain": {
+   "type": [
+    "string"
+   ]
+  },
+  "baseCellSize": {
+   "type": [
+    "number"
+   ]
+  },
+  "case": {
+   "type": [
+    "string"
+   ]
+  },
+  "patchTypes": {
+   "type": [
+    "object"
+   ]
+  },
+  "padding": {
+   "type": [
+    "integer"
+   ]
+  },
+  "surfaceRefinement": {
+   "type": [
+    "object"
+   ]
+  },
+  "featureLevel": {
+   "type": [
+    "integer",
+    "null"
+   ]
+  },
+  "featureAngle": {
+   "type": [
+    "number"
+   ]
+  },
+  "refinementRegions": {
+   "type": [
+    "array"
+   ]
+  },
+  "refinementRegions/[]": {
+   "type": [
+    "object"
+   ],
+   "required": [
+    "cylinder",
+    "level"
+   ]
+  },
+  "refinementRegions/[]/cylinder": {
+   "type": [
+    "object"
+   ],
+   "required": [
+    "point1",
+    "point2",
+    "radius"
+   ]
+  },
+  "refinementRegions/[]/cylinder/point1": {
+   "type": [
+    "array"
+   ]
+  },
+  "refinementRegions/[]/cylinder/point1/[]": {
+   "type": [
+    "number"
+   ]
+  },
+  "refinementRegions/[]/cylinder/point2": {
+   "type": [
+    "array"
+   ]
+  },
+  "refinementRegions/[]/cylinder/point2/[]": {
+   "type": [
+    "number"
+   ]
+  },
+  "refinementRegions/[]/cylinder/radius": {
+   "type": [
+    "number"
+   ]
+  },
+  "refinementRegions/[]/cylinder/origin": {
+   "type": [
+    "array"
+   ]
+  },
+  "refinementRegions/[]/cylinder/origin/[]": {
+   "type": [
+    "number"
+   ]
+  },
+  "refinementRegions/[]/level": {
+   "type": [
+    "integer"
+   ]
+  },
+  "bufferLayers": {
+   "type": [
+    "integer"
+   ]
+  },
+  "gapRefinement": {
+   "type": [
+    "null",
+    "object"
+   ],
+   "required": [
+    "level",
+    "thickness"
+   ]
+  },
+  "gapRefinement/thickness": {
+   "type": [
+    "number"
+   ]
+  },
+  "gapRefinement/level": {
+   "type": [
+    "integer"
+   ]
+  },
+  "autoGapRefinement": {
+   "type": [
+    "boolean",
+    "null",
+    "object"
+   ]
+  },
+  "autoGapRefinement/cellsAcross": {
+   "type": [
+    "number"
+   ]
+  },
+  "autoGapRefinement/maxLevel": {
+   "type": [
+    "integer"
+   ]
+  },
+  "rotatingZones": {
+   "type": [
+    "array"
+   ]
+  },
+  "rotatingZones/[]": {
+   "type": [
+    "object"
+   ],
+   "required": [
+    "name"
+   ]
+  },
+  "rotatingZones/[]/name": {
+   "type": [
+    "string"
+   ]
+  },
+  "rotatingZones/[]/cylinder": {
+   "type": [
+    "object"
+   ],
+   "required": [
+    "point1",
+    "point2",
+    "radius"
+   ]
+  },
+  "rotatingZones/[]/cylinder/point1": {
+   "type": [
+    "array"
+   ]
+  },
+  "rotatingZones/[]/cylinder/point1/[]": {
+   "type": [
+    "number"
+   ]
+  },
+  "rotatingZones/[]/cylinder/point2": {
+   "type": [
+    "array"
+   ]
+  },
+  "rotatingZones/[]/cylinder/point2/[]": {
+   "type": [
+    "number"
+   ]
+  },
+  "rotatingZones/[]/cylinder/radius": {
+   "type": [
+    "number"
+   ]
+  },
+  "rotatingZones/[]/cylinder/origin": {
+   "type": [
+    "array"
+   ]
+  },
+  "rotatingZones/[]/cylinder/origin/[]": {
+   "type": [
+    "number"
+   ]
+  },
+  "rotatingZones/[]/stl": {
+   "type": [
+    "string"
+   ]
+  },
+  "rotatingZones/[]/origin": {
+   "type": [
+    "array"
+   ]
+  },
+  "rotatingZones/[]/origin/[]": {
+   "type": [
+    "number"
+   ]
+  },
+  "rotatingZones/[]/axis": {
+   "type": [
+    "array"
+   ]
+  },
+  "rotatingZones/[]/axis/[]": {
+   "type": [
+    "number"
+   ]
+  },
+  "rotatingZones/[]/surfaceLevel": {
+   "type": [
+    "integer"
+   ]
+  },
+  "rotatingZones/[]/volumeLevel": {
+   "type": [
+    "integer"
+   ]
+  },
+  "rotatingZones/[]/omega": {
+   "type": [
+    "number"
+   ]
+  },
+  "rotatingZones/[]/nonRotatingPatches": {
+   "type": [
+    "array"
+   ]
+  },
+  "rotatingZones/[]/nonRotatingPatches/[]": {
+   "type": [
+    "string"
+   ]
+  },
+  "rotatingZones/[]/wallProximity": {
+   "type": [
+    "null",
+    "object"
+   ],
+   "required": [
+    "distance",
+    "level"
+   ]
+  },
+  "rotatingZones/[]/wallProximity/distance": {
+   "type": [
+    "number"
+   ]
+  },
+  "rotatingZones/[]/wallProximity/level": {
+   "type": [
+    "integer"
+   ]
+  },
+  "rotatingZones/[]/wallProximity/bufferLayers": {
+   "type": [
+    "integer"
+   ]
+  },
+  "rotatingZones/[]/ami": {
+   "type": [
+    "boolean"
+   ]
+  },
+  "rotatingZones/[]/conforming": {
+   "type": [
+    "boolean"
+   ]
+  },
+  "rotatingZones/[]/oneOf0": {
+   "type": [],
+   "required": [
+    "cylinder"
+   ]
+  },
+  "rotatingZones/[]/oneOf1": {
+   "type": [],
+   "required": [
+    "stl"
+   ]
+  },
+  "snapTolerance": {
+   "type": [
+    "number"
+   ]
+  },
+  "featureSnapTolerance": {
+   "type": [
+    "number"
+   ]
+  },
+  "featureSnapMax": {
+   "type": [
+    "number"
+   ]
+  },
+  "concaveSnapMax": {
+   "type": [
+    "number"
+   ]
+  },
+  "mergeRatio": {
+   "type": [
+    "number"
+   ]
+  },
+  "mergeMaxNonOrtho": {
+   "type": [
+    "number"
+   ]
+  },
+  "hangingSnap": {
+   "type": [
+    "string"
+   ],
+   "enum": [
+    "constrained",
+    "free"
+   ]
+  },
+  "featureCaps": {
+   "type": [
+    "boolean",
+    "null",
+    "string"
+   ],
+   "enum": [
+    "both",
+    "domain",
+    "zone",
+    false,
+    null,
+    true
+   ]
+  },
+  "exactFeatureCut": {
+   "type": [
+    "boolean"
+   ]
+  },
+  "mergeWallFaces": {
+   "type": [
+    "boolean"
+   ]
+  },
+  "fillThinGaps": {
+   "type": [
+    "integer"
+   ]
+  },
+  "fillThinWalls": {
+   "type": [
+    "integer"
+   ]
+  },
+  "thinCutCells": {
+   "type": [
+    "integer"
+   ]
+  },
+  "thinCutFraction": {
+   "type": [
+    "number"
+   ]
+  },
+  "minRegionVolume": {
+   "type": [
+    "number"
+   ]
+  },
+  "checkLeaks": {
+   "type": [
+    "boolean"
+   ]
+  },
+  "strictInput": {
+   "type": [
+    "boolean"
+   ]
+  },
+  "volumeCheckTolerance": {
+   "type": [
+    "number"
+   ]
+  },
+  "writeFormat": {
+   "type": [
+    "string"
+   ],
+   "enum": [
+    "ascii",
+    "binary"
+   ]
+  },
+  "writeMRFProperties": {
+   "type": [
+    "boolean"
+   ]
+  },
+  "openfoam": {
+   "type": [
+    "string"
+   ],
+   "enum": [
+    "com",
+    "org10",
+    "org11",
+    "org12"
+   ]
+  },
+  "writeDynamicMeshDict": {
+   "type": [
+    "boolean"
+   ]
+  },
+  "amiExactRims": {
+   "type": [
+    "boolean"
+   ]
+  },
+  "baseMesh": {
+   "type": [
+    "null",
+    "object"
+   ]
+  },
+  "baseMesh/type": {
+   "type": [
+    "string"
+   ],
+   "enum": [
+    "cartesian",
+    "cylindrical"
+   ]
+  },
+  "baseMesh/origin": {
+   "type": [
+    "array"
+   ]
+  },
+  "baseMesh/origin/[]": {
+   "type": [
+    "number"
+   ]
+  },
+  "baseMesh/axis": {
+   "type": [
+    "array"
+   ]
+  },
+  "baseMesh/axis/[]": {
+   "type": [
+    "number"
+   ]
+  },
+  "baseMesh/zRange": {
+   "type": [
+    "array"
+   ]
+  },
+  "baseMesh/zRange/[]": {
+   "type": [
+    "number"
+   ]
+  },
+  "baseMesh/nz": {
+   "type": [
+    "integer"
+   ]
+  },
+  "baseMesh/dz": {
+   "type": [
+    "number"
+   ]
+  },
+  "baseMesh/rOuter": {
+   "type": [
+    "number"
+   ]
+  },
+  "baseMesh/cellSize": {
+   "type": [
+    "number"
+   ]
+  },
+  "baseMesh/maxSizeRatio": {
+   "type": [
+    "number"
+   ]
+  },
+  "baseMesh/core": {
+   "type": [
+    "object"
+   ],
+   "required": [
+    "halfWidth",
+    "n"
+   ]
+  },
+  "baseMesh/core/halfWidth": {
+   "type": [
+    "number"
+   ]
+  },
+  "baseMesh/core/n": {
+   "type": [
+    "integer"
+   ]
+  },
+  "baseMesh/blocks": {
+   "type": [
+    "array"
+   ]
+  },
+  "baseMesh/blocks/[]": {
+   "type": [
+    "object"
+   ],
+   "required": [
+    "nr",
+    "rOuter"
+   ]
+  },
+  "baseMesh/blocks/[]/rOuter": {
+   "type": [
+    "number"
+   ]
+  },
+  "baseMesh/blocks/[]/nr": {
+   "type": [
+    "integer"
+   ]
+  },
+  "baseMesh/blocks/[]/nTheta": {
+   "type": [
+    "integer"
+   ]
+  },
+  "baseMesh/blocks/[]/radii": {
+   "type": [
+    "array"
+   ]
+  },
+  "baseMesh/blocks/[]/radii/[]": {
+   "type": [
+    "number"
+   ]
+  },
+  "addLayers": {
+   "type": [
+    "null",
+    "object"
+   ]
+  },
+  "addLayers/patches": {
+   "type": [
+    "array",
+    "null"
+   ]
+  },
+  "addLayers/patches/[]": {
+   "type": [
+    "string"
+   ]
+  },
+  "addLayers/nLayers": {
+   "type": [
+    "integer"
+   ]
+  },
+  "addLayers/expansionRatio": {
+   "type": [
+    "number"
+   ]
+  },
+  "addLayers/finalLayerThickness": {
+   "type": [
+    "number"
+   ]
+  },
+  "addLayers/relativeSizes": {
+   "type": [
+    "boolean"
+   ]
+  },
+  "addLayers/minThickness": {
+   "type": [
+    "number"
+   ]
+  },
+  "addLayers/maxNonOrtho": {
+   "type": [
+    "number"
+   ]
+  },
+  "addLayers/maxSkewness": {
+   "type": [
+    "null",
+    "number"
+   ]
+  },
+  "addLayers/maxGapFraction": {
+   "type": [
+    "number"
+   ]
+  },
+  "addLayers/maxThicknessSlope": {
+   "type": [
+    "number"
+   ]
+  },
+  "addLayers/minNormalCos": {
+   "type": [
+    "number"
+   ]
+  },
+  "addLayers/wallNonOrthMargin": {
+   "type": [
+    "null",
+    "number"
+   ]
+  },
+  "addLayers/cornerStretch": {
+   "type": [
+    "boolean"
+   ]
+  },
+  "addLayers/mergeWallPoints": {
+   "type": [
+    "number"
+   ]
+  },
+  "addLayers/concaveSlide": {
+   "type": [
+    "null",
+    "number"
+   ]
+  },
+  "addLayers/nRings": {
+   "type": [
+    "integer"
+   ]
+  },
+  "addLayers/nSmooth": {
+   "type": [
+    "integer"
+   ]
+  },
+  "addLayers/nIter": {
+   "type": [
+    "integer"
+   ]
+  },
+  "addLayers/nCollapseIter": {
+   "type": [
+    "integer"
+   ]
+  }
+ }
+}
