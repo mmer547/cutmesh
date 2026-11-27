@@ -5,10 +5,12 @@ looser, no new restriction (an enum, a bound, a closed object, any other validat
 keyword) and no new required key.  Restrictions may be dropped.  A new sub-schema counts as
 a restriction unless it surely only adds: a property of a closed object (a new key), a map
 value schema on a closed object, another anyOf alternative.  So a new key in a map, a new
-allOf branch, oneOf alternative or patternProperties entry fails (conservatively).  A top-level key leaves only through
+allOf branch, oneOf alternative or patternProperties entry fails (conservatively), and so
+does a new key that a pattern of the object already took.  Inside a oneOf alternative any
+change fails, also a broadening: it can make a value match two alternatives.  A top-level key leaves only through
 config.DEPRECATED_KEYS.  Paths: "a/b" a property, "a/[]" the items of an array, "a/{}" the
 values of a map (additionalProperties), "a/{pattern}" those of patternProperties,
-"a/oneOf0" an alternative.
+"a/oneOf0" an alternative; "~" and "/" in a name are written "~0" and "~1" (JSON pointer).
 
     python tests/test_meshdict_frozen.py --write    # write the snapshot (only at a major version)
 """
@@ -59,6 +61,14 @@ def _bound(node, incl, excl):
     return list(max(b) if lower else min(b, key=lambda x: (x[0], not x[1])))
 
 
+def _seg(name):
+    return name.replace("~", "~0").replace("/", "~1")
+
+
+def _unseg(seg):
+    return seg.replace("~1", "/").replace("~0", "~")
+
+
 def spec(s=None):
     """{key path: {"type": [...], "enum"?, "lower"?, "upper"?, "minItems"?, "maxItems"?,
     "minLength"?, "closed"?, "required"?}} of the meshDict schema"""
@@ -89,13 +99,13 @@ def spec(s=None):
             e["other"] = other
         out["/".join(path) or "."] = e
         for k, v in node.get("properties", {}).items():
-            walk(v, path + [k])
+            walk(v, path + [_seg(k)])
         if isinstance(node.get("items"), dict):
             walk(node["items"], path + ["[]"])
         if isinstance(node.get("additionalProperties"), dict):
             walk(node["additionalProperties"], path + ["{}"])
         for pat, v in node.get("patternProperties", {}).items():
-            walk(v, path + ["{" + pat + "}"])
+            walk(v, path + ["{" + _seg(pat) + "}"])
         for key in ("oneOf", "anyOf", "allOf"):
             for i, alt in enumerate(node.get(key, [])):
                 walk(alt, path + [f"{key}{i}"])
@@ -138,9 +148,12 @@ COMBINATOR = re.compile(r"(allOf|anyOf|oneOf)\d+")
 def problems(frozen, now):
     """the incompatibilities of the spec now with the frozen spec: [(path, reason)]"""
     out = []
+    in_oneof = re.compile(r"(^|/)oneOf\d+(/|$)")
     for path, e in frozen.items():
         if path in now:
             out += [(path, w) for w in narrowed(e, now[path])]
+            if in_oneof.search(path) and now[path] != e and not narrowed(e, now[path]):
+                out.append((path, "a change inside a oneOf alternative (a value may match two)"))
             continue
         if re.search(r"(^|/)allOf\d+(/|$)", path):
             continue                                  # a dropped allOf branch only broadens
@@ -154,14 +167,20 @@ def problems(frozen, now):
         if parent not in frozen:
             continue                                  # under a new sub-schema: judged there
         closed = frozen[parent].get("closed", False)
-        if not COMBINATOR.fullmatch(last) and last not in ("[]", "{}") and not last.startswith("{"):
+        prefix = "" if parent == "." else parent + "/"
+        patterns = [_unseg(q[len(prefix) + 1:-1]) for q in frozen
+                    if q.startswith(prefix + "{") and q.endswith("}") and "/" not in q[len(prefix):]]
+        if in_oneof.search(path):
+            out.append((path, "a change inside a oneOf alternative (a value may match two)"))
+        elif not COMBINATOR.fullmatch(last) and last not in ("[]", "{}") and not last.startswith("{"):
             if not closed:
                 out.append((path, "a new property of an open object restricts its values"))
+            elif any(re.search(pat, _unseg(last)) for pat in patterns):
+                out.append((path, "a new property whose name a pattern already took"))
         elif last == "{}":
             if not closed:
                 out.append((path, "a new map value schema restricts the values"))
         elif last.startswith("anyOf"):
-            prefix = "" if parent == "." else parent + "/"
             if not any(re.fullmatch(re.escape(prefix) + r"anyOf\d+", q) for q in frozen):
                 out.append((path, "a first anyOf restricts the values"))
         else:                                         # allOf, oneOf, patternProperties, items
@@ -224,6 +243,12 @@ class FrozenMeshDict(unittest.TestCase):
         def map_property(s):         # the same through properties
             s["properties"]["surfaceRefinement"]["properties"] = {"rotor": {"type": "string"}}
 
+        def broader_alternative(s):  # an STL zone now matches both alternatives
+            s["properties"]["rotatingZones"]["items"]["oneOf"][0].pop("required")
+
+        def comment_key(s):          # "_note": 123 was a valid comment
+            s["properties"]["_note"] = {"type": "string"}
+
         def zone_key(s):             # a new key of a closed object
             s["properties"]["rotatingZones"]["items"]["properties"]["newKey"] = {"type": "number"}
 
@@ -247,6 +272,7 @@ class FrozenMeshDict(unittest.TestCase):
         for change, narrows in ((add_allof, True), (add_oneof, True), (pattern, True),
                                 (comment_values, True), (map_values, True),
                                 (more_alternatives, True), (map_pattern, True), (map_property, True),
+                                (broader_alternative, True), (comment_key, True),
                                 (new_key, False), (zone_key, False), (to_number, False)):
             s = schema.meshdict_schema()
             change(s)
