@@ -1,8 +1,9 @@
 """The meshDict specification of cutmesh 1.0 is frozen (the manual's "meshDict compatibility"):
 every key path of tests/data/meshdict_1.0.json must stay in the schema (cutmesh/schema.py)
 with the same types (or more), the same allowed values (or more), bounds that are the same or
-looser, no new restriction (an enum, a bound, a closed object) and no new required key.
-Keys may be added and restrictions dropped.  A top-level key leaves only through
+looser, no new restriction (an enum, a bound, a closed object, an allOf branch, a first
+oneOf / anyOf, any other validation keyword) and no new required key.  Keys may be added
+and restrictions dropped.  A top-level key leaves only through
 config.DEPRECATED_KEYS.  Paths: "a/b" a property, "a/[]" the items of an array, "a/{}" the
 values of a map (additionalProperties), "a/{pattern}" those of patternProperties,
 "a/oneOf0" an alternative.
@@ -11,6 +12,7 @@ values of a map (additionalProperties), "a/{pattern}" those of patternProperties
 """
 import json
 import os
+import re
 import sys
 import unittest
 
@@ -22,9 +24,27 @@ from cutmesh import config, schema  # noqa: E402
 SNAPSHOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "meshdict_1.0.json")
 
 
+# validation keywords the comparison does not interpret: a new one, or a changed value, counts
+# as a narrowing; dropping one is allowed
+OTHER = ("const", "pattern", "format", "multipleOf", "maxLength", "uniqueItems", "minProperties",
+         "maxProperties", "propertyNames", "dependentRequired", "dependentSchemas", "contains",
+         "prefixItems", "not", "if", "then", "else", "$ref")
+
+
 def _types(node):
     t = node.get("type")
     return sorted(t) if isinstance(t, list) else ([t] if t else [])
+
+
+def _accepts(old, new):
+    """do the JSON types new accept every value the types old accept?  [] = any type;
+    "number" includes "integer"
+    """
+    if not new:
+        return True
+    if not old:
+        return False
+    return all(t in new or (t == "integer" and "number" in new) for t in old)
 
 
 def _bound(node, incl, excl):
@@ -62,6 +82,9 @@ def spec(s=None):
             e["closed"] = True
         if node.get("required"):
             e["required"] = sorted(node["required"])
+        other = {k: node[k] for k in OTHER if k in node}
+        if other:
+            e["other"] = other
         out["/".join(path) or "."] = e
         for k, v in node.get("properties", {}).items():
             walk(v, path + [k])
@@ -81,8 +104,8 @@ def spec(s=None):
 def narrowed(old, new):
     """how the entry new restricts more than old (a list of reasons; empty: compatible)"""
     why = []
-    if not set(old["type"]) <= set(new["type"]):
-        why.append(f"type {old['type']} -> {new['type']}")
+    if not _accepts(old["type"], new["type"]):
+        why.append(f"type {old['type'] or 'any'} -> {new['type'] or 'any'}")
     if "enum" in new:
         if "enum" not in old:
             why.append(f"new allowed values {new['enum']}")
@@ -101,22 +124,49 @@ def narrowed(old, new):
     req = set(new.get("required", [])) - set(old.get("required", []))
     if req:
         why.append(f"newly required keys {sorted(req)}")
+    for k, v in new.get("other", {}).items():
+        if k not in old.get("other", {}) or old["other"][k] != v:
+            why.append(f"{k} {old.get('other', {}).get(k)} -> {v}")
     return why
+
+
+COMBINATOR = re.compile(r"(allOf|anyOf|oneOf)\d+$")
+
+
+def problems(frozen, now):
+    """the incompatibilities of the spec now with the frozen spec: [(path, reason)]"""
+    out = []
+    for path, e in frozen.items():
+        if path in now:
+            out += [(path, w) for w in narrowed(e, now[path])]
+            continue
+        if re.search(r"(^|/)allOf\d+(/|$)", path):
+            continue                                  # a dropped allOf branch only broadens
+        if path.split("/")[0] not in config.DEPRECATED_KEYS:
+            out.append((path, "left the meshDict without going through config.DEPRECATED_KEYS"))
+    for path in now:
+        m = COMBINATOR.search(path)
+        if path in frozen or not m:
+            continue
+        parent = path[:m.start()].rstrip("/") or "."
+        if parent not in frozen:
+            continue                                  # under a new key or a new alternative
+        kind = m.group(1)
+        if kind == "allOf":
+            out.append((path, "a new allOf branch restricts the values"))
+        else:
+            prefix = "" if parent == "." else parent + "/"
+            if not any(re.fullmatch(re.escape(prefix) + kind + r"\d+", q) for q in frozen):
+                out.append((path, f"a first {kind} restricts the values"))
+    return out
 
 
 class FrozenMeshDict(unittest.TestCase):
     def test_nothing_removed_or_narrowed(self):
         with open(SNAPSHOT, encoding="utf-8") as f:
             frozen = json.load(f)["keys"]
-        now = spec()
-        for path, e in frozen.items():
-            top = path.split("/")[0]
-            if path not in now:
-                self.assertIn(top, config.DEPRECATED_KEYS,
-                              f"{path} left the meshDict without going through config.DEPRECATED_KEYS")
-                continue
-            why = narrowed(e, now[path])
-            self.assertFalse(why, f"{path}: " + "; ".join(why))
+        bad = problems(frozen, spec())
+        self.assertFalse(bad, "\n".join(f"{p}: {w}" for p, w in bad))
 
     def test_the_check_sees_narrowing(self):
         e = {"type": ["integer"], "lower": [0, False], "maxItems": 3}
@@ -133,6 +183,47 @@ class FrozenMeshDict(unittest.TestCase):
             self.assertTrue(narrowed(e, n), n)
         self.assertTrue(narrowed({"type": ["string"], "enum": ["a", "b"]}, {"type": ["string"], "enum": ["a"]}))
         self.assertFalse(narrowed({"type": ["string"], "enum": ["a"]}, {"type": ["string"]}))
+        # types: number includes integer, no type accepts anything
+        self.assertFalse(narrowed({"type": ["integer"]}, {"type": ["number"]}))
+        self.assertFalse(narrowed({"type": ["integer"]}, {"type": []}))
+        self.assertTrue(narrowed({"type": []}, {"type": ["string"]}))
+        self.assertTrue(narrowed({"type": ["number"]}, {"type": ["integer"]}))
+        self.assertTrue(narrowed({"type": ["string"]}, {"type": ["string"], "other": {"pattern": "^a"}}))
+
+    def test_changes_to_the_schema(self):
+        """whole-schema changes: (change, narrows?)"""
+        def add_allof(s):
+            s["properties"]["case"]["allOf"] = [{"enum": ["."]}]
+
+        def add_oneof(s):
+            s["properties"]["case"]["oneOf"] = [{"type": "string"}, {"type": "null"}]
+
+        def more_alternatives(s):
+            s["properties"]["rotatingZones"]["items"]["oneOf"].append({"required": ["name"]})
+
+        def pattern(s):
+            s["properties"]["case"]["pattern"] = "^[a-z]+$"
+
+        def comment_values(s):
+            s["patternProperties"]["^(_|//)"]["type"] = "string"
+
+        def map_values(s):
+            s["properties"]["surfaceRefinement"]["additionalProperties"]["type"] = "string"
+
+        def new_key(s):
+            s["properties"]["newKey"] = {"type": "boolean", "default": False}
+
+        def to_number(s):
+            s["properties"]["surfaceRefinement"]["additionalProperties"]["type"] = "number"
+
+        with open(SNAPSHOT, encoding="utf-8") as f:
+            frozen = json.load(f)["keys"]
+        for change, narrows in ((add_allof, True), (add_oneof, True), (pattern, True),
+                                (comment_values, True), (map_values, True),
+                                (more_alternatives, False), (new_key, False), (to_number, False)):
+            s = schema.meshdict_schema()
+            change(s)
+            self.assertEqual(bool(problems(frozen, spec(s))), narrows, change.__name__)
 
     def test_snapshot_is_of_the_current_major_version(self):
         from cutmesh import __version__
