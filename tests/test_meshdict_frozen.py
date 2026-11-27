@@ -1,9 +1,11 @@
 """The meshDict specification of cutmesh 1.0 is frozen (the manual's "meshDict compatibility"):
 every key path of tests/data/meshdict_1.0.json must stay in the schema (cutmesh/schema.py)
 with the same types (or more), the same allowed values (or more), bounds that are the same or
-looser, no new restriction (an enum, a bound, a closed object, an allOf branch, a first
-oneOf / anyOf, any other validation keyword) and no new required key.  Keys may be added
-and restrictions dropped.  A top-level key leaves only through
+looser, no new restriction (an enum, a bound, a closed object, any other validation
+keyword) and no new required key.  Restrictions may be dropped.  A new sub-schema counts as
+a restriction unless it surely only adds: a property of a closed object (a new key), a map
+value schema on a closed object, another anyOf alternative.  So a new key in a map, a new
+allOf branch, oneOf alternative or patternProperties entry fails (conservatively).  A top-level key leaves only through
 config.DEPRECATED_KEYS.  Paths: "a/b" a property, "a/[]" the items of an array, "a/{}" the
 values of a map (additionalProperties), "a/{pattern}" those of patternProperties,
 "a/oneOf0" an alternative.
@@ -130,7 +132,7 @@ def narrowed(old, new):
     return why
 
 
-COMBINATOR = re.compile(r"(allOf|anyOf|oneOf)\d+$")
+COMBINATOR = re.compile(r"(allOf|anyOf|oneOf)\d+")
 
 
 def problems(frozen, now):
@@ -145,19 +147,25 @@ def problems(frozen, now):
         if path.split("/")[0] not in config.DEPRECATED_KEYS:
             out.append((path, "left the meshDict without going through config.DEPRECATED_KEYS"))
     for path in now:
-        m = COMBINATOR.search(path)
-        if path in frozen or not m:
+        if path in frozen or path == ".":
             continue
-        parent = path[:m.start()].rstrip("/") or "."
+        parent, _, last = path.rpartition("/")
+        parent = parent or "."
         if parent not in frozen:
-            continue                                  # under a new key or a new alternative
-        kind = m.group(1)
-        if kind == "allOf":
-            out.append((path, "a new allOf branch restricts the values"))
-        else:
+            continue                                  # under a new sub-schema: judged there
+        closed = frozen[parent].get("closed", False)
+        if not COMBINATOR.fullmatch(last) and last not in ("[]", "{}") and not last.startswith("{"):
+            if not closed:
+                out.append((path, "a new property of an open object restricts its values"))
+        elif last == "{}":
+            if not closed:
+                out.append((path, "a new map value schema restricts the values"))
+        elif last.startswith("anyOf"):
             prefix = "" if parent == "." else parent + "/"
-            if not any(re.fullmatch(re.escape(prefix) + kind + r"\d+", q) for q in frozen):
-                out.append((path, f"a first {kind} restricts the values"))
+            if not any(re.fullmatch(re.escape(prefix) + r"anyOf\d+", q) for q in frozen):
+                out.append((path, "a first anyOf restricts the values"))
+        else:                                         # allOf, oneOf, patternProperties, items
+            out.append((path, f"a new {last} restricts the values"))
     return out
 
 
@@ -190,6 +198,15 @@ class FrozenMeshDict(unittest.TestCase):
         self.assertTrue(narrowed({"type": ["number"]}, {"type": ["integer"]}))
         self.assertTrue(narrowed({"type": ["string"]}, {"type": ["string"], "other": {"pattern": "^a"}}))
 
+    def test_anyof_alternatives(self):
+        old = {"type": "object", "additionalProperties": False,
+               "properties": {"a": {"anyOf": [{"type": "string"}]}, "b": {"type": "string"}}}
+        new = json.loads(json.dumps(old))
+        new["properties"]["a"]["anyOf"].append({"type": "null"})
+        self.assertFalse(problems(spec(old), spec(new)))
+        new["properties"]["b"]["anyOf"] = [{"type": "string"}]
+        self.assertTrue(problems(spec(old), spec(new)))
+
     def test_changes_to_the_schema(self):
         """whole-schema changes: (change, narrows?)"""
         def add_allof(s):
@@ -198,8 +215,17 @@ class FrozenMeshDict(unittest.TestCase):
         def add_oneof(s):
             s["properties"]["case"]["oneOf"] = [{"type": "string"}, {"type": "null"}]
 
-        def more_alternatives(s):
+        def more_alternatives(s):    # a zone defined by a cylinder now matches two branches
             s["properties"]["rotatingZones"]["items"]["oneOf"].append({"required": ["name"]})
+
+        def map_pattern(s):          # {"rotor": 2} must now also be a string
+            s["properties"]["surfaceRefinement"]["patternProperties"] = {"^rotor$": {"type": "string"}}
+
+        def map_property(s):         # the same through properties
+            s["properties"]["surfaceRefinement"]["properties"] = {"rotor": {"type": "string"}}
+
+        def zone_key(s):             # a new key of a closed object
+            s["properties"]["rotatingZones"]["items"]["properties"]["newKey"] = {"type": "number"}
 
         def pattern(s):
             s["properties"]["case"]["pattern"] = "^[a-z]+$"
@@ -220,7 +246,8 @@ class FrozenMeshDict(unittest.TestCase):
             frozen = json.load(f)["keys"]
         for change, narrows in ((add_allof, True), (add_oneof, True), (pattern, True),
                                 (comment_values, True), (map_values, True),
-                                (more_alternatives, False), (new_key, False), (to_number, False)):
+                                (more_alternatives, True), (map_pattern, True), (map_property, True),
+                                (new_key, False), (zone_key, False), (to_number, False)):
             s = schema.meshdict_schema()
             change(s)
             self.assertEqual(bool(problems(frozen, spec(s))), narrows, change.__name__)
