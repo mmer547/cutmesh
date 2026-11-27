@@ -5,6 +5,7 @@
    "type": [
     "object"
    ],
+   "closed": true,
    "required": [
     "baseCellSize",
     "domain"
@@ -13,11 +14,16 @@
   "domain": {
    "type": [
     "string"
-   ]
+   ],
+   "minLength": 1
   },
   "baseCellSize": {
    "type": [
     "number"
+   ],
+   "lower": [
+    0,
+    true
    ]
   },
   "case": {
@@ -30,9 +36,19 @@
     "object"
    ]
   },
+  "patchTypes/{}": {
+   "type": [
+    "string"
+   ],
+   "minLength": 1
+  },
   "padding": {
    "type": [
     "integer"
+   ],
+   "lower": [
+    0,
+    false
    ]
   },
   "surfaceRefinement": {
@@ -40,15 +56,36 @@
     "object"
    ]
   },
+  "surfaceRefinement/{}": {
+   "type": [
+    "integer"
+   ],
+   "lower": [
+    0,
+    false
+   ]
+  },
   "featureLevel": {
    "type": [
     "integer",
     "null"
+   ],
+   "lower": [
+    0,
+    false
    ]
   },
   "featureAngle": {
    "type": [
     "number"
+   ],
+   "lower": [
+    0,
+    true
+   ],
+   "upper": [
+    180,
+    true
    ]
   },
   "refinementRegions": {
@@ -60,6 +97,7 @@
    "type": [
     "object"
    ],
+   "closed": true,
    "required": [
     "cylinder",
     "level"
@@ -69,6 +107,7 @@
    "type": [
     "object"
    ],
+   "closed": true,
    "required": [
     "point1",
     "point2",
@@ -78,7 +117,9 @@
   "refinementRegions/[]/cylinder/point1": {
    "type": [
     "array"
-   ]
+   ],
+   "minItems": 3,
+   "maxItems": 3
   },
   "refinementRegions/[]/cylinder/point1/[]": {
    "type": [
@@ -88,7 +129,9 @@
   "refinementRegions/[]/cylinder/point2": {
    "type": [
     "array"
-   ]
+   ],
+   "minItems": 3,
+   "maxItems": 3
   },
   "refinementRegions/[]/cylinder/point2/[]": {
    "type": [
@@ -98,12 +141,18 @@
   "refinementRegions/[]/cylinder/radius": {
    "type": [
     "number"
+   ],
+   "lower": [
+    0,
+    true
    ]
   },
   "refinementRegions/[]/cylinder/origin": {
    "type": [
     "array"
-   ]
+   ],
+   "minItems": 3,
+   "maxItems": 3
   },
   "refinementRegions/[]/cylinder/origin/[]": {
    "type": [
@@ -113,11 +162,19 @@
   "refinementRegions/[]/level": {
    "type": [
     "integer"
+   ],
+   "lower": [
+    0,
+    false
    ]
   },
   "bufferLayers": {
    "type": [
     "integer"
+   ],
+   "lower": [
+    0,
+    false
    ]
   },
   "gapRefinement": {
@@ -125,6 +182,7 @@
     "null",
     "object"
    ],
+   "closed": true,
    "required": [
     "level",
     "thickness"
@@ -133,11 +191,19 @@
   "gapRefinement/thickness": {
    "type": [
     "number"
+   ],
+   "lower": [
+    0,
+    true
    ]
   },
   "gapRefinement/level": {
    "type": [
     "integer"
+   ],
+   "lower": [
+    0,
+    false
    ]
   },
   "autoGapRefinement": {
@@ -145,16 +211,25 @@
     "boolean",
     "null",
     "object"
-   ]
+   ],
+   "closed": true
   },
   "autoGapRefinement/cellsAcross": {
    "type": [
     "number"
+   ],
+   "lower": [
+    0,
+    true
    ]
   },
   "autoGapRefinement/maxLevel": {
    "type": [
     "integer"
+   ],
+   "lower": [
+    0,
+    false
    ]
   },
   "rotatingZones": {
@@ -166,6 +241,7 @@
    "type": [
     "object"
    ],
+   "closed": true,
    "required": [
     "name"
    ]
@@ -173,12 +249,14 @@
   "rotatingZones/[]/name": {
    "type": [
     "string"
-   ]
+   ],
+   "minLength": 1
   },
   "rotatingZones/[]/cylinder": {
    "type": [
     "object"
    ],
+   "closed": true,
    "required": [
     "point1",
     "point2",
@@ -188,7 +266,9 @@
   "rotatingZones/[]/cylinder/point1": {
    "type": [
     "array"
-   ]
+   ],
+   "minItems": 3,
+   "maxItems": 3
   },
   "rotatingZones/[]/cylinder/point1/[]": {
    "type": [
@@ -198,7 +278,9 @@
   "rotatingZones/[]/cylinder/point2": {
    "type": [
     "array"
-   ]
+   ],
+   "minItems": 3,
+   "maxItems": 3
   },
   "rotatingZones/[]/cylinder/point2/[]": {
    "type": [
@@ -208,12 +290,18 @@
   "rotatingZones/[]/cylinder/radius": {
    "type": [
     "number"
+   ],
+   "lower": [
+    0,
+    true
    ]
   },
   "rotatingZones/[]/cylinder/origin": {
    "type": [
     "array"
-   ]
+   ],
+   "minItems": 3,
+   "maxItems": 3
   },
   "rotatingZones/[]/cylinder/origin/[]": {
    "type": [
@@ -223,12 +311,15 @@
   "rotatingZones/[]/stl": {
    "type": [
     "string"
-   ]
+   ],
+   "minLength": 1
   },
   "rotatingZones/[]/origin": {
    "type": [
     "array"
-   ]
+   ],
+   "minItems": 3,
+   "maxItems": 3
   },
   "rotatingZones/[]/origin/[]": {
    "type": [
@@ -238,7 +329,9 @@
   "rotatingZones/[]/axis": {
    "type": [
     "array"
-   ]
+   ],
+   "minItems": 3,
+   "maxItems": 3
   },
   "rotatingZones/[]/axis/[]": {
    "type": [
@@ -248,11 +341,19 @@
   "rotatingZones/[]/surfaceLevel": {
    "type": [
     "integer"
+   ],
+   "lower": [
+    0,
+    false
    ]
   },
   "rotatingZones/[]/volumeLevel": {
    "type": [
     "integer"
+   ],
+   "lower": [
+    0,
+    false
    ]
   },
   "rotatingZones/[]/omega": {
@@ -275,6 +376,7 @@
     "null",
     "object"
    ],
+   "closed": true,
    "required": [
     "distance",
     "level"
@@ -283,16 +385,28 @@
   "rotatingZones/[]/wallProximity/distance": {
    "type": [
     "number"
+   ],
+   "lower": [
+    0,
+    true
    ]
   },
   "rotatingZones/[]/wallProximity/level": {
    "type": [
     "integer"
+   ],
+   "lower": [
+    0,
+    false
    ]
   },
   "rotatingZones/[]/wallProximity/bufferLayers": {
    "type": [
     "integer"
+   ],
+   "lower": [
+    0,
+    false
    ]
   },
   "rotatingZones/[]/ami": {
@@ -320,31 +434,63 @@
   "snapTolerance": {
    "type": [
     "number"
+   ],
+   "lower": [
+    0,
+    false
    ]
   },
   "featureSnapTolerance": {
    "type": [
     "number"
+   ],
+   "lower": [
+    0,
+    false
    ]
   },
   "featureSnapMax": {
    "type": [
     "number"
+   ],
+   "lower": [
+    0,
+    false
    ]
   },
   "concaveSnapMax": {
    "type": [
     "number"
+   ],
+   "lower": [
+    0,
+    false
    ]
   },
   "mergeRatio": {
    "type": [
     "number"
+   ],
+   "lower": [
+    0,
+    false
+   ],
+   "upper": [
+    1,
+    true
    ]
   },
   "mergeMaxNonOrtho": {
    "type": [
     "number"
+   ],
+   "lower": [
+    0,
+    true
+   ],
+   "upper": [
+    90,
+    false
    ]
   },
   "hangingSnap": {
@@ -384,26 +530,54 @@
   "fillThinGaps": {
    "type": [
     "integer"
+   ],
+   "lower": [
+    0,
+    false
    ]
   },
   "fillThinWalls": {
    "type": [
     "integer"
+   ],
+   "lower": [
+    0,
+    false
    ]
   },
   "thinCutCells": {
    "type": [
     "integer"
+   ],
+   "lower": [
+    0,
+    false
    ]
   },
   "thinCutFraction": {
    "type": [
     "number"
+   ],
+   "lower": [
+    0,
+    true
+   ],
+   "upper": [
+    1,
+    true
    ]
   },
   "minRegionVolume": {
    "type": [
     "number"
+   ],
+   "lower": [
+    0,
+    false
+   ],
+   "upper": [
+    1,
+    true
    ]
   },
   "checkLeaks": {
@@ -419,6 +593,10 @@
   "volumeCheckTolerance": {
    "type": [
     "number"
+   ],
+   "lower": [
+    0,
+    false
    ]
   },
   "writeFormat": {
@@ -460,7 +638,8 @@
    "type": [
     "null",
     "object"
-   ]
+   ],
+   "closed": true
   },
   "baseMesh/type": {
    "type": [
@@ -474,7 +653,9 @@
   "baseMesh/origin": {
    "type": [
     "array"
-   ]
+   ],
+   "minItems": 3,
+   "maxItems": 3
   },
   "baseMesh/origin/[]": {
    "type": [
@@ -484,7 +665,9 @@
   "baseMesh/axis": {
    "type": [
     "array"
-   ]
+   ],
+   "minItems": 3,
+   "maxItems": 3
   },
   "baseMesh/axis/[]": {
    "type": [
@@ -494,7 +677,9 @@
   "baseMesh/zRange": {
    "type": [
     "array"
-   ]
+   ],
+   "minItems": 2,
+   "maxItems": 2
   },
   "baseMesh/zRange/[]": {
    "type": [
@@ -504,26 +689,46 @@
   "baseMesh/nz": {
    "type": [
     "integer"
+   ],
+   "lower": [
+    1,
+    false
    ]
   },
   "baseMesh/dz": {
    "type": [
     "number"
+   ],
+   "lower": [
+    0,
+    true
    ]
   },
   "baseMesh/rOuter": {
    "type": [
     "number"
+   ],
+   "lower": [
+    0,
+    true
    ]
   },
   "baseMesh/cellSize": {
    "type": [
     "number"
+   ],
+   "lower": [
+    0,
+    true
    ]
   },
   "baseMesh/maxSizeRatio": {
    "type": [
     "number"
+   ],
+   "lower": [
+    0,
+    true
    ]
   },
   "baseMesh/core": {
@@ -538,11 +743,19 @@
   "baseMesh/core/halfWidth": {
    "type": [
     "number"
+   ],
+   "lower": [
+    0,
+    true
    ]
   },
   "baseMesh/core/n": {
    "type": [
     "integer"
+   ],
+   "lower": [
+    1,
+    false
    ]
   },
   "baseMesh/blocks": {
@@ -562,16 +775,28 @@
   "baseMesh/blocks/[]/rOuter": {
    "type": [
     "number"
+   ],
+   "lower": [
+    0,
+    true
    ]
   },
   "baseMesh/blocks/[]/nr": {
    "type": [
     "integer"
+   ],
+   "lower": [
+    1,
+    false
    ]
   },
   "baseMesh/blocks/[]/nTheta": {
    "type": [
     "integer"
+   ],
+   "lower": [
+    4,
+    false
    ]
   },
   "baseMesh/blocks/[]/radii": {
@@ -588,7 +813,8 @@
    "type": [
     "null",
     "object"
-   ]
+   ],
+   "closed": true
   },
   "addLayers/patches": {
    "type": [
@@ -604,16 +830,28 @@
   "addLayers/nLayers": {
    "type": [
     "integer"
+   ],
+   "lower": [
+    1,
+    false
    ]
   },
   "addLayers/expansionRatio": {
    "type": [
     "number"
+   ],
+   "lower": [
+    0,
+    true
    ]
   },
   "addLayers/finalLayerThickness": {
    "type": [
     "number"
+   ],
+   "lower": [
+    0,
+    true
    ]
   },
   "addLayers/relativeSizes": {
@@ -624,27 +862,51 @@
   "addLayers/minThickness": {
    "type": [
     "number"
+   ],
+   "lower": [
+    0,
+    false
    ]
   },
   "addLayers/maxNonOrtho": {
    "type": [
     "number"
+   ],
+   "lower": [
+    0,
+    true
+   ],
+   "upper": [
+    90,
+    false
    ]
   },
   "addLayers/maxSkewness": {
    "type": [
     "null",
     "number"
+   ],
+   "lower": [
+    0,
+    true
    ]
   },
   "addLayers/maxGapFraction": {
    "type": [
     "number"
+   ],
+   "lower": [
+    0,
+    false
    ]
   },
   "addLayers/maxThicknessSlope": {
    "type": [
     "number"
+   ],
+   "lower": [
+    0,
+    false
    ]
   },
   "addLayers/minNormalCos": {
@@ -666,6 +928,10 @@
   "addLayers/mergeWallPoints": {
    "type": [
     "number"
+   ],
+   "lower": [
+    0,
+    false
    ]
   },
   "addLayers/concaveSlide": {
@@ -677,22 +943,41 @@
   "addLayers/nRings": {
    "type": [
     "integer"
+   ],
+   "lower": [
+    0,
+    false
    ]
   },
   "addLayers/nSmooth": {
    "type": [
     "integer"
+   ],
+   "lower": [
+    0,
+    false
    ]
   },
   "addLayers/nIter": {
    "type": [
     "integer"
+   ],
+   "lower": [
+    0,
+    false
    ]
   },
   "addLayers/nCollapseIter": {
    "type": [
     "integer"
+   ],
+   "lower": [
+    0,
+    false
    ]
+  },
+  "{^(_|//)}": {
+   "type": []
   }
  }
 }
