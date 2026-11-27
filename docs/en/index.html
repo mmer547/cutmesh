@@ -40,6 +40,9 @@
 
 <h2 id="news">News</h2>
 <ul class="news">
+  <li><time datetime="2026-11-27">2026-11-27</time><span class="ver">v1.0.0</span>
+    <p><strong>First stable version.</strong> The meshDict specification is frozen: within 1.x, keys are not removed, renamed, or given a new meaning (<a href="manual.html#compat">meshDict compatibility</a>). A test holds the 1.0 keys with their types, allowed values, and required keys, and stops changes that would break them.
+    All the v1.0 conditions are met: CI passes, no known leaks, the public examples pass OpenFOAM's <code>checkMesh</code>, wheels are distributed, and the meshDict specification is frozen. The <a href="https://github.com/mmer547/cutmesh/blob/main/CHANGELOG.en.md">CHANGELOG</a> collects the changes of every version. Meshes are unchanged.</p></li>
   <li><time datetime="2026-11-27">2026-11-27</time><span class="ver">v0.9.0</span>
     <p><strong>Packaging.</strong> Wheels with the Rust extension built in (Linux, Windows, and macOS, for any Python 3.9 or later) are attached to the <a href="https://github.com/mmer547/cutmesh/releases">GitHub releases</a>. Download one and <code>pip install</code> it to get the fast version without building anything. cutmesh is not published on PyPI.
     The <a href="manual.html#compat">meshDict compatibility policy</a> from 1.0 is set, and retired or renamed keys are read as their replacement with a warning. Meshes are unchanged.</p></li>
@@ -82,7 +85,7 @@
     <p>First release with octree cut-cell meshing inside STLs, OpenFOAM polyMesh export, rotating-zone cuts,
     prismatic boundary layers, and a Rust extension for faster geometry calculations.</p></li>
 </ul>
-<p class="news-note">Versions and dates were assigned retrospectively to milestones in the commit history. cutmesh is still in pre-1.0 development.</p>
+<p class="news-note">Versions v0.1.0 to v0.4.0 and their dates were assigned retrospectively to milestones in the commit history. The <a href="https://github.com/mmer547/cutmesh/blob/main/CHANGELOG.en.md">CHANGELOG</a> lists the changes too.</p>
 
 <h2>Features</h2>
 <div class="cards">
@@ -142,7 +145,7 @@ cutmesh meshDict.json                 # → case/constant/polyMesh</code></pre>
 </div>
 
 <div class="note">
-  <p>cutmesh is a prototype. Its built-in quality checks use the same formulas as <code>checkMesh</code>, and testing with OpenFOAM itself is limited. Run <code>checkMesh</code> locally before using a mesh.</p>
+  <p>cutmesh's built-in quality checks use the same formulas as <code>checkMesh</code>. CI runs OpenFOAM's own <code>checkMesh</code> (v2512) on the public examples only, so run <code>checkMesh</code> locally on meshes of your own geometry.</p>
 </div>
 </main>
 
