@@ -76,6 +76,9 @@ def spec(s=None):
     out = {}
 
     def walk(node, path):
+        if isinstance(node, bool):                    # true: anything, false: nothing
+            out["/".join(path) or "."] = {"type": []} if node else {"type": [], "never": True}
+            return
         if not isinstance(node, dict):
             return
         e = {"type": _types(node)}
@@ -100,9 +103,9 @@ def spec(s=None):
         out["/".join(path) or "."] = e
         for k, v in node.get("properties", {}).items():
             walk(v, path + [_seg(k)])
-        if isinstance(node.get("items"), dict):
+        if isinstance(node.get("items"), (dict, bool)):
             walk(node["items"], path + ["[]"])
-        if isinstance(node.get("additionalProperties"), dict):
+        if isinstance(node.get("additionalProperties"), dict) or node.get("additionalProperties") is True:
             walk(node["additionalProperties"], path + ["{}"])
         for pat, v in node.get("patternProperties", {}).items():
             walk(v, path + ["{" + _seg(pat) + "}"])
@@ -116,6 +119,10 @@ def spec(s=None):
 def narrowed(old, new):
     """how the entry new restricts more than old (a list of reasons; empty: compatible)"""
     why = []
+    if old.get("never"):
+        return why                                    # nothing was accepted
+    if new.get("never"):
+        return ["accepts nothing (false)"]
     if not _accepts(old["type"], new["type"]):
         why.append(f"type {old['type'] or 'any'} -> {new['type'] or 'any'}")
     if "enum" in new:
@@ -249,6 +256,18 @@ class FrozenMeshDict(unittest.TestCase):
         def comment_key(s):          # "_note": 123 was a valid comment
             s["properties"]["_note"] = {"type": "string"}
 
+        def false_allof(s):
+            s["properties"]["case"]["allOf"] = [False]
+
+        def false_pattern(s):
+            s["properties"]["surfaceRefinement"]["patternProperties"] = {"^rotor$": False}
+
+        def false_map(s):
+            s["properties"]["surfaceRefinement"]["additionalProperties"] = False
+
+        def false_key(s):
+            s["properties"]["case"] = False
+
         def zone_key(s):             # a new key of a closed object
             s["properties"]["rotatingZones"]["items"]["properties"]["newKey"] = {"type": "number"}
 
@@ -273,6 +292,8 @@ class FrozenMeshDict(unittest.TestCase):
                                 (comment_values, True), (map_values, True),
                                 (more_alternatives, True), (map_pattern, True), (map_property, True),
                                 (broader_alternative, True), (comment_key, True),
+                                (false_allof, True), (false_pattern, True), (false_map, True),
+                                (false_key, True),
                                 (new_key, False), (zone_key, False), (to_number, False)):
             s = schema.meshdict_schema()
             change(s)
