@@ -113,26 +113,44 @@ def _rel(cfg, p):
     return p if os.path.isabs(p) else os.path.join(cfg["_base"], p)
 
 
-def _cgroup_memory(root="/sys/fs/cgroup"):
-    """(limit, usage) in bytes of this process's memory cgroup (v2 or v1), None where there
+def _cgroup_memory(root="/sys/fs/cgroup", proc="/proc/self/cgroup"):
+    """(limit, usage) in bytes of the tightest memory limit over this process's cgroup and
+    its ancestors (cgroup v2 or v1, the process's own group from proc), None where there
     is no limit or it cannot be read"""
-    for lim, use in (("memory.max", "memory.current"),
-                     ("memory/memory.limit_in_bytes", "memory/memory.usage_in_bytes")):
+    def read(p):
         try:
-            with open(os.path.join(root, lim)) as f:
+            with open(p) as f:
                 v = f.read().strip()
+            return int(v) if v.isdigit() else None
         except OSError:
+            return None
+    try:
+        with open(proc) as f:
+            lines = f.read().splitlines()
+    except OSError:
+        lines = []
+    groups = []                         # (directory of the hierarchy, path of the group)
+    for s in lines:
+        parts = s.split(":", 2)
+        if len(parts) != 3:
             continue
-        if not v.isdigit():
-            return None, None                    # "max": no limit
-        try:
-            with open(os.path.join(root, use)) as f:
-                u = f.read().strip()
-            used = int(u) if u.isdigit() else None
-        except OSError:
-            used = None
-        return int(v), used
-    return None, None
+        if parts[0] == "0" and parts[1] == "":
+            groups.append(("", parts[2]))                                     # v2
+        elif "memory" in parts[1].split(","):
+            groups.append(("memory", parts[2]))                               # v1
+    if not groups:
+        groups = [("", "/"), ("memory", "/")]
+    best = (None, None)
+    for sub, path in groups:
+        lim, use = ("memory.max", "memory.current") if sub == "" else \
+                   ("memory.limit_in_bytes", "memory.usage_in_bytes")
+        parts = [q for q in path.split("/") if q]
+        for k in range(len(parts), -1, -1):     # the group, then its ancestors up to the root
+            d = os.path.join(root, sub, *parts[:k])
+            v = read(os.path.join(d, lim))
+            if v is not None and (best[0] is None or v < best[0]):
+                best = (v, read(os.path.join(d, use)))
+    return best
 
 
 def _memory():
@@ -196,13 +214,31 @@ def _min_cells(cfg, dom, zones, regions, h0, region_level, n_axis=32):
     X = np.stack(np.meshgrid(*g, indexing="ij"), -1).reshape(-1, 3)
     X = X[dom.inside(X)]
     if len(X):
+        vols = [(z["geom"], int(z["volumeLevel"])) for z in zones] + list(regions)
         lev = np.zeros(len(X))
-        for geom, lv in [(z["geom"], int(z["volumeLevel"])) for z in zones] + list(regions):
+        owner = np.full(len(X), -1)                 # the region giving a point its level
+        for k, (geom, lv) in enumerate(vols):
             if lv > 0:
-                lev = np.where(geom.inside(X), np.maximum(lev, lv), lev)
+                m = geom.inside(X) & (lv > lev)
+                lev[m] = lv
+                owner[m] = k
         dv = float(np.prod(hi - lo)) / n_axis ** 3
-        n += 0.5 * float(np.sum(dv / (h0 / 2.0 ** lev) ** 3))
+        cells = dv / (h0 / 2.0 ** lev) ** 3
+        n += 0.5 * float(cells[owner < 0].sum())
+        for k, (geom, lv) in enumerate(vols):
+            if (owner == k).any():
+                # a region smaller than a lattice cell would get the whole cell: at most its
+                # own volume counts
+                n += 0.5 * min(float(cells[owner == k].sum()), _volume(geom) / (h0 / 2.0 ** lv) ** 3)
     return n
+
+
+def _volume(geom):
+    """the volume of a refinement region or rotating zone (a Cylinder or a closed STL)"""
+    if isinstance(geom, Cylinder):
+        return np.pi * geom.R ** 2 * geom.H
+    t = geom.s.tris
+    return abs(float(np.einsum("ij,ij->i", t[:, 0], np.cross(t[:, 1], t[:, 2])).sum()) / 6)
 
 
 def _check_size(n, log, memory=None):

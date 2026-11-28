@@ -201,20 +201,34 @@ class SizeCheck(TempDir):
             _check_size(1e11, msgs.append, memory=(None, None))                    # memory unknown
 
     def test_cgroup_memory(self):
-        """a container's limit and what it already uses (the free memory is what is left)"""
+        """the tightest limit over the process's own cgroup and its ancestors, with that
+        group's usage (cgroup v2 and v1; the group from /proc/self/cgroup)"""
         from cutmesh.mesher import _cgroup_memory
+        none = os.path.join(self.d, "noproc")
         os.makedirs(os.path.join(self.d, "v2"))
         self.write("v2/memory.max", "2147483648\n")
         self.write("v2/memory.current", "1932735283\n")              # 1.8 GiB used
-        self.assertEqual(_cgroup_memory(os.path.join(self.d, "v2")), (2147483648, 1932735283))
-        os.makedirs(os.path.join(self.d, "v1", "memory"))
-        self.write("v1/memory/memory.limit_in_bytes", "1073741824\n")
-        self.write("v1/memory/memory.usage_in_bytes", "100\n")
-        self.assertEqual(_cgroup_memory(os.path.join(self.d, "v1")), (1073741824, 100))
+        self.assertEqual(_cgroup_memory(os.path.join(self.d, "v2"), none), (2147483648, 1932735283))
+        # a limit on an ancestor of the process's group, none at the root or on the group
+        r = os.path.join(self.d, "tree")
+        for d in ("", "a", "a/b"):
+            os.makedirs(os.path.join(r, d), exist_ok=True)
+            self.write(os.path.join("tree", d, "memory.max"), "max\n")
+        self.write("tree/a/memory.max", "1073741824\n")
+        self.write("tree/a/memory.current", "123\n")
+        proc = self.write("cg2", "0::/a/b\n")
+        self.assertEqual(_cgroup_memory(r, proc), (1073741824, 123))
+        # v1: the memory controller's line
+        os.makedirs(os.path.join(self.d, "v1", "memory", "x", "y"))
+        self.write("v1/memory/memory.limit_in_bytes", "9223372036854771712\n")
+        self.write("v1/memory/x/y/memory.limit_in_bytes", "536870912\n")
+        self.write("v1/memory/x/y/memory.usage_in_bytes", "100\n")
+        proc = self.write("cg1", "5:devices:/\n4:memory:/x/y\n0::/\n")
+        self.assertEqual(_cgroup_memory(os.path.join(self.d, "v1"), proc), (536870912, 100))
         os.makedirs(os.path.join(self.d, "nolimit"))
         self.write("nolimit/memory.max", "max\n")
-        self.assertEqual(_cgroup_memory(os.path.join(self.d, "nolimit")), (None, None))
-        self.assertEqual(_cgroup_memory(os.path.join(self.d, "none")), (None, None))
+        self.assertEqual(_cgroup_memory(os.path.join(self.d, "nolimit"), none), (None, None))
+        self.assertEqual(_cgroup_memory(os.path.join(self.d, "none"), none), (None, None))
         # _memory: the container's limit is the total, what it has left the free memory
         from unittest import mock
         import cutmesh.mesher as M
@@ -250,6 +264,10 @@ class SizeCheck(TempDir):
         self.assertLess(n1, 1e4)                                  # the box in level-1 cells: 512
         self.assertGreater(n1, n0)
         self.assertAlmostEqual(_min_cells(cfg, dom, [], [(huge, 1), (huge, 1)], 0.25, lev), n1)
+        # a region smaller than a lattice cell, on a lattice point, counts its own volume only
+        c = 0.5 + 0.5 / 32
+        tiny = Cylinder([c, c, c - 1e-6], [c, c, c + 1e-6], 1e-6)
+        self.assertLess(_min_cells(cfg, dom, [], [(tiny, 11)], 0.25, lev) - n0, 1)
         from cutmesh.mesher import _check_size
         _check_size(n1, lambda s: None, memory=(2 ** 30, 2 ** 30))  # no error
 
