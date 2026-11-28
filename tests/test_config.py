@@ -209,6 +209,24 @@ class SizeCheck(TempDir):
             generate(load_config(p), log=lambda s: None)
         self.assertIn("Lower the refinement levels", str(cm.exception))
 
+    def test_volume_only_inside_the_domain_and_once(self):
+        """a refinement cylinder reaching far beyond the domain, or two over the same place,
+        count only the fluid they cover, once"""
+        from cutmesh.mesher import _min_cells
+        from cutmesh.geometry import Surface
+        write_stl_ascii(os.path.join(self.d, "box.stl"), [("walls", box())])
+        cfg = load_config(self.write("m.json", json.dumps({"domain": "box.stl", "baseCellSize": 0.25})))
+        dom = Surface(read_stl(os.path.join(self.d, "box.stl")), log=lambda s: None)
+        lev = np.zeros(1)
+        huge = Cylinder([0.5, 0.5, -1000], [0.5, 0.5, 1000], 1000)
+        n0 = _min_cells(cfg, dom, [], [], 0.25, lev)
+        n1 = _min_cells(cfg, dom, [], [(huge, 1)], 0.25, lev)
+        self.assertLess(n1, 1e4)                                  # the box in level-1 cells: 512
+        self.assertGreater(n1, n0)
+        self.assertAlmostEqual(_min_cells(cfg, dom, [], [(huge, 1), (huge, 1)], 0.25, lev), n1)
+        from cutmesh.mesher import _check_size
+        _check_size(n1, lambda s: None, memory=(2 ** 30, 2 ** 30))  # no error
+
     def test_lower_bound_of_the_examples(self):
         """the estimate stays below the cells the examples get (it is a lower bound)"""
         from cutmesh.mesher import _min_cells, build_zones

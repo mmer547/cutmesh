@@ -161,24 +161,29 @@ _BYTES_PER_CELL = 1000.0
 _MAX_CELLS = 1e10            # beyond any machine, whatever its memory
 
 
-def _min_cells(cfg, dom, zones, regions, h0, region_level):
-    """a lower bound of the cell count the settings ask for: the fluid volume in base cells,
-    each STL region's area in cells of its level, the rotating zones (their surface and
-    volume levels, cylinders only) and the refinement regions.  Buffer layers, feature
-    edges, gaps and STL zones are left out, so the mesh has more cells (1.3 to 30 x on the
+def _min_cells(cfg, dom, zones, regions, h0, region_level, n_axis=32):
+    """a lower bound of the cell count the settings ask for: each STL region's area in cells
+    of its level, and the fluid volume in cells of the finest volume level over it (base
+    cells, the rotating zones' volumeLevel, the refinement regions), sampled on an n_axis^3
+    lattice over the domain's bounding box (only the fluid is counted, overlaps once, half
+    the sampled volume to keep below the true one).  Buffer layers, feature edges, gaps and
+    the zones' surfaces are left out, so the mesh has more cells (1.3 to 30 x on the
     examples)."""
     t = dom.tris
     area = 0.5 * np.linalg.norm(np.cross(t[:, 1] - t[:, 0], t[:, 2] - t[:, 0]), axis=1)
     A = np.bincount(dom.region, weights=area, minlength=len(dom.names))
-    vol = abs(float(np.einsum("ij,ij->i", t[:, 0], np.cross(t[:, 1], t[:, 2])).sum()) / 6)
-    n = vol / h0 ** 3 + float(np.sum(A / (h0 / 2.0 ** region_level) ** 2))
-    for z in zones:
-        g = z["geom"]
-        if isinstance(g, Cylinder):
-            hs, hv = h0 / 2.0 ** int(z["surfaceLevel"]), h0 / 2.0 ** int(z["volumeLevel"])
-            n += 2 * np.pi * g.R * (g.H + g.R) / hs ** 2 + np.pi * g.R ** 2 * g.H / hv ** 3
-    for c, lv in regions:
-        n += np.pi * c.R ** 2 * c.H / (h0 / 2.0 ** lv) ** 3
+    n = float(np.sum(A / (h0 / 2.0 ** region_level) ** 2))
+    lo, hi = dom.bbmin, dom.bbmax
+    g = [lo[k] + (np.arange(n_axis) + 0.5) * (hi[k] - lo[k]) / n_axis for k in range(3)]
+    X = np.stack(np.meshgrid(*g, indexing="ij"), -1).reshape(-1, 3)
+    X = X[dom.inside(X)]
+    if len(X):
+        lev = np.zeros(len(X))
+        for geom, lv in [(z["geom"], int(z["volumeLevel"])) for z in zones] + list(regions):
+            if lv > 0:
+                lev = np.where(geom.inside(X), np.maximum(lev, lv), lev)
+        dv = float(np.prod(hi - lo)) / n_axis ** 3
+        n += 0.5 * float(np.sum(dv / (h0 / 2.0 ** lev) ** 3))
     return n
 
 
