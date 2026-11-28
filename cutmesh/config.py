@@ -270,11 +270,8 @@ def validate_config(cfg, log=None, layer_keys=None):
         c.num(cfg["baseCellSize"], "baseCellSize", lo=0, lo_open=True)
     if not isinstance(cfg.get("case", "."), str):
         c.err(f"case must be a directory name, got {cfg['case']!r}")
-    else:
-        case = cfg.get("case", ".")
-        full = case if os.path.isabs(case) else os.path.join(cfg.get("_base", "."), case)
-        if os.path.exists(full) and not os.path.isdir(full):
-            c.err(f"case must be a directory, but {full} is a file")
+    # (that the case is not a file is checked by mesher.run on the directory actually used:
+    # -case overrides it)
 
     for k in ("bufferLayers", "padding", "fillThinGaps", "fillThinWalls", "thinCutCells"):
         c.int_(cfg[k], k)

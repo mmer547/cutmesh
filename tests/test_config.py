@@ -6,7 +6,7 @@ import os
 import struct
 import tempfile
 import unittest
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 
 import numpy as np
 
@@ -360,6 +360,13 @@ class TestCLI(TempDir):
         rc, err = self.run_cli(p, "-case", f)                 # the same through -case
         self.assertEqual(rc, 1)
         self.assertIn("must be a directory", err)
+        # -case overrides the meshDict's case: a file there does not matter then
+        out = os.path.join(self.d, "out")
+        with redirect_stdout(io.StringIO()):
+            rc, err = self.run_cli(self.write("m3.json", json.dumps(
+                {"domain": "box.stl", "baseCellSize": 0.5, "case": "notadir"})), "-case", out, "-noCheck")
+        self.assertEqual(rc, 0, err)
+        self.assertTrue(os.path.isfile(os.path.join(out, "constant", "polyMesh", "owner")))
 
     def test_empty_stl_is_reported(self):
         self.write("e.stl", b"")
