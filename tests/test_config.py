@@ -200,6 +200,32 @@ class SizeCheck(TempDir):
         with self.assertRaises(ConfigError):
             _check_size(1e11, msgs.append, memory=(None, None))                    # memory unknown
 
+    def test_cgroup_memory(self):
+        """a container's limit and what it already uses (the free memory is what is left)"""
+        from cutmesh.mesher import _cgroup_memory
+        os.makedirs(os.path.join(self.d, "v2"))
+        self.write("v2/memory.max", "2147483648\n")
+        self.write("v2/memory.current", "1932735283\n")              # 1.8 GiB used
+        self.assertEqual(_cgroup_memory(os.path.join(self.d, "v2")), (2147483648, 1932735283))
+        os.makedirs(os.path.join(self.d, "v1", "memory"))
+        self.write("v1/memory/memory.limit_in_bytes", "1073741824\n")
+        self.write("v1/memory/memory.usage_in_bytes", "100\n")
+        self.assertEqual(_cgroup_memory(os.path.join(self.d, "v1")), (1073741824, 100))
+        os.makedirs(os.path.join(self.d, "nolimit"))
+        self.write("nolimit/memory.max", "max\n")
+        self.assertEqual(_cgroup_memory(os.path.join(self.d, "nolimit")), (None, None))
+        self.assertEqual(_cgroup_memory(os.path.join(self.d, "none")), (None, None))
+        # _memory: the container's limit is the total, what it has left the free memory
+        from unittest import mock
+        import cutmesh.mesher as M
+        with mock.patch.object(M, "_cgroup_memory", return_value=(2 * 2 ** 30, int(1.8 * 2 ** 30))):
+            total, avail = M._memory()
+        if total == 2 * 2 ** 30:                     # (a machine with less memory keeps its own)
+            self.assertAlmostEqual(avail / 2 ** 30, 0.2, places=3)
+            msgs = []
+            M._check_size(1e6, msgs.append, memory=(total, avail))            # 1 GB: more than is left
+            self.assertTrue(msgs)
+
     def test_extreme_level_stops_before_meshing(self):
         write_stl_ascii(os.path.join(self.d, "box.stl"), [("walls", box())])
         p = self.write("m.json", json.dumps({"domain": "box.stl", "baseCellSize": 0.1,

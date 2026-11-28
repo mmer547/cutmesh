@@ -113,6 +113,28 @@ def _rel(cfg, p):
     return p if os.path.isabs(p) else os.path.join(cfg["_base"], p)
 
 
+def _cgroup_memory(root="/sys/fs/cgroup"):
+    """(limit, usage) in bytes of this process's memory cgroup (v2 or v1), None where there
+    is no limit or it cannot be read"""
+    for lim, use in (("memory.max", "memory.current"),
+                     ("memory/memory.limit_in_bytes", "memory/memory.usage_in_bytes")):
+        try:
+            with open(os.path.join(root, lim)) as f:
+                v = f.read().strip()
+        except OSError:
+            continue
+        if not v.isdigit():
+            return None, None                    # "max": no limit
+        try:
+            with open(os.path.join(root, use)) as f:
+                u = f.read().strip()
+            used = int(u) if u.isdigit() else None
+        except OSError:
+            used = None
+        return int(v), used
+    return None, None
+
+
 def _memory():
     """(total, available) memory in bytes of this machine, or of its container where that
     is smaller; None where it cannot be told"""
@@ -128,15 +150,11 @@ def _memory():
                     avail = int(s.split()[1]) * 1024
     except OSError:
         pass
-    for p in ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
-        try:
-            with open(p) as f:
-                v = f.read().strip()
-        except OSError:
-            continue
-        if v.isdigit() and int(v) < (total or float("inf")):
-            total = int(v)
-            avail = min(avail, total) if avail else None
+    limit, used = _cgroup_memory()
+    if limit is not None and limit < (total or float("inf")):
+        total = limit
+        left = max(limit - used, 0) if used is not None else None
+        avail = min(x for x in (avail, left, limit) if x is not None)
     if total is None and os.name == "nt":
         try:
             import ctypes
