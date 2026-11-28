@@ -184,6 +184,43 @@ class SchemaAgreement(TempDir):
         self.assertIs(type(cfg["baseCellSize"]), float)
 
 
+class SizeCheck(TempDir):
+    """settings asking for more cells than the machine can hold stop before meshing"""
+
+    def test_check_size(self):
+        from cutmesh.mesher import _check_size
+        msgs = []
+        _check_size(1e5, msgs.append, memory=(16 * 2 ** 30, 8 * 2 ** 30))          # fits
+        self.assertEqual(msgs, [])
+        _check_size(1e7, msgs.append, memory=(16 * 2 ** 30, 4 * 2 ** 30))          # more than is free
+        self.assertTrue(msgs and msgs[0].startswith("WARNING: the settings ask for at least 1e+07 cells"))
+        with self.assertRaises(ConfigError) as cm:
+            _check_size(1e8, msgs.append, memory=(16 * 2 ** 30, 8 * 2 ** 30))       # more than the machine
+        self.assertIn("this machine has 16 GB", str(cm.exception))
+        with self.assertRaises(ConfigError):
+            _check_size(1e11, msgs.append, memory=(None, None))                    # memory unknown
+
+    def test_extreme_level_stops_before_meshing(self):
+        write_stl_ascii(os.path.join(self.d, "box.stl"), [("walls", box())])
+        p = self.write("m.json", json.dumps({"domain": "box.stl", "baseCellSize": 0.1,
+                                             "surfaceRefinement": {"default": 30}}))
+        from cutmesh.mesher import generate
+        with self.assertRaises(ConfigError) as cm:
+            generate(load_config(p), log=lambda s: None)
+        self.assertIn("Lower the refinement levels", str(cm.exception))
+
+    def test_lower_bound_of_the_examples(self):
+        """the estimate stays below the cells the examples get (it is a lower bound)"""
+        from cutmesh.mesher import _min_cells, build_zones
+        from cutmesh.geometry import Surface
+        ex = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "examples", "stirred_tank")
+        cfg = load_config(os.path.join(ex, "meshDict.json"))
+        dom = Surface(read_stl(os.path.join(ex, cfg["domain"])), log=lambda s: None)
+        lev = np.array([int(cfg["surfaceRefinement"].get(n, cfg["surfaceRefinement"]["default"])) for n in dom.names])
+        n = _min_cells(cfg, dom, build_zones(cfg), [], float(cfg["baseCellSize"]), lev)
+        self.assertTrue(0.3 * 102429 < n < 102429, n)                   # the example has 102429 cells
+
+
 class TestConfig(TempDir):
     def cfg(self, **kw):
         stl = os.path.join(self.d, "box.stl")

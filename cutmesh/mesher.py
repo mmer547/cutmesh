@@ -113,6 +113,90 @@ def _rel(cfg, p):
     return p if os.path.isabs(p) else os.path.join(cfg["_base"], p)
 
 
+def _memory():
+    """(total, available) memory in bytes of this machine, or of its container where that
+    is smaller; None where it cannot be told"""
+    total = avail = None
+    try:
+        total = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    except (ValueError, OSError, AttributeError):
+        pass
+    try:
+        with open("/proc/meminfo") as f:
+            for s in f:
+                if s.startswith("MemAvailable:"):
+                    avail = int(s.split()[1]) * 1024
+    except OSError:
+        pass
+    for p in ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
+        try:
+            with open(p) as f:
+                v = f.read().strip()
+        except OSError:
+            continue
+        if v.isdigit() and int(v) < (total or float("inf")):
+            total = int(v)
+            avail = min(avail, total) if avail else None
+    if total is None and os.name == "nt":
+        try:
+            import ctypes
+
+            class MS(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                            ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                            ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                            ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+            m = MS()
+            m.dwLength = ctypes.sizeof(MS)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m)):
+                total, avail = int(m.ullTotalPhys), int(m.ullAvailPhys)
+        except (OSError, AttributeError):
+            pass
+    return total, avail
+
+
+# memory per cell below what a mesh takes (about 1.5 to 2 GB per million cells, README)
+_BYTES_PER_CELL = 1000.0
+_MAX_CELLS = 1e10            # beyond any machine, whatever its memory
+
+
+def _min_cells(cfg, dom, zones, regions, h0, region_level):
+    """a lower bound of the cell count the settings ask for: the fluid volume in base cells,
+    each STL region's area in cells of its level, the rotating zones (their surface and
+    volume levels, cylinders only) and the refinement regions.  Buffer layers, feature
+    edges, gaps and STL zones are left out, so the mesh has more cells (1.3 to 30 x on the
+    examples)."""
+    t = dom.tris
+    area = 0.5 * np.linalg.norm(np.cross(t[:, 1] - t[:, 0], t[:, 2] - t[:, 0]), axis=1)
+    A = np.bincount(dom.region, weights=area, minlength=len(dom.names))
+    vol = abs(float(np.einsum("ij,ij->i", t[:, 0], np.cross(t[:, 1], t[:, 2])).sum()) / 6)
+    n = vol / h0 ** 3 + float(np.sum(A / (h0 / 2.0 ** region_level) ** 2))
+    for z in zones:
+        g = z["geom"]
+        if isinstance(g, Cylinder):
+            hs, hv = h0 / 2.0 ** int(z["surfaceLevel"]), h0 / 2.0 ** int(z["volumeLevel"])
+            n += 2 * np.pi * g.R * (g.H + g.R) / hs ** 2 + np.pi * g.R ** 2 * g.H / hv ** 3
+    for c, lv in regions:
+        n += np.pi * c.R ** 2 * c.H / (h0 / 2.0 ** lv) ** 3
+    return n
+
+
+def _check_size(n, log, memory=None):
+    """stop before meshing when the settings ask for more cells than this machine can hold
+    (n: _min_cells); warn when they may not fit in the free memory"""
+    total, avail = memory if memory is not None else _memory()
+    need = n * _BYTES_PER_CELL
+    gb = lambda b: f"{b / 2 ** 30:.3g} GB"
+    hint = " Lower the refinement levels or use a larger baseCellSize."
+    if n > _MAX_CELLS or (total and need > total):
+        raise ConfigError(f"the settings ask for at least {n:.3g} cells, about {gb(need)} of memory or more"
+                          + (f"; this machine has {gb(total)}." if total else ".") + hint)
+    if avail and need > avail:
+        log(f"WARNING: the settings ask for at least {n:.3g} cells, about {gb(need)} of memory or more;"
+            f" {gb(avail)} is free now." + hint)
+
+
 def build_zones(cfg, log=None):
     zones = []
     for z in cfg["rotatingZones"]:
@@ -2105,6 +2189,7 @@ def generate(cfg, log=print):
     hmin = h0 / 2 ** Lmax
     log(f"domain: {len(dom.tris)} triangles, regions {dom.names}")
     log(f"base cell {h0:g}, max level {Lmax} (smallest cell {hmin:g})")
+    _check_size(_min_cells(cfg, dom, zones, regions, h0, region_level), log)
     bm = cfg.get("baseMesh") or {}
     cyl = None
     if bm.get("type", "cartesian") == "cylindrical":
