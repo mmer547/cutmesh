@@ -261,7 +261,7 @@ def _check_size(n, log, memory=None):
     if n > _MAX_CELLS or (total and need > total):
         raise ConfigError(f"the settings ask for at least {n:.3g} cells, about {gb(need)} of memory or more"
                           + (f"; this machine has {gb(total)}." if total else ".") + hint)
-    if avail and need > avail:
+    if avail is not None and need > avail:            # (0 left is known: no memory free)
         log(f"WARNING: the settings ask for at least {n:.3g} cells, about {gb(need)} of memory or more;"
             f" {gb(avail)} is free now." + hint)
 

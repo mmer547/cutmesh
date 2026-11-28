@@ -199,6 +199,9 @@ class SizeCheck(TempDir):
         self.assertIn("this machine has 16 GB", str(cm.exception))
         with self.assertRaises(ConfigError):
             _check_size(1e11, msgs.append, memory=(None, None))                    # memory unknown
+        msgs.clear()
+        _check_size(1e6, msgs.append, memory=(2 * 2 ** 30, 0))                      # nothing left
+        self.assertTrue(msgs and "0 GB is free now" in msgs[0], msgs)
 
     def test_cgroup_memory(self):
         """the tightest limit over the process's own cgroup and its ancestors, with that
