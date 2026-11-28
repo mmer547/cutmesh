@@ -40,6 +40,10 @@
 
 <h2 id="news">News</h2>
 <ul class="news">
+  <li><time datetime="2026-11-28">2026-11-28</time><span class="ver">v1.0.2</span>
+    <p><strong>Early notice of settings that cannot work.</strong> The two items left for investigation in the v1.0.0 review (<a href="https://github.com/mmer547/cutmesh/issues/68">#68</a>).
+    Once the refinement levels are known, a lower bound of the cell count (from the fluid volume, the area of each STL region, the rotating zones and the refinement regions) is estimated; if it cannot fit in the machine's memory, cutmesh stops with an error before meshing (more than the free memory gives a warning). Settings such as <code>surfaceRefinement: 30</code> used to run until the memory was used up.
+    On the 34 benchmark cases, only the default <code>snapTolerance</code> of 0.3 left no face skewed over 4; 0.1 gave 1381 such faces in 16 cases and 0.5 gave 81 in 6. The manual now gives the range 0.2 to 0.45, and a value outside it gets a warning. Meshes are unchanged.</p></li>
   <li><time datetime="2026-11-28">2026-11-28</time><span class="ver">v1.0.1</span>
     <p><strong>Bug fixes.</strong> Fixes for the bugs found in a review of v1.0.0 (<a href="https://github.com/mmer547/cutmesh/issues/68">#68</a>).
     A case meshed with a sliding mesh and then remeshed with MRF zones kept the old <code>constant/dynamicMeshDict</code>, so the zone turned with the mesh and in a rotating frame. cutmesh now removes the <code>dynamicMeshDict</code> and <code>MRFProperties</code> it wrote when the mesh has no zones of that kind (a file you wrote is kept, with a warning).

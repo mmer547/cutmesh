@@ -2,6 +2,12 @@
 
 Changes in each version of cutmesh, the same as the News on the documentation site. See "meshDict compatibility" in the manual for versioning and meshDict compatibility.
 
+## v1.0.2 (2026-11-28)
+
+**Early notice of settings that cannot work.** The two items left for investigation in the v1.0.0 review ([#68](https://github.com/mmer547/cutmesh/issues/68)).
+Once the refinement levels are known, a lower bound of the cell count (from the fluid volume, the area of each STL region, the rotating zones and the refinement regions) is estimated; if it cannot fit in the machine's memory, cutmesh stops with an error before meshing (more than the free memory gives a warning). Settings such as `surfaceRefinement: 30` used to run until the memory was used up.
+On the 34 benchmark cases, only the default `snapTolerance` of 0.3 left no face skewed over 4; 0.1 gave 1381 such faces in 16 cases and 0.5 gave 81 in 6. The manual now gives the range 0.2 to 0.45, and a value outside it gets a warning. Meshes are unchanged.
+
 ## v1.0.1 (2026-11-28)
 
 **Bug fixes.** Fixes for the bugs found in a review of v1.0.0 ([#68](https://github.com/mmer547/cutmesh/issues/68)).

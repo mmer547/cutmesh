@@ -276,9 +276,9 @@ def _top(D):
     # ---- snapping and merging
     for key, desc, unit, adv, rng in (
             ("snapTolerance", (
-                "節点を表面へ寄せる距離（セル辺長比）。スライバーセルを防ぐ",
+                "節点を表面へ寄せる距離（セル辺長比）。スライバーセルを防ぐ。0.2〜0.45 の範囲で使う（範囲外では歪度 4 超の面が出やすい）",
                 "Distance for snapping vertices to surfaces, as a fraction of the cell edge length. Helps "
-                "prevent sliver cells.",
+                "prevent sliver cells. Use 0.2 to 0.45 (outside it, faces skewed over 4 are likely).",
             ), None, False,
              dict(minimum=0)),
             ("featureSnapTolerance", (

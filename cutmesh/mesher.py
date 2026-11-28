@@ -113,6 +113,159 @@ def _rel(cfg, p):
     return p if os.path.isabs(p) else os.path.join(cfg["_base"], p)
 
 
+def _cgroup_memory(root="/sys/fs/cgroup", proc="/proc/self/cgroup"):
+    """(limit, left) in bytes over this process's cgroup and its ancestors (cgroup v2 or v1,
+    the process's own group from proc): the smallest limit, and the smallest of limit -
+    usage (a parent filled by other processes leaves less than the child's own limit).
+    None where there is no limit or it cannot be read."""
+    def read(p):
+        try:
+            with open(p) as f:
+                v = f.read().strip()
+            return int(v) if v.isdigit() else None
+        except OSError:
+            return None
+    try:
+        with open(proc) as f:
+            lines = f.read().splitlines()
+    except OSError:
+        lines = []
+    groups = []                         # (directory of the hierarchy, path of the group)
+    for s in lines:
+        parts = s.split(":", 2)
+        if len(parts) != 3:
+            continue
+        if parts[0] == "0" and parts[1] == "":
+            groups.append(("", parts[2]))                                     # v2
+        elif "memory" in parts[1].split(","):
+            groups.append(("memory", parts[2]))                               # v1
+    if not groups:
+        groups = [("", "/"), ("memory", "/")]
+    limit = left = None
+    for sub, path in groups:
+        lim, use = ("memory.max", "memory.current") if sub == "" else \
+                   ("memory.limit_in_bytes", "memory.usage_in_bytes")
+        parts = [q for q in path.split("/") if q]
+        for k in range(len(parts), -1, -1):     # the group, then its ancestors up to the root
+            d = os.path.join(root, sub, *parts[:k])
+            v = read(os.path.join(d, lim))
+            if v is None:
+                continue
+            limit = v if limit is None else min(limit, v)
+            u = read(os.path.join(d, use))
+            if u is not None:
+                rest = max(v - u, 0)
+                left = rest if left is None else min(left, rest)
+    return limit, left
+
+
+def _memory():
+    """(total, available) memory in bytes of this machine, or of its container where that
+    is smaller; None where it cannot be told"""
+    total = avail = None
+    try:
+        total = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    except (ValueError, OSError, AttributeError):
+        pass
+    try:
+        with open("/proc/meminfo") as f:
+            for s in f:
+                if s.startswith("MemAvailable:"):
+                    avail = int(s.split()[1]) * 1024
+    except OSError:
+        pass
+    limit, left = _cgroup_memory()
+    if limit is not None and limit < (total or float("inf")):
+        total = limit
+        avail = min(x for x in (avail, left, limit) if x is not None)
+    elif left is not None:
+        avail = min(avail, left) if avail is not None else left
+    if total is None and os.name == "nt":
+        try:
+            import ctypes
+
+            class MS(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                            ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                            ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                            ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+            m = MS()
+            m.dwLength = ctypes.sizeof(MS)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m)):
+                total, avail = int(m.ullTotalPhys), int(m.ullAvailPhys)
+        except (OSError, AttributeError):
+            pass
+    return total, avail
+
+
+# memory per cell below what a mesh takes (about 1.5 to 2 GB per million cells, README)
+_BYTES_PER_CELL = 1000.0
+_MAX_CELLS = 1e10            # beyond any machine, whatever its memory
+
+
+def _min_cells(cfg, dom, zones, regions, h0, region_level, n_axis=32, cartesian=True):
+    """a lower bound of the cell count the settings ask for: each STL region's area in cells
+    of its level, and the fluid volume in cells of the finest volume level over it (base
+    cells, the rotating zones' volumeLevel, the refinement regions), sampled on an n_axis^3
+    lattice over the domain's bounding box (only the fluid is counted, overlaps once, half
+    the sampled volume to keep below the true one).  Buffer layers, feature edges, gaps and
+    the zones' surfaces are left out, so the mesh has more cells (1.3 to 30 x on the
+    examples).  cartesian False (a cylindrical base, whose cells are not baseCellSize):
+    only what is refined (levels above 0) counts."""
+    t = dom.tris
+    area = 0.5 * np.linalg.norm(np.cross(t[:, 1] - t[:, 0], t[:, 2] - t[:, 0]), axis=1)
+    A = np.bincount(dom.region, weights=area, minlength=len(dom.names))
+    lv_ok = region_level > 0 if not cartesian else np.ones(len(region_level), bool)
+    n = float(np.sum((A / (h0 / 2.0 ** region_level) ** 2)[lv_ok]))
+    lo, hi = dom.bbmin, dom.bbmax
+    g = [lo[k] + (np.arange(n_axis) + 0.5) * (hi[k] - lo[k]) / n_axis for k in range(3)]
+    X = np.stack(np.meshgrid(*g, indexing="ij"), -1).reshape(-1, 3)
+    X = X[dom.inside(X)]
+    if len(X):
+        vols = [(z["geom"], int(z["volumeLevel"])) for z in zones] + list(regions)
+        lev = np.zeros(len(X))
+        owner = np.full(len(X), -1)                 # the region giving a point its level
+        for k, (geom, lv) in enumerate(vols):
+            if lv > 0:
+                m = geom.inside(X) & (lv > lev)
+                lev[m] = lv
+                owner[m] = k
+        dv = float(np.prod(hi - lo)) / n_axis ** 3
+        cells = dv / (h0 / 2.0 ** lev) ** 3
+        if cartesian:
+            n += 0.5 * float(cells[owner < 0].sum())
+        for k, (geom, lv) in enumerate(vols):
+            if (owner == k).any():
+                # a region smaller than a lattice cell would get the whole cell: at most its
+                # own volume counts
+                n += 0.5 * min(float(cells[owner == k].sum()), _volume(geom) / (h0 / 2.0 ** lv) ** 3)
+    return n
+
+
+def _volume(geom):
+    """the volume of a refinement region or rotating zone (a Cylinder or a closed STL)"""
+    if isinstance(geom, Cylinder):
+        return np.pi * geom.R ** 2 * geom.H
+    t = geom.s.tris
+    return abs(float(np.einsum("ij,ij->i", t[:, 0], np.cross(t[:, 1], t[:, 2])).sum()) / 6)
+
+
+def _check_size(n, log, memory=None):
+    """stop before meshing when the settings ask for more cells than this machine can hold
+    (n: _min_cells); warn when they may not fit in the free memory"""
+    total, avail = memory if memory is not None else _memory()
+    need = n * _BYTES_PER_CELL
+    gb = lambda b: f"{b / 2 ** 30:.3g} GB"
+    hint = " Lower the refinement levels or use a larger baseCellSize."
+    if n > _MAX_CELLS or (total and need > total):
+        raise ConfigError(f"the settings ask for at least {n:.3g} cells, about {gb(need)} of memory or more"
+                          + (f"; this machine has {gb(total)}." if total else ".") + hint)
+    if avail is not None and need > avail:            # (0 left is known: no memory free)
+        log(f"WARNING: the settings ask for at least {n:.3g} cells, about {gb(need)} of memory or more;"
+            f" {gb(avail)} is free now." + hint)
+
+
 def build_zones(cfg, log=None):
     zones = []
     for z in cfg["rotatingZones"]:
@@ -2105,6 +2258,8 @@ def generate(cfg, log=print):
     hmin = h0 / 2 ** Lmax
     log(f"domain: {len(dom.tris)} triangles, regions {dom.names}")
     log(f"base cell {h0:g}, max level {Lmax} (smallest cell {hmin:g})")
+    _check_size(_min_cells(cfg, dom, zones, regions, h0, region_level,
+                           cartesian=(cfg.get("baseMesh") or {}).get("type", "cartesian") != "cylindrical"), log)
     bm = cfg.get("baseMesh") or {}
     cyl = None
     if bm.get("type", "cartesian") == "cylindrical":

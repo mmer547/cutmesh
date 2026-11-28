@@ -281,6 +281,12 @@ def validate_config(cfg, log=None, layer_keys=None):
     for k in ("snapTolerance", "featureSnapTolerance", "featureSnapMax", "concaveSnapMax",
               "volumeCheckTolerance"):
         c.num(cfg[k], k, lo=0)
+    st = cfg["snapTolerance"]
+    if _is_num(st) and st >= 0 and not 0.2 <= st <= 0.45:
+        # measured on the benchmark suites (34 cases): only 0.2 to 0.45 keep (nearly) every
+        # face below checkMesh's skewness limit; the stages after snapping are tuned for 0.3
+        c.warn(f"snapTolerance {st:g} is outside 0.2 to 0.45: the mesh may get faces skewed over 4,"
+               " which checkMesh fails (the default 0.3 has none on the examples)")
     c.num(cfg["mergeRatio"], "mergeRatio", lo=0, hi=1, hi_open=True)
     c.num(cfg["mergeMaxNonOrtho"], "mergeMaxNonOrtho", lo=0, hi=90, lo_open=True)
     c.num(cfg["thinCutFraction"], "thinCutFraction", lo=0, hi=1, lo_open=True, hi_open=True)

@@ -424,7 +424,7 @@ window.MESHDICT_SCHEMA = {
   },
   "snapTolerance": {
    "type": "number",
-   "description": "Distance for snapping vertices to surfaces, as a fraction of the cell edge length. Helps prevent sliver cells.",
+   "description": "Distance for snapping vertices to surfaces, as a fraction of the cell edge length. Helps prevent sliver cells. Use 0.2 to 0.45 (outside it, faces skewed over 4 are likely).",
    "default": 0.3,
    "minimum": 0,
    "x-group": "snap",

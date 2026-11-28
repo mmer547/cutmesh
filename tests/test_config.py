@@ -184,6 +184,125 @@ class SchemaAgreement(TempDir):
         self.assertIs(type(cfg["baseCellSize"]), float)
 
 
+class SizeCheck(TempDir):
+    """settings asking for more cells than the machine can hold stop before meshing"""
+
+    def test_check_size(self):
+        from cutmesh.mesher import _check_size
+        msgs = []
+        _check_size(1e5, msgs.append, memory=(16 * 2 ** 30, 8 * 2 ** 30))          # fits
+        self.assertEqual(msgs, [])
+        _check_size(1e7, msgs.append, memory=(16 * 2 ** 30, 4 * 2 ** 30))          # more than is free
+        self.assertTrue(msgs and msgs[0].startswith("WARNING: the settings ask for at least 1e+07 cells"))
+        with self.assertRaises(ConfigError) as cm:
+            _check_size(1e8, msgs.append, memory=(16 * 2 ** 30, 8 * 2 ** 30))       # more than the machine
+        self.assertIn("this machine has 16 GB", str(cm.exception))
+        with self.assertRaises(ConfigError):
+            _check_size(1e11, msgs.append, memory=(None, None))                    # memory unknown
+        msgs.clear()
+        _check_size(1e6, msgs.append, memory=(2 * 2 ** 30, 0))                      # nothing left
+        self.assertTrue(msgs and "0 GB is free now" in msgs[0], msgs)
+
+    def test_cgroup_memory(self):
+        """the tightest limit over the process's own cgroup and its ancestors, with that
+        group's usage (cgroup v2 and v1; the group from /proc/self/cgroup)"""
+        from cutmesh.mesher import _cgroup_memory
+        none = os.path.join(self.d, "noproc")
+        os.makedirs(os.path.join(self.d, "v2"))
+        self.write("v2/memory.max", "2147483648\n")
+        self.write("v2/memory.current", "1932735283\n")              # 1.8 GiB used
+        self.assertEqual(_cgroup_memory(os.path.join(self.d, "v2"), none), (2147483648, 2147483648 - 1932735283))
+        # a limit on an ancestor of the process's group, none at the root or on the group
+        r = os.path.join(self.d, "tree")
+        for d in ("", "a", "a/b"):
+            os.makedirs(os.path.join(r, d), exist_ok=True)
+            self.write(os.path.join("tree", d, "memory.max"), "max\n")
+        self.write("tree/a/memory.max", "1073741824\n")
+        self.write("tree/a/memory.current", "123\n")
+        proc = self.write("cg2", "0::/a/b\n")
+        self.assertEqual(_cgroup_memory(r, proc), (1073741824, 1073741824 - 123))
+        # a parent filled by other processes leaves less than the child's own limit
+        self.write("tree/a/b/memory.max", "536870912\n")
+        self.write("tree/a/b/memory.current", "0\n")
+        self.write("tree/a/memory.current", "1000000000\n")
+        self.assertEqual(_cgroup_memory(r, proc), (536870912, 1073741824 - 1000000000))
+        # v1: the memory controller's line
+        os.makedirs(os.path.join(self.d, "v1", "memory", "x", "y"))
+        self.write("v1/memory/memory.limit_in_bytes", "9223372036854771712\n")
+        self.write("v1/memory/x/y/memory.limit_in_bytes", "536870912\n")
+        self.write("v1/memory/x/y/memory.usage_in_bytes", "100\n")
+        proc = self.write("cg1", "5:devices:/\n4:memory:/x/y\n0::/\n")
+        self.assertEqual(_cgroup_memory(os.path.join(self.d, "v1"), proc), (536870912, 536870912 - 100))
+        os.makedirs(os.path.join(self.d, "nolimit"))
+        self.write("nolimit/memory.max", "max\n")
+        self.assertEqual(_cgroup_memory(os.path.join(self.d, "nolimit"), none), (None, None))
+        self.assertEqual(_cgroup_memory(os.path.join(self.d, "none"), none), (None, None))
+        # _memory: the container's limit is the total, what it has left the free memory
+        from unittest import mock
+        import cutmesh.mesher as M
+        with mock.patch.object(M, "_cgroup_memory", return_value=(2 * 2 ** 30, int(0.2 * 2 ** 30))):
+            total, avail = M._memory()
+        if total == 2 * 2 ** 30:                     # (a machine with less memory keeps its own)
+            self.assertAlmostEqual(avail / 2 ** 30, 0.2, places=3)
+            msgs = []
+            M._check_size(1e6, msgs.append, memory=(total, avail))            # 1 GB: more than is left
+            self.assertTrue(msgs)
+
+    def test_extreme_level_stops_before_meshing(self):
+        write_stl_ascii(os.path.join(self.d, "box.stl"), [("walls", box())])
+        p = self.write("m.json", json.dumps({"domain": "box.stl", "baseCellSize": 0.1,
+                                             "surfaceRefinement": {"default": 30}}))
+        from cutmesh.mesher import generate
+        with self.assertRaises(ConfigError) as cm:
+            generate(load_config(p), log=lambda s: None)
+        self.assertIn("Lower the refinement levels", str(cm.exception))
+
+    def test_volume_only_inside_the_domain_and_once(self):
+        """a refinement cylinder reaching far beyond the domain, or two over the same place,
+        count only the fluid they cover, once"""
+        from cutmesh.mesher import _min_cells
+        from cutmesh.geometry import Surface
+        write_stl_ascii(os.path.join(self.d, "box.stl"), [("walls", box())])
+        cfg = load_config(self.write("m.json", json.dumps({"domain": "box.stl", "baseCellSize": 0.25})))
+        dom = Surface(read_stl(os.path.join(self.d, "box.stl")), log=lambda s: None)
+        lev = np.zeros(1)
+        huge = Cylinder([0.5, 0.5, -1000], [0.5, 0.5, 1000], 1000)
+        n0 = _min_cells(cfg, dom, [], [], 0.25, lev)
+        n1 = _min_cells(cfg, dom, [], [(huge, 1)], 0.25, lev)
+        self.assertLess(n1, 1e4)                                  # the box in level-1 cells: 512
+        self.assertGreater(n1, n0)
+        self.assertAlmostEqual(_min_cells(cfg, dom, [], [(huge, 1), (huge, 1)], 0.25, lev), n1)
+        # a region smaller than a lattice cell, on a lattice point, counts its own volume only
+        c = 0.5 + 0.5 / 32
+        tiny = Cylinder([c, c, c - 1e-6], [c, c, c + 1e-6], 1e-6)
+        self.assertLess(_min_cells(cfg, dom, [], [(tiny, 11)], 0.25, lev) - n0, 1)
+        from cutmesh.mesher import _check_size
+        _check_size(n1, lambda s: None, memory=(2 ** 30, 2 ** 30))  # no error
+
+    def test_cylindrical_base_counts_only_refinement(self):
+        """with a cylindrical base, baseCellSize is not the size of the base cells: a fine
+        baseCellSize with nothing refined estimates nothing"""
+        from cutmesh.mesher import _min_cells
+        from cutmesh.geometry import Surface
+        write_stl_ascii(os.path.join(self.d, "box.stl"), [("walls", box())])
+        cfg = load_config(self.write("m.json", json.dumps({"domain": "box.stl", "baseCellSize": 0.002})))
+        dom = Surface(read_stl(os.path.join(self.d, "box.stl")), log=lambda s: None)
+        self.assertGreater(_min_cells(cfg, dom, [], [], 0.002, np.zeros(1)), 6e7)
+        self.assertEqual(_min_cells(cfg, dom, [], [], 0.002, np.zeros(1), cartesian=False), 0)
+        self.assertGreater(_min_cells(cfg, dom, [], [], 0.25, np.array([3]), cartesian=False), 1000)
+
+    def test_lower_bound_of_the_examples(self):
+        """the estimate stays below the cells the examples get (it is a lower bound)"""
+        from cutmesh.mesher import _min_cells, build_zones
+        from cutmesh.geometry import Surface
+        ex = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "examples", "stirred_tank")
+        cfg = load_config(os.path.join(ex, "meshDict.json"))
+        dom = Surface(read_stl(os.path.join(ex, cfg["domain"])), log=lambda s: None)
+        lev = np.array([int(cfg["surfaceRefinement"].get(n, cfg["surfaceRefinement"]["default"])) for n in dom.names])
+        n = _min_cells(cfg, dom, build_zones(cfg), [], float(cfg["baseCellSize"]), lev)
+        self.assertTrue(0.3 * 102429 < n < 102429, n)                   # the example has 102429 cells
+
+
 class TestConfig(TempDir):
     def cfg(self, **kw):
         stl = os.path.join(self.d, "box.stl")
@@ -272,6 +391,11 @@ class TestConfig(TempDir):
                          ({"core": {"halfWidth": 0.1, "n": 2}, "blocks": [{"radii": [0.2, 0.5], "nr": 1}]},
                           "baseMesh.blocks[0]: rOuter is required")):
             self.assertIn(text, self.errors(self.cfg(baseMesh=dict(ok, **bm))), bm)
+
+    def test_snap_tolerance_outside_the_tested_range_warns(self):
+        for t, warns in ((0.3, False), (0.2, False), (0.45, False), (0.1, True), (0.5, True), (0, True)):
+            w = [s for s in self.validate(self.cfg(snapTolerance=t)) if "snapTolerance" in s]
+            self.assertEqual(bool(w), warns, t)
 
     def test_layer_checks(self):
         self.assertEqual(self.validate(self.cfg(addLayers={})), [])
