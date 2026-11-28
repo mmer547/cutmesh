@@ -40,6 +40,9 @@
 
 <h2 id="news">News</h2>
 <ul class="news">
+  <li><time datetime="2026-11-28">2026-11-28</time><span class="ver">v1.0.3</span>
+    <p><strong>Catching mesh degradation in the benchmark.</strong> The public benchmark now catches the degradation seen on the DrivAer mesh of <a href="https://github.com/mmer547/cutmesh/issues/71">#71</a>, where the faces with an adjacent cell volume ratio below 0.01 rose from 17 to 57 (<a href="https://github.com/mmer547/cutmesh/pull/72">#72</a>).
+    The adjacent volume ratio of internal faces (the faces below 0.01 and below 0.05) and the smallest cell volume over the cube of the smallest cell size are measured and compared with the baseline by the quality gate (<code>--gate</code>). New suites: <code>wheel_gaps</code> (gaps between the wheels and the car body) and <code>drivaer_settings</code> (shapes meshed with the DrivAer settings). The mesher itself is unchanged, and so are the meshes.</p></li>
   <li><time datetime="2026-11-28">2026-11-28</time><span class="ver">v1.0.2</span>
     <p><strong>Early notice of settings that cannot work.</strong> The two items left for investigation in the v1.0.0 review (<a href="https://github.com/mmer547/cutmesh/issues/68">#68</a>).
     Once the refinement levels are known, a lower bound of the cell count (from the fluid volume, the area of each STL region, the rotating zones and the refinement regions) is estimated; if it cannot fit in the machine's memory, cutmesh stops with an error before meshing (more than the free memory gives a warning). Settings such as <code>surfaceRefinement: 30</code> used to run until the memory was used up.
