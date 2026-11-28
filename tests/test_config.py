@@ -310,6 +310,11 @@ class TestConfig(TempDir):
                           "baseMesh.blocks[0]: rOuter is required")):
             self.assertIn(text, self.errors(self.cfg(baseMesh=dict(ok, **bm))), bm)
 
+    def test_snap_tolerance_outside_the_tested_range_warns(self):
+        for t, warns in ((0.3, False), (0.2, False), (0.45, False), (0.1, True), (0.5, True), (0, True)):
+            w = [s for s in self.validate(self.cfg(snapTolerance=t)) if "snapTolerance" in s]
+            self.assertEqual(bool(w), warns, t)
+
     def test_layer_checks(self):
         self.assertEqual(self.validate(self.cfg(addLayers={})), [])
         self.assertEqual(self.validate(self.cfg(addLayers={"expansionRatio": 0.9, "maxSkewness": None})), [])

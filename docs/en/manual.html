@@ -141,7 +141,7 @@ python run.py                         # Also plot cross-sections → slice_z.png
 <h3 id="md-snap">Snapping and merging</h3>
 <div class="table-wrap"><table>
   <tr><th>Key</th><th>Description</th><th>Default</th></tr>
-  <tr><td><code>snapTolerance</code></td><td>Distance for snapping vertices to surfaces, as a fraction of the cell edge length. Helps prevent sliver cells.</td><td>0.3</td></tr>
+  <tr><td><code>snapTolerance</code></td><td>Distance for snapping vertices to surfaces, as a fraction of the cell edge length. Helps prevent sliver cells. Use 0.2 to 0.45: outside it, faces skewed over 4 are likely, and a value there gets a warning.</td><td>0.3</td></tr>
   <tr><td><code>featureSnapTolerance</code></td><td>Distance for snapping to sharp STL edges and cylinder rims, as a fraction of the cell edge length</td><td>0.5</td></tr>
   <tr><td><code>featureSnapMax</code></td><td>Experimental. Snap to feature edges within this distance and undo snaps that invalidate octree cells. Disabled by default because some cut cells invert.</td><td>0.5</td></tr>
   <tr><td><code>concaveSnapMax</code></td><td>Distance for snapping vertices on the solid side to sharp concave edges</td><td>0.75</td></tr>

@@ -141,7 +141,7 @@ python run.py                         # 断面図も欲しい場合 → slice_z.
 <h3 id="md-snap">スナップと統合</h3>
 <div class="table-wrap"><table>
   <tr><th>キー</th><th>意味</th><th>既定値</th></tr>
-  <tr><td><code>snapTolerance</code></td><td>節点を表面へ寄せる距離（セル辺長比）。スライバーセルを防ぐ</td><td>0.3</td></tr>
+  <tr><td><code>snapTolerance</code></td><td>節点を表面へ寄せる距離（セル辺長比）。スライバーセルを防ぐ。0.2〜0.45 の範囲で使う（範囲外では歪度 4 超の面が出やすく、範囲外の値には警告を出す）</td><td>0.3</td></tr>
   <tr><td><code>featureSnapTolerance</code></td><td>特徴線（STL の鋭角エッジ・円筒の縁）へ寄せる距離（セル辺長比）</td><td>0.5</td></tr>
   <tr><td><code>featureSnapMax</code></td><td>実験的: この距離まで特徴線へ寄せ、八分木セルが壊れる所だけ取り消す。一部のカットセルが反転するため既定では無効</td><td>0.5</td></tr>
   <tr><td><code>concaveSnapMax</code></td><td>凹の鋭角エッジでは、固体側の節点をこの距離までエッジ上へ寄せる</td><td>0.75</td></tr>
