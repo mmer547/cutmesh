@@ -40,6 +40,10 @@
 
 <h2 id="news">更新情報</h2>
 <ul class="news">
+  <li><time datetime="2026-11-28">2026-11-28</time><span class="ver">v1.0.2</span>
+    <p><strong>無理な設定を早めに知らせる。</strong>v1.0.0 の点検で「調査が要る」とした 2 件です（<a href="https://github.com/mmer547/cutmesh/issues/68">#68</a>）。
+    細分化レベルが決まった時点で、必要なセル数の下限（流体の体積、STL の各面の面積、回転ゾーン、細分化領域から）を見積もり、マシンのメモリに収まらなければメッシュを作る前にエラーで止めます（空きメモリを超えるだけなら警告）。これまでは <code>surfaceRefinement: 30</code> のような設定でメモリを使い果たすまで進んでいました。
+    <code>snapTolerance</code> はベンチマークの 34 例で、既定値 0.3 だけが歪度 4 超の面を出さず、0.1 では 16 例で 1381 面、0.5 では 6 例で 81 面出ました。推奨範囲 0.2〜0.45 をマニュアルに書き、範囲外の値には警告を出します。メッシュは変わりません。</p></li>
   <li><time datetime="2026-11-28">2026-11-28</time><span class="ver">v1.0.1</span>
     <p><strong>不具合の修正。</strong>v1.0.0 の点検で見つかった不具合を直しました（<a href="https://github.com/mmer547/cutmesh/issues/68">#68</a>）。
     スライディングメッシュで作ったケースを MRF の設定で作り直すと、前回の <code>constant/dynamicMeshDict</code> が残り、ゾーンがメッシュの回転と MRF の両方で回っていました。cutmesh が書いた <code>dynamicMeshDict</code> と <code>MRFProperties</code> は、そのメッシュに該当するゾーンがなければ消します（自分で書いたファイルは消さずに警告します）。
