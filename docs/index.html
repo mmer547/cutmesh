@@ -40,6 +40,9 @@
 
 <h2 id="news">更新情報</h2>
 <ul class="news">
+  <li><time datetime="2026-11-28">2026-11-28</time><span class="ver">v1.0.3</span>
+    <p><strong>ベンチマークで格子の悪化を捕まえる。</strong><a href="https://github.com/mmer547/cutmesh/issues/71">#71</a> の DrivAer のメッシュで、隣接セルの体積比が 0.01 未満の面が 17 から 57 に増えた悪化を、公開のベンチマークで捕まえられるようにしました（<a href="https://github.com/mmer547/cutmesh/pull/72">#72</a>）。
+    内部面の隣接体積比（0.01 未満と 0.05 未満の面の数）と、最小セル体積を最小格子幅の 3 乗で割った値を測り、品質ゲート（<code>--gate</code>）で基準と比べます。車輪と車体のすきまのスイート <code>wheel_gaps</code> と、DrivAer の設定で作るスイート <code>drivaer_settings</code> を加えました。メッシャー本体は変えておらず、メッシュは変わりません。</p></li>
   <li><time datetime="2026-11-28">2026-11-28</time><span class="ver">v1.0.2</span>
     <p><strong>無理な設定を早めに知らせる。</strong>v1.0.0 の点検で「調査が要る」とした 2 件です（<a href="https://github.com/mmer547/cutmesh/issues/68">#68</a>）。
     細分化レベルが決まった時点で、必要なセル数の下限（流体の体積、STL の各面の面積、回転ゾーン、細分化領域から）を見積もり、マシンのメモリに収まらなければメッシュを作る前にエラーで止めます（空きメモリを超えるだけなら警告）。これまでは <code>surfaceRefinement: 30</code> のような設定でメモリを使い果たすまで進んでいました。

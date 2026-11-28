@@ -2,6 +2,11 @@
 
 Changes in each version of cutmesh, the same as the News on the documentation site. See "meshDict compatibility" in the manual for versioning and meshDict compatibility.
 
+## v1.0.3 (2026-11-28)
+
+**Catching mesh degradation in the benchmark.** The public benchmark now catches the degradation seen on the DrivAer mesh of [#71](https://github.com/mmer547/cutmesh/issues/71), where the faces with an adjacent cell volume ratio below 0.01 rose from 17 to 57 ([#72](https://github.com/mmer547/cutmesh/pull/72)).
+The adjacent volume ratio of internal faces (the faces below 0.01 and below 0.05) and the smallest cell volume over the cube of the smallest cell size are measured and compared with the baseline by the quality gate (`--gate`). New suites: `wheel_gaps` (gaps between the wheels and the car body) and `drivaer_settings` (shapes meshed with the DrivAer settings). The mesher itself is unchanged, and so are the meshes.
+
 ## v1.0.2 (2026-11-28)
 
 **Early notice of settings that cannot work.** The two items left for investigation in the v1.0.0 review ([#68](https://github.com/mmer547/cutmesh/issues/68)).
