@@ -108,6 +108,29 @@ run_bench.py SUITE --baseline OLD/results.json --gate        # 品質ゲート�
 基準で判定したケースがこの実行で `SKIP` になった（STL がない環境など）ときも、`WORSE ... skipped in this run` になります
 （両方で `SKIP` のケースは判定しません）。
 
+`baselines/gate/` には `588953b` のメッシャーで測定した品質ゲート用の基準があります。
+`baselines/` 直下の既存ファイルは、以前の版で作った格子の記録です。
+内部面の数は面ごとに1回数え、境界面と体積比がちょうど0.01の面は数えません。
+たとえば `python benchmark/run_bench.py benchmark/suites/large.json --baseline benchmark/baselines/gate/large.json --gate --no-images` で大規模ケースを比較できます。
+
+### 接地した車輪と車体のすきま（`wheel_gaps`）
+
+風洞内の車体に4輪を加え、各タイヤが床と2 mm交わる位置まで沈めます。各形状は1004三角形で、
+傾けるケースでは風洞を含む領域全体を z 軸まわりに7°回します。格子幅は背景で80 mm、車輪付近で2.5 mmです。
+
+| ケース | 車輪と車体のすきま | 角度 | 基準格子で確認する現象 |
+|---|---:|---:|---|
+| `car_wheels` | 5 mm | 0° | 最大歪度2.00、体積比0.01未満の面は0 |
+| `car_wheels_yaw7` | 5 mm | 7° | 歪度4を超える面が2面 |
+| `car_wheels_gap1_yaw7` | 1 mm | 7° | 最小体積1.52×10⁻¹³ m³、体積比0.01未満の面が4面 |
+
+リポジトリのルートで次を実行します。
+
+```sh
+python benchmark/make_synthetic.py
+python benchmark/run_bench.py benchmark/suites/wheel_gaps.json --baseline benchmark/baselines/wheel_gaps.json --gate --no-images
+```
+
 `baseCellSize` を指定しないケースは「外接箱の最長辺 / `cellsAcross`」（既定 24）で決めます。
 Thingi10K などは単位や大きさがばらばらなので、この方法で揃えます。
 

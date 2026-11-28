@@ -1,0 +1,115 @@
+{
+ "suite": "wheel_gaps",
+ "mesherRevision": "588953b9081bacbebbd15d66d4885a147fbb6bb0",
+ "platform": "Windows AMD64 AMD64 Family 26 Model 112 Stepping 0, AuthenticAMD | Python 3.11.9 | NumPy 2.4.6",
+ "results": [
+  {
+   "name": "car_wheels",
+   "status": "PASS",
+   "quality": {
+    "nPoints": 300711,
+    "nCells": 202487,
+    "nFaces": 701020,
+    "nInternalFaces": 613550,
+    "upperTriangular": true,
+    "maxClosedness": 1.3617477190685377e-16,
+    "openCellEdges": 0,
+    "duplicateCellEdges": 0,
+    "minVol": 2.135351456928179e-09,
+    "maxVol": 0.0005120000000000026,
+    "totalVol": 0.7844411634873042,
+    "nNegVol": 0,
+    "maxNonOrth": 59.2183196846132,
+    "avgNonOrth": 5.7484560256513,
+    "nNonOrth70": 0,
+    "maxSkewness": 1.997740103162451,
+    "nSkew4": 0,
+    "nBadPyramids": 0,
+    "nBadTetDecomp": 115,
+    "minFaceArea": 1.7113226510240877e-08,
+    "nVolRatio01": 0,
+    "minVolRel": 0.13666249324340343
+   },
+   "featureEdges": {
+    "samples": 30904,
+    "mean": 0.035843986772230496,
+    "p95": 0.011050708664803432,
+    "max": 2.4000000000000465,
+    "over02": 0.018864871861247735
+   },
+   "layers": null
+  },
+  {
+   "name": "car_wheels_yaw7",
+   "status": "WARN",
+   "quality": {
+    "nPoints": 319913,
+    "nCells": 208872,
+    "nFaces": 734317,
+    "nInternalFaces": 643422,
+    "upperTriangular": true,
+    "maxClosedness": 1.4727546920136972e-16,
+    "openCellEdges": 0,
+    "duplicateCellEdges": 0,
+    "minVol": 1.1741260685393378e-09,
+    "maxVol": 0.0006400000000000008,
+    "totalVol": 0.784442072287689,
+    "nNegVol": 0,
+    "maxNonOrth": 63.45059768537525,
+    "avgNonOrth": 7.05194706007524,
+    "nNonOrth70": 0,
+    "maxSkewness": 5.663301938024371,
+    "nSkew4": 2,
+    "nBadPyramids": 0,
+    "nBadTetDecomp": 610,
+    "minFaceArea": 6.310259604792514e-09,
+    "nVolRatio01": 0,
+    "minVolRel": 0.0751440683865176
+   },
+   "featureEdges": {
+    "samples": 30926,
+    "mean": 0.04580987715117263,
+    "p95": 0.15646173493666612,
+    "max": 2.7626649532307646,
+    "over02": 0.04539869365582358
+   },
+   "layers": null
+  },
+  {
+   "name": "car_wheels_gap1_yaw7",
+   "status": "PASS",
+   "quality": {
+    "nPoints": 324992,
+    "nCells": 209174,
+    "nFaces": 741223,
+    "nInternalFaces": 643299,
+    "upperTriangular": true,
+    "maxClosedness": 1.736228557564631e-16,
+    "openCellEdges": 0,
+    "duplicateCellEdges": 2,
+    "minVol": 1.5232658599482446e-13,
+    "maxVol": 0.000640000000000001,
+    "totalVol": 0.784440078148866,
+    "nNegVol": 0,
+    "maxNonOrth": 64.79923098433238,
+    "avgNonOrth": 7.093585735210879,
+    "nNonOrth70": 0,
+    "maxSkewness": 3.0344905911368616,
+    "nSkew4": 0,
+    "nBadPyramids": 0,
+    "nBadTetDecomp": 751,
+    "minFaceArea": 1.0663738406699286e-08,
+    "nVolRatio01": 4,
+    "minVolRel": 9.748901503668764e-06
+   },
+   "featureEdges": {
+    "samples": 30927,
+    "mean": 0.048480763264378716,
+    "p95": 0.209636151948058,
+    "max": 2.7522351640000053,
+    "over02": 0.051799398583761765
+   },
+   "layers": null
+  }
+ ]
+}

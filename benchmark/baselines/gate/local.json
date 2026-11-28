@@ -1,0 +1,115 @@
+{
+ "suite": "local",
+ "mesherRevision": "588953b9081bacbebbd15d66d4885a147fbb6bb0",
+ "platform": "Windows AMD64 AMD64 Family 26 Model 112 Stepping 0, AuthenticAMD | Python 3.11.9 | NumPy 2.4.6",
+ "results": [
+  {
+   "name": "stirred_tank",
+   "status": "PASS",
+   "quality": {
+    "nPoints": 166415,
+    "nCells": 122674,
+    "nFaces": 414860,
+    "nInternalFaces": 371634,
+    "upperTriangular": true,
+    "maxClosedness": 1.3895590581737886e-16,
+    "openCellEdges": 0,
+    "duplicateCellEdges": 0,
+    "minVol": 7.249204308234866e-09,
+    "maxVol": 1.953125000000009e-06,
+    "totalVol": 0.021078415178097856,
+    "nNegVol": 0,
+    "maxNonOrth": 63.69544128281223,
+    "avgNonOrth": 5.658462436900269,
+    "nNonOrth70": 0,
+    "maxSkewness": 2.8889982815499318,
+    "nSkew4": 0,
+    "nBadPyramids": 0,
+    "nBadTetDecomp": 35,
+    "minFaceArea": 9.248835242155504e-07,
+    "nVolRatio01": 0,
+    "minVolRel": 0.23754192677224004
+   },
+   "featureEdges": {
+    "samples": 5120,
+    "mean": 0.010496759764152777,
+    "p95": 0.04335887421538902,
+    "max": 0.33762710238137467,
+    "over02": 0.0140625
+   },
+   "layers": null
+  },
+  {
+   "name": "bunny",
+   "status": "WARN",
+   "quality": {
+    "nPoints": 97221,
+    "nCells": 70360,
+    "nFaces": 246163,
+    "nInternalFaces": 218559,
+    "upperTriangular": true,
+    "maxClosedness": 1.4999537027256418e-16,
+    "openCellEdges": 0,
+    "duplicateCellEdges": 0,
+    "minVol": 5.78108858344789e-11,
+    "maxVol": 6.400000000000036e-08,
+    "totalVol": 0.00027947242563900685,
+    "nNegVol": 0,
+    "maxNonOrth": 61.99542798456693,
+    "avgNonOrth": 9.067607223083098,
+    "nNonOrth70": 0,
+    "maxSkewness": 6.843615113109452,
+    "nSkew4": 3,
+    "nBadPyramids": 0,
+    "nBadTetDecomp": 124,
+    "minFaceArea": 1.1371702312558902e-09,
+    "nVolRatio01": 0,
+    "minVolRel": 0.057810885834478895
+   },
+   "featureEdges": {
+    "samples": 3253,
+    "mean": 0.04027844604916452,
+    "p95": 0.231358404739739,
+    "max": 1.0358648418097633,
+    "over02": 0.0630187519213034
+   },
+   "layers": null
+  },
+  {
+   "name": "cyclone",
+   "status": "PASS",
+   "quality": {
+    "nPoints": 13454,
+    "nCells": 9463,
+    "nFaces": 33099,
+    "nInternalFaces": 28765,
+    "upperTriangular": true,
+    "maxClosedness": 1.2733171152017411e-16,
+    "openCellEdges": 0,
+    "duplicateCellEdges": 0,
+    "minVol": 1.0842034816204343e-10,
+    "maxVol": 8.443399068778908e-09,
+    "totalVol": 1.8770199797951517e-05,
+    "nNegVol": 0,
+    "maxNonOrth": 65.04832998940124,
+    "avgNonOrth": 8.125696226188474,
+    "nNonOrth70": 0,
+    "maxSkewness": 3.1381567878938545,
+    "nSkew4": 0,
+    "nBadPyramids": 0,
+    "nBadTetDecomp": 32,
+    "minFaceArea": 1.1515127550676614e-09,
+    "nVolRatio01": 0,
+    "minVolRel": 0.10842034816204343
+   },
+   "featureEdges": {
+    "samples": 1519,
+    "mean": 0.029266407219512357,
+    "p95": 0.13880937356974893,
+    "max": 0.43755496395427435,
+    "over02": 0.03489137590520079
+   },
+   "layers": null
+  }
+ ]
+}
