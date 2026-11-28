@@ -160,6 +160,7 @@ def worker(job_path):
             import mesh_metrics as mm
             volumes = R["quality"]["_V"]
             q["nVolRatio01"] = mm.low_volume_ratio_faces(volumes, R["owner"], R["neighbour"])
+            q["nVolRatio05"] = mm.low_volume_ratio_faces(volumes, R["owner"], R["neighbour"], 0.05)
             h = mm.smallest_cell(lines)
             if h:
                 q["minVolRel"] = float(volumes.min() / h**3)
@@ -363,7 +364,7 @@ def input_summary(inp):
 
 CSV_COLS = ["name", "status", "verdict", "expect", "time", "cells", "maxNonOrth", "nNonOrth70",
             "maxSkewness", "nSkew4", "nBadTetDecomp", "volErr", "edgeOver02", "edgeP95", "layersFull",
-            "nVolRatio01", "minVolRel", "peakMemMB", "input", "notes"]
+            "nVolRatio01", "nVolRatio05", "minVolRel", "peakMemMB", "input", "notes"]
 
 
 def row(r):
@@ -376,7 +377,8 @@ def row(r):
         "maxSkewness": round(q["maxSkewness"], 2) if "maxSkewness" in q else "",
         "nNonOrth70": q.get("nNonOrth70", ""), "nSkew4": q.get("nSkew4", ""),
         "nBadTetDecomp": q.get("nBadTetDecomp", ""),
-        "nVolRatio01": q.get("nVolRatio01", ""), "minVolRel": q.get("minVolRel", ""),
+        "nVolRatio01": q.get("nVolRatio01", ""), "nVolRatio05": q.get("nVolRatio05", ""),
+        "minVolRel": q.get("minVolRel", ""),
         "volErr": f"{r['volErr']:+.3%}" if r.get("volErr") is not None else "",
         "edgeOver02": f"{r['featureEdges']['over02']:.2%}" if r.get("featureEdges") else "",
         "edgeP95": f"{r['featureEdges']['p95']:.3f}" if r.get("featureEdges") else "",
@@ -400,6 +402,8 @@ STEP_MIN, STEP_SLOW = 1.0, 1.2          # steps of at least STEP_MIN s, slower b
 # quality gate (--gate, roadmap v0.7.0): a change that may change the mesh is accepted when
 # every case meets all of these against the baseline
 GATE_MIN_VOL_FRACTION = 0.90            # retain at least 90% of the reference minimum in hmin³
+GATE_VOL_RATIO05_PCT = 10               # faces with adjacent volume ratio < 0.05: up 10 % at most,
+GATE_VOL_RATIO05_ABS = 5                # or 5 faces where 10 % is fewer (compared in integers)
 GATE_CELLS_PCT = 3                      # cell count within +-3 % (inclusive, compared in integers)
 GATE_LAYERS = 1.0                       # full layer thickness: not down by 1 point or more
 GATE_EDGE_OVER = 0.005                  # feature-edge samples farther than 0.2 hmin: +0.5 points at most
@@ -409,7 +413,9 @@ GATE_EDGE_P95 = 0.02                    # their 95th percentile: +0.02 hmin at m
 def gate(r, o):
     """reasons why result r fails the quality gate against the baseline result o ([] = passes):
     no faces with non-orthogonality > 70 (if the baseline has some: no more of them), no more
-    faces with skewness > 4, no non-positive volumes, cells within 3 %, the share of wall points
+    faces with skewness > 4, no non-positive volumes, no more internal faces with an adjacent
+    volume ratio < 0.01, at most 10 % (or 5) more below 0.05 (where the baseline measured it), the
+    smallest volume in hmin³ at least 90 % of the baseline's, cells within 3 %, the share of wall points
     with full layer thickness not down by 1 point or more, the feature edges not farther from
     the mesh edges (share over 0.2 hmin and 95th percentile)"""
     qa, qb = o.get("quality") or {}, r.get("quality") or {}
@@ -429,6 +435,13 @@ def gate(r, o):
     if qa.get("nVolRatio01") is not None and qb.get("nVolRatio01") is not None:
         if qb["nVolRatio01"] > qa["nVolRatio01"]:
             out.append(f"nVolRatio01 {qa['nVolRatio01']} -> {qb['nVolRatio01']}")
+    # nVolRatio05 came after the first volume baselines: compared where the baseline has it
+    if qa.get("nVolRatio05") is not None:
+        x, y = qa["nVolRatio05"], qb.get("nVolRatio05")
+        if y is None:
+            out.append("nVolRatio05 not measured in run")
+        elif (y - x) * 100 > max(GATE_VOL_RATIO05_PCT * x, GATE_VOL_RATIO05_ABS * 100):
+            out.append(f"nVolRatio05 {x} -> {y}")
     if qa.get("minVolRel") is not None and qb.get("minVolRel") is not None:
         if qb["minVolRel"] < GATE_MIN_VOL_FRACTION * qa["minVolRel"]:
             out.append(f"minVolRel {qa['minVolRel']:.6g} -> {qb['minVolRel']:.6g}")
@@ -621,12 +634,12 @@ def write_reports(outdir, suite, results, args, cmp_lines):
     if cmp_lines:
         md += ["## vs baseline", ""] + [f"- {s}" for s in cmp_lines] + [""]
     md += ["| case | status | verdict | cells | time [s] | max non-orth | non-orth > 70 | max skew | skew > 4 "
-           "| nVolRatio01 | minVolRel | vol err | edges > 0.2 hmin | edges p95 | full layers | input | notes |",
-           "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+           "| nVolRatio01 | nVolRatio05 | minVolRel | vol err | edges > 0.2 hmin | edges p95 | full layers | input | notes |",
+           "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for x in rows:
         md.append(f"| {x['name']} | {x['status']} | {x['verdict']} | {x['cells']} | {x['time']} | "
                   f"{x['maxNonOrth']} | {x['nNonOrth70']} | {x['maxSkewness']} | {x['nSkew4']} | "
-                  f"{x['nVolRatio01']} | {x['minVolRel']} | {x['volErr']} | {x['edgeOver02']} | "
+                  f"{x['nVolRatio01']} | {x['nVolRatio05']} | {x['minVolRel']} | {x['volErr']} | {x['edgeOver02']} | "
                   f"{x['edgeP95']} | {x['layersFull']} | {x['input']} | "
                   f"{x['notes'].replace('|', '/')} |")
     md += [""] + steps_table(results) + parts_table(results)

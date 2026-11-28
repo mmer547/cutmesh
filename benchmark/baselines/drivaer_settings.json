@@ -1,0 +1,722 @@
+{
+ "suite": "drivaer_settings",
+ "mesherRevision": "588953b9081bacbebbd15d66d4885a147fbb6bb0",
+ "date": "2026-11-28 14:47:18",
+ "python": "3.13.18",
+ "platform": "Linux x86_64 x86_64 | Python 3.13.18 | NumPy 2.5.3",
+ "args": {
+  "worker": null,
+  "jobs": 1,
+  "only": null,
+  "timeout": 900,
+  "vol_tol": 0.01,
+  "set": [],
+  "cells_across": null,
+  "keep": false,
+  "no_images": true,
+  "strict": false,
+  "save_baseline": true,
+  "same_mesh": false,
+  "gate": false,
+  "no_metrics": false
+ },
+ "cutmesh": "1.0.2",
+ "results": [
+  {
+   "name": "thin_walls_drivaer",
+   "stl": "benchmark/data/synthetic/thin_walls.stl",
+   "expect": "valid",
+   "input": {
+    "triangles": 76,
+    "vertices": 40,
+    "edges": 114,
+    "euler": 2,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "inconsistentEdges": 0,
+    "degenerateTris": 0,
+    "duplicateTris": 0,
+    "components": 1,
+    "signedVolume": 0.29568000300168956,
+    "bbox": [
+     [
+      0.0,
+      0.0,
+      0.0
+     ],
+     [
+      1.0,
+      1.0,
+      0.30000001192092896
+     ]
+    ],
+    "diag": 1.4456832319538597,
+    "closed": true,
+    "oriented": true,
+    "clean": true,
+    "solids": [
+     "walls"
+    ]
+   },
+   "quality": {
+    "nPoints": 257185,
+    "nCells": 174018,
+    "nFaces": 604394,
+    "nInternalFaces": 532758,
+    "upperTriangular": true,
+    "maxClosedness": 1.1032377186947129e-16,
+    "openCellEdges": 0,
+    "duplicateCellEdges": 0,
+    "minVol": 9.795774441257506e-09,
+    "maxVol": 7.233796296296327e-05,
+    "totalVol": 0.2978451463466722,
+    "nNegVol": 0,
+    "maxNonOrth": 30.917754014129553,
+    "avgNonOrth": 6.204696764264118,
+    "nNonOrth70": 0,
+    "maxSkewness": 1.4810283219266482,
+    "nSkew4": 0,
+    "nBadPyramids": 0,
+    "nBadTetDecomp": 2,
+    "minFaceArea": 3.548826548230726e-06,
+    "nVolRatio01": 2,
+    "nVolRatio05": 794,
+    "minVolRel": 0.008666591096519637
+   },
+   "steps": {
+    "geometry / search structures": 0.031,
+    "octree (236668 leaves)": 1.258,
+    "polyhedral cells (302039 points)": 0.234,
+    "level sets and vertex snapping": 0.412,
+    "domain cut": 0.574,
+    "assembly and small-cell merging": 0.206,
+    "patches, zones, renumbering": 0.201,
+    "leak check": 0.381,
+    "write polyMesh": 0.036,
+    "quality check": 0.082
+   },
+   "parts": [
+    [
+     "geometry / search structures",
+     "read and check the input",
+     0.003
+    ],
+    [
+     "geometry / search structures",
+     "base mesh layout",
+     0.02
+    ],
+    [
+     "geometry / search structures",
+     "search structures",
+     0.005
+    ],
+    [
+     "geometry / search structures",
+     "surface sources",
+     0.0
+    ],
+    [
+     "geometry / search structures",
+     "auto gap refinement",
+     0.0
+    ],
+    [
+     "geometry / search structures",
+     "gap refinement",
+     0.0
+    ],
+    [
+     "geometry / search structures",
+     "feature edges and zone sources",
+     0.003
+    ],
+    [
+     "octree",
+     "root grid",
+     0.0
+    ],
+    [
+     "octree",
+     "refine: surface sources",
+     0.011
+    ],
+    [
+     "octree",
+     "refine: volume sources",
+     0.0
+    ],
+    [
+     "octree",
+     "refine: inside the domain",
+     0.006
+    ],
+    [
+     "octree",
+     "refine: split",
+     0.006
+    ],
+    [
+     "octree",
+     "balance",
+     0.026
+    ],
+    [
+     "octree",
+     "near the STL",
+     0.027
+    ],
+    [
+     "octree",
+     "thin gaps",
+     0.751
+    ],
+    [
+     "octree",
+     "thin walls",
+     0.393
+    ],
+    [
+     "octree",
+     "splits",
+     0.022
+    ],
+    [
+     "octree",
+     "thin cut cells: fluid fraction",
+     0.01
+    ],
+    [
+     "octree",
+     "thin cut cells: finer neighbours",
+     0.006
+    ],
+    [
+     "polyhedral cells",
+     "build cells",
+     0.213
+    ],
+    [
+     "polyhedral cells",
+     "other",
+     0.021
+    ],
+    [
+     "level sets and vertex snapping",
+     "level set of the STL",
+     0.113
+    ],
+    [
+     "level sets and vertex snapping",
+     "snapping",
+     0.232
+    ],
+    [
+     "level sets and vertex snapping",
+     "cell checks",
+     0.059
+    ],
+    [
+     "level sets and vertex snapping",
+     "other",
+     0.009
+    ],
+    [
+     "domain cut",
+     "classify and set up",
+     0.066
+    ],
+    [
+     "domain cut",
+     "surface contact",
+     0.013
+    ],
+    [
+     "domain cut",
+     "contact splits",
+     0.01
+    ],
+    [
+     "domain cut",
+     "exact feature cut: cells",
+     0.006
+    ],
+    [
+     "domain cut",
+     "cut kernel",
+     0.448
+    ],
+    [
+     "domain cut",
+     "exact feature cut: clipping",
+     0.0
+    ],
+    [
+     "domain cut",
+     "other",
+     0.032
+    ],
+    [
+     "assembly and small-cell merging",
+     "distorted uncut cells",
+     0.032
+    ],
+    [
+     "assembly and small-cell merging",
+     "merging: set up",
+     0.043
+    ],
+    [
+     "assembly and small-cell merging",
+     "merging",
+     0.027
+    ],
+    [
+     "assembly and small-cell merging",
+     "wall slivers",
+     0.002
+    ],
+    [
+     "assembly and small-cell merging",
+     "numbering and face occurrences",
+     0.023
+    ],
+    [
+     "assembly and small-cell merging",
+     "pair faces",
+     0.08
+    ],
+    [
+     "patches, zones, renumbering",
+     "isolated fluid regions",
+     0.118
+    ],
+    [
+     "patches, zones, renumbering",
+     "volume check",
+     0.006
+    ],
+    [
+     "patches, zones, renumbering",
+     "patches (nearest STL triangle)",
+     0.021
+    ],
+    [
+     "patches, zones, renumbering",
+     "face lists and coplanar wall faces",
+     0.028
+    ],
+    [
+     "patches, zones, renumbering",
+     "zones",
+     0.0
+    ],
+    [
+     "patches, zones, renumbering",
+     "other",
+     0.027
+    ],
+    [
+     "leak check",
+     "face and cell geometry",
+     0.034
+    ],
+    [
+     "leak check",
+     "distance of the cell centres to the STL",
+     0.036
+    ],
+    [
+     "leak check",
+     "other",
+     0.31
+    ]
+   ],
+   "meshHash": {
+    "files": {
+     "boundary": "f259534f8d086ba7a73b0c7e04b66a8c67f155e6632afb6701f720f20357dd0f",
+     "faces": "39efaf2dfd0ff8725882188f02a1c278067b8a5c8ee3bed384ab295b7b184f1a",
+     "neighbour": "902dbbe81b5251f8b847977d2ee69015468e1be1719399e813b081da510b1bc0",
+     "owner": "808c2ecaad8396bebe29423629176e7d391eb18e54e9e66799cb8a34d5d721b5",
+     "points": "fe99674a188b4c1f3325f187a088a533fe8e830205f5cd1dc897a690bbdeffa7"
+    },
+    "digest": "d865009d68aa4eaa75d5cfa28bf0ab6e3b42c204dff1917f70bc72ae694d4319"
+   },
+   "hmin": 0.0104167,
+   "layers": null,
+   "featureEdges": {
+    "samples": 11000,
+    "mean": 0.033369256229955936,
+    "p95": 0.111998914903645,
+    "max": 0.5544858118148044,
+    "over02": 0.042
+   },
+   "metricsTime": 0.17,
+   "time": 3.72,
+   "peakMemMB": 465.56640625,
+   "warnings": [
+    "WARNING: leak check: 29890 cell-to-face lines cross a solid wall (fluid on both sides joined; refine there), e.g. at (0.2 0.106771 0.00911458), (0.2 0.111979 0.00911458), (0.2 0.106771 0.0143229), (0.2 0.108073 0.0130208), (0.2 0.111979 0.0195312)"
+   ],
+   "repairs": [],
+   "boundaryDistCells": 0.19,
+   "baseCellSize": 0.041666666666666664,
+   "volErr": 0.007322589701713067,
+   "status": "WARN",
+   "notes": [
+    "leak check: 29890 cell-to-face lines cross a solid wall (fluid on both sides joined; refine there), e.g. at (0.2 0.106771 0.00911458), (0.2 0.111979 0.00911458), (0.2 0.106771 0.0143229), (0.2 0.108073 0.0130208), (0.2 0.111979 0.0195312)"
+   ],
+   "verdict": "ok"
+  },
+  {
+   "name": "car_wheels_gap1_yaw7_drivaer",
+   "stl": "benchmark/data/synthetic/car_wheels_gap1_yaw7.stl",
+   "expect": "valid",
+   "input": {
+    "triangles": 1004,
+    "vertices": 506,
+    "edges": 1506,
+    "euler": 4,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "inconsistentEdges": 0,
+    "degenerateTris": 0,
+    "duplicateTris": 0,
+    "components": 2,
+    "signedVolume": 0.7844419106495367,
+    "bbox": [
+     [
+      -0.04874773736,
+      -0.3970184607,
+      0.0
+     ],
+     [
+      2.033840041,
+      0.6407571475,
+      0.5
+     ]
+    ],
+    "diag": 2.379947492603423,
+    "closed": true,
+    "oriented": true,
+    "clean": true,
+    "solids": [
+     "inlet",
+     "outlet",
+     "walls",
+     "floor",
+     "body",
+     "wheelArea"
+    ]
+   },
+   "quality": {
+    "nPoints": 325470,
+    "nCells": 218141,
+    "nFaces": 753628,
+    "nInternalFaces": 652379,
+    "upperTriangular": true,
+    "maxClosedness": 1.5457707996979804e-16,
+    "openCellEdges": 0,
+    "duplicateCellEdges": 0,
+    "minVol": 1.5232658599482446e-13,
+    "maxVol": 0.000512000000000002,
+    "totalVol": 0.7844400722029857,
+    "nNegVol": 0,
+    "maxNonOrth": 64.79923098433238,
+    "avgNonOrth": 6.686264244509985,
+    "nNonOrth70": 0,
+    "maxSkewness": 2.477966990130183,
+    "nSkew4": 0,
+    "nBadPyramids": 0,
+    "nBadTetDecomp": 910,
+    "minFaceArea": 1.0663738406699286e-08,
+    "nVolRatio01": 38,
+    "nVolRatio05": 5252,
+    "minVolRel": 9.748901503668764e-06
+   },
+   "steps": {
+    "geometry / search structures": 0.131,
+    "octree (451873 leaves)": 3.282,
+    "polyhedral cells (604423 points)": 0.529,
+    "level sets and vertex snapping": 1.321,
+    "domain cut": 1.171,
+    "assembly and small-cell merging": 0.298,
+    "patches, zones, renumbering": 0.196,
+    "leak check": 0.553,
+    "write polyMesh": 0.039,
+    "quality check": 0.097
+   },
+   "parts": [
+    [
+     "geometry / search structures",
+     "read and check the input",
+     0.012
+    ],
+    [
+     "geometry / search structures",
+     "base mesh layout",
+     0.006
+    ],
+    [
+     "geometry / search structures",
+     "search structures",
+     0.096
+    ],
+    [
+     "geometry / search structures",
+     "surface sources",
+     0.0
+    ],
+    [
+     "geometry / search structures",
+     "auto gap refinement",
+     0.0
+    ],
+    [
+     "geometry / search structures",
+     "gap refinement",
+     0.0
+    ],
+    [
+     "geometry / search structures",
+     "feature edges and zone sources",
+     0.016
+    ],
+    [
+     "octree",
+     "root grid",
+     0.0
+    ],
+    [
+     "octree",
+     "refine: surface sources",
+     0.04
+    ],
+    [
+     "octree",
+     "refine: volume sources",
+     0.0
+    ],
+    [
+     "octree",
+     "refine: inside the domain",
+     0.022
+    ],
+    [
+     "octree",
+     "refine: split",
+     0.021
+    ],
+    [
+     "octree",
+     "balance",
+     0.171
+    ],
+    [
+     "octree",
+     "near the STL",
+     0.077
+    ],
+    [
+     "octree",
+     "thin gaps",
+     1.351
+    ],
+    [
+     "octree",
+     "thin walls",
+     0.951
+    ],
+    [
+     "octree",
+     "splits",
+     0.211
+    ],
+    [
+     "octree",
+     "thin cut cells: fluid fraction",
+     0.308
+    ],
+    [
+     "octree",
+     "thin cut cells: finer neighbours",
+     0.129
+    ],
+    [
+     "polyhedral cells",
+     "build cells",
+     0.454
+    ],
+    [
+     "polyhedral cells",
+     "other",
+     0.075
+    ],
+    [
+     "level sets and vertex snapping",
+     "level set of the STL",
+     0.3
+    ],
+    [
+     "level sets and vertex snapping",
+     "snapping",
+     0.589
+    ],
+    [
+     "level sets and vertex snapping",
+     "cell checks",
+     0.159
+    ],
+    [
+     "level sets and vertex snapping",
+     "snapping again (broken cells)",
+     0.252
+    ],
+    [
+     "level sets and vertex snapping",
+     "other",
+     0.02
+    ],
+    [
+     "domain cut",
+     "classify and set up",
+     0.167
+    ],
+    [
+     "domain cut",
+     "surface contact",
+     0.044
+    ],
+    [
+     "domain cut",
+     "contact splits",
+     0.052
+    ],
+    [
+     "domain cut",
+     "exact feature cut: cells",
+     0.051
+    ],
+    [
+     "domain cut",
+     "cut kernel",
+     0.785
+    ],
+    [
+     "domain cut",
+     "exact feature cut: clipping",
+     0.0
+    ],
+    [
+     "domain cut",
+     "other",
+     0.073
+    ],
+    [
+     "assembly and small-cell merging",
+     "distorted uncut cells",
+     0.045
+    ],
+    [
+     "assembly and small-cell merging",
+     "merging: set up",
+     0.075
+    ],
+    [
+     "assembly and small-cell merging",
+     "merging",
+     0.068
+    ],
+    [
+     "assembly and small-cell merging",
+     "wall slivers",
+     0.022
+    ],
+    [
+     "assembly and small-cell merging",
+     "numbering and face occurrences",
+     0.034
+    ],
+    [
+     "assembly and small-cell merging",
+     "pair faces",
+     0.054
+    ],
+    [
+     "patches, zones, renumbering",
+     "isolated fluid regions",
+     0.064
+    ],
+    [
+     "patches, zones, renumbering",
+     "volume check",
+     0.015
+    ],
+    [
+     "patches, zones, renumbering",
+     "patches (nearest STL triangle)",
+     0.042
+    ],
+    [
+     "patches, zones, renumbering",
+     "face lists and coplanar wall faces",
+     0.036
+    ],
+    [
+     "patches, zones, renumbering",
+     "zones",
+     0.0
+    ],
+    [
+     "patches, zones, renumbering",
+     "other",
+     0.04
+    ],
+    [
+     "leak check",
+     "face and cell geometry",
+     0.053
+    ],
+    [
+     "leak check",
+     "distance of the cell centres to the STL",
+     0.055
+    ],
+    [
+     "leak check",
+     "other",
+     0.445
+    ]
+   ],
+   "meshHash": {
+    "files": {
+     "boundary": "6fd44995b26c169dccbc2586ccfc09dc1312c5a410be42ce2ac74599554b90f3",
+     "faces": "9d559bc8c10fd8e8cc0235590ac8c6db450788c089ffa5484cc5f5403770300e",
+     "neighbour": "e31e3ca6bc7f4895dda43a24568e5238ee3824164226886e89452f342678bf69",
+     "owner": "789afbb7436c27f165a50c455d10454f1771ed47306d59a0db0b3819632b30d0",
+     "points": "3514e8c23101aab6d27081c1e625424b6350094fa2f8955b5af2058e43c416b4"
+    },
+    "digest": "0c99360c65ce6701453cb96798f9a4df505aba363044e0bb0546a7962ba097c0"
+   },
+   "hmin": 0.0025,
+   "layers": null,
+   "featureEdges": {
+    "samples": 30927,
+    "mean": 0.049705507011904605,
+    "p95": 0.20953960150407766,
+    "max": 2.7522351640000053,
+    "over02": 0.05173473017104795
+   },
+   "metricsTime": 0.32,
+   "time": 7.952,
+   "peakMemMB": 675.24609375,
+   "warnings": [],
+   "repairs": [],
+   "boundaryDistCells": 0.52,
+   "baseCellSize": 0.08,
+   "volErr": -2.3436363177919972e-06,
+   "status": "PASS",
+   "notes": [],
+   "verdict": "ok"
+  }
+ ]
+}
