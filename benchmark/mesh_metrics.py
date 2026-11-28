@@ -16,6 +16,12 @@ LAYER_RE = re.compile(r"wall points with full thickness ([\d.]+)%, reduced ([\d.
 HMIN_RE = re.compile(r"smallest cell (?:of the cylindrical base )?([0-9.eE+-]+)")
 
 
+def low_volume_ratio_faces(volumes, owner, neighbour):
+    """Count internal faces whose adjacent cell volumes differ by a factor greater than 100."""
+    left, right = volumes[owner[:len(neighbour)]], volumes[neighbour]
+    return int(np.count_nonzero(np.minimum(left, right) < .01 * np.maximum(left, right)))
+
+
 def smallest_cell(lines):
     """the smallest cell size the log reports (the last one: a cylindrical base may lower it)"""
     h = None

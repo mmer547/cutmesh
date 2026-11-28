@@ -57,7 +57,8 @@ class MeshHash(unittest.TestCase):
 
 
 def gres(name="x", **kw):
-    q = {"nCells": 1000, "nNonOrth70": 0, "nSkew4": 2, "nNegVol": 0}
+    q = {"nCells": 1000, "nNonOrth70": 0, "nSkew4": 2, "nNegVol": 0,
+         "nVolRatio01": 17, "minVolRel": 1.0}
     q.update(kw.pop("quality", {}))
     r = {"name": name, "status": "PASS", "quality": q,
          "featureEdges": {"over02": 0.010, "p95": 0.10}, "layers": {"full": 90.0}}
@@ -88,6 +89,19 @@ class QualityGate(unittest.TestCase):
         for kw, what in cases:
             g = run_bench.gate(gres(**kw), o)
             self.assertTrue(len(g) == 1 and what in g[0], (kw, g))
+
+    def test_adjacent_and_minimum_volumes(self):
+        baseline = gres()
+        keep = run_bench.GATE_MIN_VOL_FRACTION
+        self.assertEqual(run_bench.gate(gres(quality={"minVolRel": keep}), baseline), [])
+        self.assertEqual(run_bench.gate(gres(quality={"nVolRatio01": 16}), baseline), [])
+        for key, value in (("nVolRatio01", 18), ("nVolRatio01", 57), ("minVolRel", keep - 1e-5)):
+            self.assertIn(key, run_bench.gate(gres(quality={key: value}), baseline)[0])
+        for key in ("nVolRatio01", "minVolRel"):
+            for side in (0, 1):
+                pair = [gres(), gres()]
+                del pair[side]["quality"][key]
+                self.assertIn("not measured", run_bench.gate(*pair)[0])
 
     def test_existing_non_orth(self):
         # a baseline that already has faces over 70 degrees: not more of them
@@ -148,6 +162,16 @@ class QualityGate(unittest.TestCase):
 
 
 class MeshMetrics(unittest.TestCase):
+    def test_low_volume_ratio_faces(self):
+        import numpy as np
+        from mesh_metrics import low_volume_ratio_faces
+        volumes = np.array([1., .01, .009])
+        # Equal to 0.01, then below it in both orientations; ignore two boundary owners.
+        owner = np.array([0, 0, 2, 0, 1])
+        neighbour = np.array([1, 2, 0])
+        self.assertEqual(low_volume_ratio_faces(volumes, owner, neighbour), 2)
+        self.assertEqual(low_volume_ratio_faces(volumes, owner, neighbour[:0]), 0)
+
     def test_feature_edges(self):
         import numpy as np
         import mesh_metrics
@@ -174,6 +198,23 @@ class MeshMetrics(unittest.TestCase):
         self.assertEqual(mesh_metrics.smallest_cell(["boundary faces: max distance 0.1 (1.54 x smallest cell)"]), None)
         self.assertEqual(mesh_metrics.layer_coverage(lines), {"full": 93.5, "reduced": 5.0, "none": 1.5})
         self.assertIsNone(mesh_metrics.layer_coverage(lines[:1]))
+
+
+class WheelGapGeometry(unittest.TestCase):
+    def test_wheel_gaps_are_closed_and_oriented(self):
+        import make_synthetic
+        from stl_check import check_file
+        shapes = make_synthetic.showcase()
+        with tempfile.TemporaryDirectory() as tmp:
+            for name in ("car_wheels", "car_wheels_yaw7", "car_wheels_gap1_yaw7"):
+                with self.subTest(case=name):
+                    path = os.path.join(tmp, name + ".stl")
+                    make_synthetic.write_ascii(path, shapes[name])
+                    info = check_file(path)
+                    self.assertEqual(info["triangles"], 1004)
+                    self.assertEqual(set(info["solids"]), {"inlet", "outlet", "walls", "floor", "body", "wheelArea"})
+                    for key in ("openEdges", "nonManifoldEdges", "inconsistentEdges", "degenerateTris", "duplicateTris"):
+                        self.assertEqual(info[key], 0, key)
 
 
 class StepParts(unittest.TestCase):

@@ -156,6 +156,13 @@ def worker(job_path):
         R = run(os.path.join(wd, "meshDict.json"), os.path.join(wd, "case"), log=log, check=True)
         q = {k: v for k, v in R.get("quality", {}).items() if not k.startswith("_")}
         res["quality"] = q
+        if q:
+            import mesh_metrics as mm
+            volumes = R["quality"]["_V"]
+            q["nVolRatio01"] = mm.low_volume_ratio_faces(volumes, R["owner"], R["neighbour"])
+            h = mm.smallest_cell(lines)
+            if h:
+                q["minVolRel"] = float(volumes.min() / h**3)
         res["steps"] = {name: round(dt, 3) for name, dt in R["timer"].steps}
         res["parts"] = [[step_name(st), part, round(dt, 3)] for st, part, dt in getattr(R["timer"], "parts", [])]
         try:
@@ -356,7 +363,7 @@ def input_summary(inp):
 
 CSV_COLS = ["name", "status", "verdict", "expect", "time", "cells", "maxNonOrth", "nNonOrth70",
             "maxSkewness", "nSkew4", "nBadTetDecomp", "volErr", "edgeOver02", "edgeP95", "layersFull",
-            "peakMemMB", "input", "notes"]
+            "nVolRatio01", "minVolRel", "peakMemMB", "input", "notes"]
 
 
 def row(r):
@@ -369,6 +376,7 @@ def row(r):
         "maxSkewness": round(q["maxSkewness"], 2) if "maxSkewness" in q else "",
         "nNonOrth70": q.get("nNonOrth70", ""), "nSkew4": q.get("nSkew4", ""),
         "nBadTetDecomp": q.get("nBadTetDecomp", ""),
+        "nVolRatio01": q.get("nVolRatio01", ""), "minVolRel": q.get("minVolRel", ""),
         "volErr": f"{r['volErr']:+.3%}" if r.get("volErr") is not None else "",
         "edgeOver02": f"{r['featureEdges']['over02']:.2%}" if r.get("featureEdges") else "",
         "edgeP95": f"{r['featureEdges']['p95']:.3f}" if r.get("featureEdges") else "",
@@ -391,6 +399,7 @@ STEP_MIN, STEP_SLOW = 1.0, 1.2          # steps of at least STEP_MIN s, slower b
 
 # quality gate (--gate, roadmap v0.7.0): a change that may change the mesh is accepted when
 # every case meets all of these against the baseline
+GATE_MIN_VOL_FRACTION = 0.90            # retain at least 90% of the reference minimum in hmin³
 GATE_CELLS_PCT = 3                      # cell count within +-3 % (inclusive, compared in integers)
 GATE_LAYERS = 1.0                       # full layer thickness: not down by 1 point or more
 GATE_EDGE_OVER = 0.005                  # feature-edge samples farther than 0.2 hmin: +0.5 points at most
@@ -414,6 +423,15 @@ def gate(r, o):
     x, y = int(qa.get("nSkew4", 0)), int(qb.get("nSkew4", 0))
     if y > x:
         out.append(f"faces skewness > 4 {x} -> {y}")
+    for key in ("nVolRatio01", "minVolRel"):
+        if qa.get(key) is None or qb.get(key) is None:
+            out.append(f"{key} not measured in baseline or run")
+    if qa.get("nVolRatio01") is not None and qb.get("nVolRatio01") is not None:
+        if qb["nVolRatio01"] > qa["nVolRatio01"]:
+            out.append(f"nVolRatio01 {qa['nVolRatio01']} -> {qb['nVolRatio01']}")
+    if qa.get("minVolRel") is not None and qb.get("minVolRel") is not None:
+        if qb["minVolRel"] < GATE_MIN_VOL_FRACTION * qa["minVolRel"]:
+            out.append(f"minVolRel {qa['minVolRel']:.6g} -> {qb['minVolRel']:.6g}")
     if int(qb.get("nNegVol", 0)) > 0:
         out.append(f"{qb['nNegVol']} non-positive volumes")
     if qa.get("nCells") and qb.get("nCells"):
@@ -603,12 +621,13 @@ def write_reports(outdir, suite, results, args, cmp_lines):
     if cmp_lines:
         md += ["## vs baseline", ""] + [f"- {s}" for s in cmp_lines] + [""]
     md += ["| case | status | verdict | cells | time [s] | max non-orth | non-orth > 70 | max skew | skew > 4 "
-           "| vol err | edges > 0.2 hmin | edges p95 | full layers | input | notes |",
-           "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+           "| nVolRatio01 | minVolRel | vol err | edges > 0.2 hmin | edges p95 | full layers | input | notes |",
+           "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for x in rows:
         md.append(f"| {x['name']} | {x['status']} | {x['verdict']} | {x['cells']} | {x['time']} | "
                   f"{x['maxNonOrth']} | {x['nNonOrth70']} | {x['maxSkewness']} | {x['nSkew4']} | "
-                  f"{x['volErr']} | {x['edgeOver02']} | {x['edgeP95']} | {x['layersFull']} | {x['input']} | "
+                  f"{x['nVolRatio01']} | {x['minVolRel']} | {x['volErr']} | {x['edgeOver02']} | "
+                  f"{x['edgeP95']} | {x['layersFull']} | {x['input']} | "
                   f"{x['notes'].replace('|', '/')} |")
     md += [""] + steps_table(results) + parts_table(results)
     with open(os.path.join(outdir, "summary.md"), "w", encoding="utf-8") as f:

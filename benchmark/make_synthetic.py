@@ -222,13 +222,13 @@ def _disk(ring, centre):
     return np.stack([c, ring, np.roll(ring, -1, 0)], 1)
 
 
-def _facing(tris, direction):
+def _facing(tris, direction, *, keep_first=False):
     """Flip the triangles whose normal points against direction (3-vector or per triangle)."""
     tris = np.array(tris, float)
     n = np.cross(tris[:, 1] - tris[:, 0], tris[:, 2] - tris[:, 0])
     d = np.broadcast_to(np.asarray(direction, float), n.shape)
     bad = np.einsum("ij,ij->i", n, d) < 0
-    tris[bad] = tris[bad][:, ::-1]
+    tris[bad] = tris[bad][:, [0, 2, 1] if keep_first else [2, 1, 0]]
     return tris
 
 
@@ -319,6 +319,62 @@ def _extrude_holes(outer, holes, z0, z1):
     return sides, pins, caps
 
 
+def car_wheels(body, gap=0.005, yaw=0):
+    """Four tyres penetrate the floor by 2 mm. All tunnel patches use the same
+    tile breakpoints, so every edge of a wheel opening has two incident triangles."""
+    radius, width, penetration = 0.05, 0.04, 0.002
+    zc = radius - penetration
+    half_chord = np.sqrt(radius**2 - zc**2)
+    angle = np.pi/2 + np.arcsin(zc/radius)
+    phi = np.linspace(-angle, angle, 49)
+    wheels = []
+    for x in (0.6 + 0.1, 0.6 + 0.5 - 0.1):
+        for side in (-1, 1):
+            ends = sorted((side*(0.1 + gap), side*(0.1 + gap + width)))
+            wheels.append((x, *ends))
+
+    def quad(a, b, c, d):
+        return [[a, b, c], [a, c, d]]
+
+    tyres = []
+    for x, ya, yb in wheels:
+        ring = np.c_[x + radius*np.sin(phi), zc + radius*np.cos(phi)]
+        ring[[0, -1], 1] = 0
+        side_a = np.c_[ring[:, 0], np.full(len(ring), ya), ring[:, 1]]
+        side_b = side_a.copy()
+        side_b[:, 1] = yb
+        tread = np.array([tri for i in range(len(ring)-1)
+                          for tri in quad(side_a[i], side_a[i+1], side_b[i+1], side_b[i])])
+        centres = tread.mean(axis=1)
+        inward = np.c_[x - centres[:, 0], np.zeros(len(tread)), zc - centres[:, 2]]
+        tyres.extend(_facing(tread, inward, keep_first=True))
+        for side, normal in ((side_a, [0, 1, 0]), (side_b, [0, -1, 0])):
+            caps = [[[x, side[0, 1], 0], p, q] for p, q in zip(side[:-1], side[1:])]
+            tyres.extend(_facing(caps, normal, keep_first=True))
+
+    xs = sorted({0, 2, *[x + dx for x, _, _ in wheels for dx in (-half_chord, 0, half_chord)]})
+    ys = sorted({-0.4, 0.4, *[y for _, ya, yb in wheels for y in (ya, yb)]})
+    floor, ceiling, walls, inlet, outlet = [], [], [], [], []
+    for x0, x1 in zip(xs[:-1], xs[1:]):
+        for y0, y1 in zip(ys[:-1], ys[1:]):
+            tile = np.array(quad([x0, y0, 0], [x1, y0, 0], [x1, y1, 0], [x0, y1, 0]))
+            ceiling.extend(tile + [0, 0, 0.5])
+            xm, ym = (x0+x1)/2, (y0+y1)/2
+            if not any(x-half_chord < xm < x+half_chord and ya < ym < yb for x, ya, yb in wheels):
+                floor.extend(_facing(tile, [0, 0, -1], keep_first=True))
+        for y, normal in ((ys[0], [0, -1, 0]), (ys[-1], [0, 1, 0])):
+            wall = quad([x0, y, 0], [x1, y, 0], [x1, y, .5], [x0, y, .5])
+            walls.extend(_facing(wall, normal, keep_first=True))
+    for y0, y1 in zip(ys[:-1], ys[1:]):
+        for x, normal, patch in ((xs[0], [-1, 0, 0], inlet), (xs[-1], [1, 0, 0], outlet)):
+            cap = quad([x, y0, 0], [x, y1, 0], [x, y1, .5], [x, y0, .5])
+            patch.extend(_facing(cap, normal, keep_first=True))
+    solids = [("inlet", inlet), ("outlet", outlet), ("walls", walls + ceiling),
+              ("floor", floor), ("body", body), ("wheelArea", tyres)]
+    return [(name, rotate(np.asarray(tris), [0, 0, 1], yaw) if yaw else np.asarray(tris))
+            for name, tris in solids]
+
+
 def showcase():
     """name -> [(solid, tris)]; every surface closed and facing out of the fluid."""
     S = {}
@@ -373,6 +429,9 @@ def showcase():
     tunnel = box([0, -0.4, 0], [2.0, 0.4, 0.5])
     S["body_in_tunnel"] = _split(tunnel, [("inlet", _plane(0, 0)), ("outlet", _plane(0, 2.0)),
                                           ("floor", _plane(2, 0))]) + [("body", body)]
+    S["car_wheels"] = car_wheels(body)
+    S["car_wheels_yaw7"] = car_wheels(body, yaw=7)
+    S["car_wheels_gap1_yaw7"] = car_wheels(body, gap=0.001, yaw=7)
     return S
 
 
