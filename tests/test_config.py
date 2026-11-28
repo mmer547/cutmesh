@@ -208,7 +208,7 @@ class SizeCheck(TempDir):
         os.makedirs(os.path.join(self.d, "v2"))
         self.write("v2/memory.max", "2147483648\n")
         self.write("v2/memory.current", "1932735283\n")              # 1.8 GiB used
-        self.assertEqual(_cgroup_memory(os.path.join(self.d, "v2"), none), (2147483648, 1932735283))
+        self.assertEqual(_cgroup_memory(os.path.join(self.d, "v2"), none), (2147483648, 2147483648 - 1932735283))
         # a limit on an ancestor of the process's group, none at the root or on the group
         r = os.path.join(self.d, "tree")
         for d in ("", "a", "a/b"):
@@ -217,14 +217,19 @@ class SizeCheck(TempDir):
         self.write("tree/a/memory.max", "1073741824\n")
         self.write("tree/a/memory.current", "123\n")
         proc = self.write("cg2", "0::/a/b\n")
-        self.assertEqual(_cgroup_memory(r, proc), (1073741824, 123))
+        self.assertEqual(_cgroup_memory(r, proc), (1073741824, 1073741824 - 123))
+        # a parent filled by other processes leaves less than the child's own limit
+        self.write("tree/a/b/memory.max", "536870912\n")
+        self.write("tree/a/b/memory.current", "0\n")
+        self.write("tree/a/memory.current", "1000000000\n")
+        self.assertEqual(_cgroup_memory(r, proc), (536870912, 1073741824 - 1000000000))
         # v1: the memory controller's line
         os.makedirs(os.path.join(self.d, "v1", "memory", "x", "y"))
         self.write("v1/memory/memory.limit_in_bytes", "9223372036854771712\n")
         self.write("v1/memory/x/y/memory.limit_in_bytes", "536870912\n")
         self.write("v1/memory/x/y/memory.usage_in_bytes", "100\n")
         proc = self.write("cg1", "5:devices:/\n4:memory:/x/y\n0::/\n")
-        self.assertEqual(_cgroup_memory(os.path.join(self.d, "v1"), proc), (536870912, 100))
+        self.assertEqual(_cgroup_memory(os.path.join(self.d, "v1"), proc), (536870912, 536870912 - 100))
         os.makedirs(os.path.join(self.d, "nolimit"))
         self.write("nolimit/memory.max", "max\n")
         self.assertEqual(_cgroup_memory(os.path.join(self.d, "nolimit"), none), (None, None))
@@ -232,7 +237,7 @@ class SizeCheck(TempDir):
         # _memory: the container's limit is the total, what it has left the free memory
         from unittest import mock
         import cutmesh.mesher as M
-        with mock.patch.object(M, "_cgroup_memory", return_value=(2 * 2 ** 30, int(1.8 * 2 ** 30))):
+        with mock.patch.object(M, "_cgroup_memory", return_value=(2 * 2 ** 30, int(0.2 * 2 ** 30))):
             total, avail = M._memory()
         if total == 2 * 2 ** 30:                     # (a machine with less memory keeps its own)
             self.assertAlmostEqual(avail / 2 ** 30, 0.2, places=3)
@@ -270,6 +275,18 @@ class SizeCheck(TempDir):
         self.assertLess(_min_cells(cfg, dom, [], [(tiny, 11)], 0.25, lev) - n0, 1)
         from cutmesh.mesher import _check_size
         _check_size(n1, lambda s: None, memory=(2 ** 30, 2 ** 30))  # no error
+
+    def test_cylindrical_base_counts_only_refinement(self):
+        """with a cylindrical base, baseCellSize is not the size of the base cells: a fine
+        baseCellSize with nothing refined estimates nothing"""
+        from cutmesh.mesher import _min_cells
+        from cutmesh.geometry import Surface
+        write_stl_ascii(os.path.join(self.d, "box.stl"), [("walls", box())])
+        cfg = load_config(self.write("m.json", json.dumps({"domain": "box.stl", "baseCellSize": 0.002})))
+        dom = Surface(read_stl(os.path.join(self.d, "box.stl")), log=lambda s: None)
+        self.assertGreater(_min_cells(cfg, dom, [], [], 0.002, np.zeros(1)), 6e7)
+        self.assertEqual(_min_cells(cfg, dom, [], [], 0.002, np.zeros(1), cartesian=False), 0)
+        self.assertGreater(_min_cells(cfg, dom, [], [], 0.25, np.array([3]), cartesian=False), 1000)
 
     def test_lower_bound_of_the_examples(self):
         """the estimate stays below the cells the examples get (it is a lower bound)"""

@@ -114,9 +114,10 @@ def _rel(cfg, p):
 
 
 def _cgroup_memory(root="/sys/fs/cgroup", proc="/proc/self/cgroup"):
-    """(limit, usage) in bytes of the tightest memory limit over this process's cgroup and
-    its ancestors (cgroup v2 or v1, the process's own group from proc), None where there
-    is no limit or it cannot be read"""
+    """(limit, left) in bytes over this process's cgroup and its ancestors (cgroup v2 or v1,
+    the process's own group from proc): the smallest limit, and the smallest of limit -
+    usage (a parent filled by other processes leaves less than the child's own limit).
+    None where there is no limit or it cannot be read."""
     def read(p):
         try:
             with open(p) as f:
@@ -140,7 +141,7 @@ def _cgroup_memory(root="/sys/fs/cgroup", proc="/proc/self/cgroup"):
             groups.append(("memory", parts[2]))                               # v1
     if not groups:
         groups = [("", "/"), ("memory", "/")]
-    best = (None, None)
+    limit = left = None
     for sub, path in groups:
         lim, use = ("memory.max", "memory.current") if sub == "" else \
                    ("memory.limit_in_bytes", "memory.usage_in_bytes")
@@ -148,9 +149,14 @@ def _cgroup_memory(root="/sys/fs/cgroup", proc="/proc/self/cgroup"):
         for k in range(len(parts), -1, -1):     # the group, then its ancestors up to the root
             d = os.path.join(root, sub, *parts[:k])
             v = read(os.path.join(d, lim))
-            if v is not None and (best[0] is None or v < best[0]):
-                best = (v, read(os.path.join(d, use)))
-    return best
+            if v is None:
+                continue
+            limit = v if limit is None else min(limit, v)
+            u = read(os.path.join(d, use))
+            if u is not None:
+                rest = max(v - u, 0)
+                left = rest if left is None else min(left, rest)
+    return limit, left
 
 
 def _memory():
@@ -168,11 +174,12 @@ def _memory():
                     avail = int(s.split()[1]) * 1024
     except OSError:
         pass
-    limit, used = _cgroup_memory()
+    limit, left = _cgroup_memory()
     if limit is not None and limit < (total or float("inf")):
         total = limit
-        left = max(limit - used, 0) if used is not None else None
         avail = min(x for x in (avail, left, limit) if x is not None)
+    elif left is not None:
+        avail = min(avail, left) if avail is not None else left
     if total is None and os.name == "nt":
         try:
             import ctypes
@@ -197,18 +204,20 @@ _BYTES_PER_CELL = 1000.0
 _MAX_CELLS = 1e10            # beyond any machine, whatever its memory
 
 
-def _min_cells(cfg, dom, zones, regions, h0, region_level, n_axis=32):
+def _min_cells(cfg, dom, zones, regions, h0, region_level, n_axis=32, cartesian=True):
     """a lower bound of the cell count the settings ask for: each STL region's area in cells
     of its level, and the fluid volume in cells of the finest volume level over it (base
     cells, the rotating zones' volumeLevel, the refinement regions), sampled on an n_axis^3
     lattice over the domain's bounding box (only the fluid is counted, overlaps once, half
     the sampled volume to keep below the true one).  Buffer layers, feature edges, gaps and
     the zones' surfaces are left out, so the mesh has more cells (1.3 to 30 x on the
-    examples)."""
+    examples).  cartesian False (a cylindrical base, whose cells are not baseCellSize):
+    only what is refined (levels above 0) counts."""
     t = dom.tris
     area = 0.5 * np.linalg.norm(np.cross(t[:, 1] - t[:, 0], t[:, 2] - t[:, 0]), axis=1)
     A = np.bincount(dom.region, weights=area, minlength=len(dom.names))
-    n = float(np.sum(A / (h0 / 2.0 ** region_level) ** 2))
+    lv_ok = region_level > 0 if not cartesian else np.ones(len(region_level), bool)
+    n = float(np.sum((A / (h0 / 2.0 ** region_level) ** 2)[lv_ok]))
     lo, hi = dom.bbmin, dom.bbmax
     g = [lo[k] + (np.arange(n_axis) + 0.5) * (hi[k] - lo[k]) / n_axis for k in range(3)]
     X = np.stack(np.meshgrid(*g, indexing="ij"), -1).reshape(-1, 3)
@@ -224,7 +233,8 @@ def _min_cells(cfg, dom, zones, regions, h0, region_level, n_axis=32):
                 owner[m] = k
         dv = float(np.prod(hi - lo)) / n_axis ** 3
         cells = dv / (h0 / 2.0 ** lev) ** 3
-        n += 0.5 * float(cells[owner < 0].sum())
+        if cartesian:
+            n += 0.5 * float(cells[owner < 0].sum())
         for k, (geom, lv) in enumerate(vols):
             if (owner == k).any():
                 # a region smaller than a lattice cell would get the whole cell: at most its
@@ -2248,7 +2258,8 @@ def generate(cfg, log=print):
     hmin = h0 / 2 ** Lmax
     log(f"domain: {len(dom.tris)} triangles, regions {dom.names}")
     log(f"base cell {h0:g}, max level {Lmax} (smallest cell {hmin:g})")
-    _check_size(_min_cells(cfg, dom, zones, regions, h0, region_level), log)
+    _check_size(_min_cells(cfg, dom, zones, regions, h0, region_level,
+                           cartesian=(cfg.get("baseMesh") or {}).get("type", "cartesian") != "cylindrical"), log)
     bm = cfg.get("baseMesh") or {}
     cyl = None
     if bm.get("type", "cartesian") == "cylindrical":
