@@ -3728,6 +3728,8 @@ def _n_cells(R):
 def run(config_path, case_dir=None, log=print, check=True):
     cfg = load_config(config_path)
     case_dir = case_dir or _rel(cfg, cfg.get("case", "."))
+    if os.path.exists(case_dir) and not os.path.isdir(case_dir):
+        raise ConfigError(f"the case must be a directory, but {case_dir} is a file")
     R = generate(cfg, log)
     T = R["timer"]
     if cfg.get("addLayers") is not None:             # {} = layers with the default settings
@@ -3783,6 +3785,10 @@ def run(config_path, case_dir=None, log=print, check=True):
             log(f"MRFProperties: removed {nd} entr{'y' if nd == 1 else 'ies'} of sliding-mesh zones")
     if ami_z and cfg["writeDynamicMeshDict"]:
         ami.write_dynamic_mesh_dict(case_dir, ami_z, cfg["openfoam"])
+    from . import ami as _ami
+    _ami.tidy_extra_files(case_dir, [z["name"] for z in mrf_z], [z["name"] for z in ami_z],
+                          wrote_mrf=bool(cfg["writeMRFProperties"] and mrf_z),
+                          wrote_dynamic=bool(ami_z and cfg["writeDynamicMeshDict"]), log=log)
     if ami_z:
         hint = ami.couple_hint([z["name"] for z in ami_z], cfg["openfoam"])
         if hint:

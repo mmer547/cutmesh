@@ -24,7 +24,8 @@ The mesh is shrunk away from the walls and the gap is filled with prism layers:
    terminate there with wedge cells (as in snappyHexMesh).
 
 Thicknesses are relative to the local cell size (max extent of the cell at the wall)
-unless relativeSizes is false.
+unless relativeSizes is false.  minThickness left out stays relative (0.05 x the cell size)
+also with relativeSizes false.
 """
 import itertools
 import time
@@ -45,7 +46,7 @@ DEFAULTS = {
     "expansionRatio": 1.2,
     "finalLayerThickness": 0.3,  # thickness of the layer next to the interior mesh
     "relativeSizes": True,       # thicknesses relative to the local cell size
-    "minThickness": 0.05,        # total thickness below this collapses the layers
+    "minThickness": 0.05,        # total thickness below this collapses the layers (left out: x the local cell size)
     "minNormalCos": 0.25,        # collapse where cos(point normal, face normal) is below
     "nRings": 6,                 # interior points within this many edges of the wall are displaced
     "nSmooth": 60,               # Laplacian smoothing sweeps of the interior displacement
@@ -577,7 +578,10 @@ def add_layers(mesh, spec=None, log=print):
         T = np.minimum(T, lim)
         T_target = T.copy()
         log(f"addLayers: {ng} wall points in narrow gaps, thickness limited to {gf:g} x the gap")
-    tmin = float(s["minThickness"]) * scale
+    # minThickness follows relativeSizes; left out with absolute sizes it stays relative to
+    # the cell size (the default 0.05 read as a length would drop every layer thinner than it)
+    rel_min = s["relativeSizes"] or "minThickness" not in (spec or {})
+    tmin = float(s["minThickness"]) * (hw if rel_min else np.ones(nW))
     kap = s["concaveSlide"]
     slide = None
     if kap is not None:

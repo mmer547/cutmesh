@@ -448,8 +448,9 @@ def _top(D):
                            ), has_default=False, exclusiveMinimum=0,
                                           unit="m", advanced=True),
                            "maxSizeRatio": _p("number", (
-                               "ブロック境界をまたぐセル寸法の比の上限",
-                               "Maximum cell size ratio across block boundaries",
+                               "ブロック境界をまたぐセル寸法の比の上限（1 より大きい値。セルは半分ずつになるため、1 以下は満たせない）",
+                               "Maximum cell size ratio across block boundaries (greater than 1: cells halve in size, "
+                               "so a ratio up to 1 cannot be met)",
                            ), 2.5,
                                               exclusiveMinimum=0, advanced=True),
                            "core": _p("object", (
@@ -510,8 +511,9 @@ def _layers(LD):
             "Specify thickness as a fraction of the local cell size.",
         )),
         p("minThickness", "number", (
-            "総厚がこれ未満の所は層を付けない",
-            "Omit layers where their total thickness would fall below this value.",
+            "総厚がこれ未満の所は層を付けない（relativeSizes なら局所セル寸法比。relativeSizes が false でも、省いたときは局所セル寸法の 0.05 倍）",
+            "Omit layers where their total thickness would fall below this value (relative to the local cell size "
+            "when relativeSizes is enabled; when it is disabled and this is left out, 0.05 x the local cell size).",
         ), minimum=0),
         p("maxNonOrtho", "number", (
             "非直交角がこれを超えるセルは不正とみなし、そこで層を薄くする",

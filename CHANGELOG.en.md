@@ -2,6 +2,14 @@
 
 Changes in each version of cutmesh, the same as the News on the documentation site. See "meshDict compatibility" in the manual for versioning and meshDict compatibility.
 
+## v1.0.1 (2026-11-28)
+
+**Bug fixes.** Fixes for the bugs found in a review of v1.0.0 ([#68](https://github.com/mmer547/cutmesh/issues/68)).
+A case meshed with a sliding mesh and then remeshed with MRF zones kept the old `constant/dynamicMeshDict`, so the zone turned with the mesh and in a rotating frame. cutmesh now removes the `dynamicMeshDict` and `MRFProperties` it wrote when the mesh has no zones of that kind (a file you wrote is kept, with a warning).
+With `relativeSizes: false` in `addLayers` (absolute thicknesses), the default `minThickness` of 0.05 was read as 5 cm and no layers were added. Left out, it is now 0.05 x the local cell size. **Meshes change in this case only.**
+Most values of `addLayers` and `baseMesh` were not checked, and bad values ended in a traceback, an endless loop or running out of memory. They are now checked against the schema (the specification) and stop with an error naming the key. Values the schema rejects (such as numbers written as strings) are errors now, also where they happened to work. `baseMesh.maxSizeRatio` must be greater than 1 (up to 1 never finished).
+Also fixed: a traceback when `case` is a file, `featureCaps: 1` read as true, and integer values written as `3.0` rejected. The meshes of the public examples are unchanged.
+
 ## v1.0.0 (2026-11-27)
 
 **First stable version.** The meshDict specification is frozen: within 1.x, keys are not removed, renamed, or given a new meaning ([meshDict compatibility](https://mmer547.github.io/cutmesh/en/manual.html#compat)). A test holds the 1.0 keys with their types, allowed values, and required keys (`tests/data/meshdict_1.0.json`) and stops changes that would break them.

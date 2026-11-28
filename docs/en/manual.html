@@ -246,7 +246,7 @@ cutmesh lays out the central square, ring radii, and divisions automatically. A 
   <tr><td><code>rOuter</code></td><td>Outer radius of the outermost block in the automatic layout</td><td>STL radius + <code>2/3 × cellSize</code></td></tr>
   <tr><td><code>cellSize</code></td><td>Target radial and circumferential cell width for the automatic layout</td><td>Smaller of <code>baseCellSize</code> and <code>dz</code></td></tr>
   <tr><td><code>core</code>, <code>blocks</code></td><td>For manual block layout, supply both keys. Otherwise omit both.</td><td>Automatic layout</td></tr>
-  <tr><td><code>maxSizeRatio</code></td><td>Maximum cell size ratio across block boundaries</td><td>2.5</td></tr>
+  <tr><td><code>maxSizeRatio</code></td><td>Maximum cell size ratio across block boundaries (greater than 1)</td><td>2.5</td></tr>
 </table></div>
 <p><strong>Automatic layout</strong> (omit <code>core</code> and <code>blocks</code>)</p>
 <ul>
@@ -288,7 +288,7 @@ python -m cutmesh.layers CASE [layerDict.json] [-out CASE2] [-noCheck] [-ascii |
   <tr><td><code>expansionRatio</code></td><td>Ratio of successive layer thicknesses away from the wall</td><td>1.2</td></tr>
   <tr><td><code>finalLayerThickness</code></td><td>Thickness of the innermost layer, as a fraction of the local cell size if <code>relativeSizes</code> is enabled</td><td>0.3</td></tr>
   <tr><td><code>relativeSizes</code></td><td>Specify thickness as a fraction of the local cell size.</td><td>true</td></tr>
-  <tr><td><code>minThickness</code></td><td>Omit layers below this total thickness.</td><td>0.05</td></tr>
+  <tr><td><code>minThickness</code></td><td>Omit layers below this total thickness (relative to the local cell size when <code>relativeSizes</code> is on; with it off and this left out, 0.05 x the local cell size).</td><td>0.05</td></tr>
   <tr><td><code>maxNonOrtho</code></td><td>Treat cells above this non-orthogonality angle [deg] as invalid and reduce the layer thickness there.</td><td>65</td></tr>
   <tr><td><code>maxSkewness</code></td><td>Treat cells adjacent to faces above this skewness limit as invalid. <code>null</code> disables the check.</td><td>4</td></tr>
   <tr><td><code>maxGapFraction</code></td><td>Limit total thickness to this fraction of the distance to the opposing wall. Set to 0 to disable.</td><td>0.3</td></tr>

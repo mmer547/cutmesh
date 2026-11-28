@@ -727,7 +727,7 @@
     },
     "maxSizeRatio": {
      "type": "number",
-     "description": "ブロック境界をまたぐセル寸法の比の上限",
+     "description": "ブロック境界をまたぐセル寸法の比の上限（1 より大きい値。セルは半分ずつになるため、1 以下は満たせない）",
      "default": 2.5,
      "exclusiveMinimum": 0,
      "x-advanced": true
@@ -837,7 +837,7 @@
     },
     "minThickness": {
      "type": "number",
-     "description": "総厚がこれ未満の所は層を付けない",
+     "description": "総厚がこれ未満の所は層を付けない（relativeSizes なら局所セル寸法比。relativeSizes が false でも、省いたときは局所セル寸法の 0.05 倍）",
      "default": 0.05,
      "minimum": 0
     },

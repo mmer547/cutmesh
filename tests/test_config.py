@@ -90,6 +90,100 @@ class TestReadSTL(TempDir):
         np.testing.assert_allclose(tris, box())
 
 
+class SchemaAgreement(TempDir):
+    """validate_config accepts what the JSON schema (cutmesh/schema.py, the specification)
+    accepts, and rejects what it rejects: boundary and wrong-type values for every key of the
+    top level and of the nested objects, each in an otherwise minimal meshDict.  The checker
+    is stricter only where a value the schema allows cannot work (STRICTER)."""
+    ZONE = {"name": "r", "cylinder": {"point1": [0, 0, 0.2], "point2": [0, 0, 0.4], "radius": 0.1}}
+    PLACES = {
+        "": lambda d: d,
+        "addLayers": lambda d: d.setdefault("addLayers", {}),
+        "gapRefinement": lambda d: d.setdefault("gapRefinement", {"level": 3, "thickness": 0.004}),
+        "autoGapRefinement": lambda d: d.setdefault("autoGapRefinement", {}),
+        "baseMesh": lambda d: d.setdefault("baseMesh", {"type": "cylindrical"}),
+        "rotatingZones/[]": lambda d: d.setdefault("rotatingZones", [json.loads(json.dumps(SchemaAgreement.ZONE))])[0],
+        "rotatingZones/[]/cylinder": lambda d: SchemaAgreement.PLACES["rotatingZones/[]"](d)["cylinder"],
+        "rotatingZones/[]/wallProximity": lambda d: SchemaAgreement.PLACES["rotatingZones/[]"](d).setdefault(
+            "wallProximity", {"distance": 0.01, "level": 3}),
+        "refinementRegions/[]": lambda d: d.setdefault("refinementRegions", [
+            {"cylinder": {"point1": [0, 0, 0], "point2": [0, 0, 0.5], "radius": 0.2}, "level": 2}])[0],
+    }
+    # (place/key, value) the checker rejects on purpose: no direction, an empty range, a
+    # size ratio never met (cells halve), blocks without a core
+    STRICTER = {("baseMesh/axis", "[0.0, 0.0, 0.0]"), ("rotatingZones/[]/axis", "[0.0, 0.0, 0.0]"),
+                ("baseMesh/zRange", "[0.0, 0.0]"), ("baseMesh/zRange", "[1.0, 1.0]"),
+                ("baseMesh/zRange", "[-1.0, -1.0]"), ("baseMesh/maxSizeRatio", "1"),
+                ("baseMesh/maxSizeRatio", "1e-09"), ("baseMesh/blocks", "[]")}
+
+    @staticmethod
+    def values(p):
+        t = p.get("type")
+        ts = t if isinstance(t, list) else [t]
+        out = [None, True, "x", [], {}, -1, 0, 1, 2.5, 1e9, -1e9]
+        for k in ("minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"):
+            if k in p:
+                out += [p[k], p[k] - 1e-9, p[k] + 1e-9, p[k] - 1, p[k] + 1]
+        out += p.get("enum", [])
+        if "integer" in ts:
+            out += [3, 3.0, 3.5]
+        if "array" in ts:
+            n = p.get("minItems", 3)
+            out += [[0.0] * n, [1.0] * n, [0.0] * (n + 1), [0.0] * max(n - 1, 0), [-1.0] * n, ["a"] * n]
+        return out
+
+    def test_schema_and_checker_agree(self):
+        try:
+            import jsonschema
+        except ImportError:
+            self.skipTest("jsonschema is not installed")
+        from cutmesh.mesher import DEFAULTS
+        from cutmesh.schema import meshdict_schema
+        S = meshdict_schema("en")
+        V = jsonschema.Draft202012Validator(S)
+        write_stl_ascii(os.path.join(self.d, "box.stl"), [("walls", box())])
+        base = {"domain": "box.stl", "baseCellSize": 0.1}
+
+        def node(path):
+            n = S
+            for seg in [q for q in path.split("/") if q]:
+                n = n["items"] if seg == "[]" else n["properties"][seg]
+            return n
+
+        bad = []
+        for place, get in self.PLACES.items():
+            for key, p in node(place).get("properties", {}).items():
+                if p.get("type") == "object" and "properties" in p:
+                    continue                         # its keys are checked at their own place
+                for v in self.values(p):
+                    if place == "" and key in ("domain", "case") and isinstance(v, str):
+                        continue                     # file and directory names: tested elsewhere
+                    d = json.loads(json.dumps(base))
+                    get(d)[key] = v
+                    s_ok = V.is_valid(d)
+                    cfg = dict(DEFAULTS, **json.loads(json.dumps(d)), _base=self.d)
+                    try:
+                        validate_config(cfg, None)
+                        c_ok = True
+                    except ConfigError:
+                        c_ok = False
+                    name = (place + "/" if place else "") + key
+                    if s_ok != c_ok and not (s_ok and (name, repr(v)) in self.STRICTER):
+                        bad.append(f"{name} = {v!r}: schema {'accepts' if s_ok else 'rejects'}, "
+                                   f"checker {'accepts' if c_ok else 'rejects'}")
+        self.assertFalse(bad, "\n".join(bad))
+
+    def test_integer_valued_floats_become_int(self):
+        cfg = dict(__import__("cutmesh.mesher", fromlist=["DEFAULTS"]).DEFAULTS,
+                   domain="box.stl", baseCellSize=0.1, padding=2.0, surfaceRefinement={"walls": 2.0},
+                   addLayers={"nLayers": 3.0}, _base=self.d)
+        write_stl_ascii(os.path.join(self.d, "box.stl"), [("walls", box())])
+        validate_config(cfg, None)
+        for v in (cfg["padding"], cfg["surfaceRefinement"]["walls"], cfg["addLayers"]["nLayers"]):
+            self.assertIs(type(v), int)
+        self.assertIs(type(cfg["baseCellSize"]), float)
+
+
 class TestConfig(TempDir):
     def cfg(self, **kw):
         stl = os.path.join(self.d, "box.stl")
@@ -168,6 +262,27 @@ class TestConfig(TempDir):
         msg = self.errors(self.cfg(baseMesh=dict(ok, rOuter=0, cellSize="x")))
         self.assertIn("baseMesh.rOuter", msg)
         self.assertIn("baseMesh.cellSize", msg)
+        # each of these stopped with a traceback, ran without end or used up the memory
+        for bm, text in (({"nz": 0}, "baseMesh.nz"), ({"nz": 2.5}, "baseMesh.nz must be an integer"),
+                         ({"axis": [0, 0, 0]}, "baseMesh.axis must not be zero"),
+                         ({"axis": [0, 1]}, "baseMesh.axis must have 3 items"),
+                         ({"origin": "0 0 0"}, "baseMesh.origin must be a list"),
+                         ({"dz": -0.01}, "baseMesh.dz"), ({"zRange": [0.3, 0.0]}, "low < high"),
+                         ({"maxSizeRatio": 1.0}, "maxSizeRatio must be greater than 1"),
+                         ({"core": {"halfWidth": 0.1, "n": 2}, "blocks": [{"radii": [0.2, 0.5], "nr": 1}]},
+                          "baseMesh.blocks[0]: rOuter is required")):
+            self.assertIn(text, self.errors(self.cfg(baseMesh=dict(ok, **bm))), bm)
+
+    def test_layer_checks(self):
+        self.assertEqual(self.validate(self.cfg(addLayers={})), [])
+        self.assertEqual(self.validate(self.cfg(addLayers={"expansionRatio": 0.9, "maxSkewness": None})), [])
+        for al, text in (({"expansionRatio": 0}, "addLayers.expansionRatio"),
+                         ({"expansionRatio": -1}, "addLayers.expansionRatio"),
+                         ({"finalLayerThickness": 0}, "addLayers.finalLayerThickness"),
+                         ({"nIter": "x"}, "addLayers.nIter must be an integer"),
+                         ({"relativeSizes": "no"}, "addLayers.relativeSizes must be true or false"),
+                         ({"maxNonOrtho": 95}, "addLayers.maxNonOrtho")):
+            self.assertIn(text, self.errors(self.cfg(addLayers=al)), al)
 
     def test_check_names(self):
         cfg = self.cfg(surfaceRefinement={"default": 1, "wall": 2}, patchTypes={"walls": "wall", "inlet": "patch"},
@@ -233,6 +348,18 @@ class TestCLI(TempDir):
         self.assertEqual(rc, 1)
         self.assertTrue(err.startswith("ERROR: meshDict"))
         self.assertIn("file not found", err)
+
+    def test_case_that_is_a_file(self):
+        write_stl_ascii(os.path.join(self.d, "box.stl"), [("walls", box())])
+        f = self.write("notadir", "x")
+        p = self.write("m.json", json.dumps({"domain": "box.stl", "baseCellSize": 0.5, "case": "notadir"}))
+        rc, err = self.run_cli(p)
+        self.assertEqual(rc, 1)
+        self.assertIn("case must be a directory", err)
+        p = self.write("m2.json", json.dumps({"domain": "box.stl", "baseCellSize": 0.5}))
+        rc, err = self.run_cli(p, "-case", f)                 # the same through -case
+        self.assertEqual(rc, 1)
+        self.assertIn("must be a directory", err)
 
     def test_empty_stl_is_reported(self):
         self.write("e.stl", b"")

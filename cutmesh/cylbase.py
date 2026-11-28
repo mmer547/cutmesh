@@ -35,6 +35,7 @@ import math
 
 import numpy as np
 
+from .config import ConfigError
 from .geometry import sdf_below
 from .octree import Octree, CHILD
 
@@ -329,7 +330,7 @@ class CylindricalBase:
             nz = max(1, int(math.ceil((z1 - z0) / float(spec.get("dz", self.h0)))))
         self.z0, self.dz, self.nz = z0, (z1 - z0) / nz, nz
         if ("core" in spec) != ("blocks" in spec):
-            raise ValueError("baseMesh: give both core and blocks, or neither (automatic layout)")
+            raise ConfigError("baseMesh: give both core and blocks, or neither (automatic layout)")
         if "core" in spec:
             core, blocks = spec["core"], spec["blocks"]
         else:
@@ -359,15 +360,15 @@ class CylindricalBase:
         a = float(core["halfWidth"])
         nc = int(core["n"])
         if not blocks:
-            raise ValueError("baseMesh: at least one block (the O-grid ring) is needed")
+            raise ConfigError("baseMesh: at least one block (the O-grid ring) is needed")
         R = [float(b["rOuter"]) for b in blocks]
         if R[0] <= a * math.sqrt(2) * 1.01 or any(r1 <= r0 for r0, r1 in zip(R, R[1:])):
-            raise ValueError("baseMesh: radii must grow outward and the first one exceed the core's corner")
+            raise ConfigError("baseMesh: radii must grow outward and the first one exceed the core's corner")
         if R[-1] < rmax:
             log(f"WARNING: baseMesh: outer radius {R[-1]:g} < STL radius {rmax:g}; the STL is clipped")
         nth0 = int(blocks[0].get("nTheta", 4 * nc))
         if nth0 != 4 * nc:
-            raise ValueError(f"baseMesh: the first block (O-grid ring) needs nTheta = 4 x core n = {4 * nc}")
+            raise ConfigError(f"baseMesh: the first block (O-grid ring) needs nTheta = 4 x core n = {4 * nc}")
         self.a, self.nc, self.R = a, nc, R
 
         z0_, dz = self.z0, self.dz
@@ -424,11 +425,11 @@ class CylindricalBase:
                 radii = np.array(b["radii"], float)
                 tol = 1e-3 * (R[k] - R[k - 1])      # the logged layout is rounded
                 if len(radii) != nr + 1 or abs(radii[0] - R[k - 1]) > tol or abs(radii[-1] - R[k]) > tol:
-                    raise ValueError(f"baseMesh: block {k + 1}: radii must be nr + 1 = {nr + 1} radii "
+                    raise ConfigError(f"baseMesh: block {k + 1}: radii must be nr + 1 = {nr + 1} radii "
                                      f"from {R[k - 1]:g} (the block inside's rOuter) to {R[k]:g}")
                 radii[0], radii[-1] = R[k - 1], R[k]
                 if np.any(np.diff(radii) <= 0):
-                    raise ValueError(f"baseMesh: block {k + 1}: radii must increase")
+                    raise ConfigError(f"baseMesh: block {k + 1}: radii must increase")
             # default: cells about as wide around as across (refinement goes by the
             # longest edge, so elongated base cells end up over-refined)
             dr = (R[k] - R[k - 1]) / nr

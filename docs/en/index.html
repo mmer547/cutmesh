@@ -40,6 +40,12 @@
 
 <h2 id="news">News</h2>
 <ul class="news">
+  <li><time datetime="2026-11-28">2026-11-28</time><span class="ver">v1.0.1</span>
+    <p><strong>Bug fixes.</strong> Fixes for the bugs found in a review of v1.0.0 (<a href="https://github.com/mmer547/cutmesh/issues/68">#68</a>).
+    A case meshed with a sliding mesh and then remeshed with MRF zones kept the old <code>constant/dynamicMeshDict</code>, so the zone turned with the mesh and in a rotating frame. cutmesh now removes the <code>dynamicMeshDict</code> and <code>MRFProperties</code> it wrote when the mesh has no zones of that kind (a file you wrote is kept, with a warning).
+    With <code>relativeSizes: false</code> in <code>addLayers</code> (absolute thicknesses), the default <code>minThickness</code> of 0.05 was read as 5 cm and no layers were added. Left out, it is now 0.05 x the local cell size. <strong>Meshes change in this case only.</strong>
+    Most values of <code>addLayers</code> and <code>baseMesh</code> were not checked, and bad values ended in a traceback, an endless loop or running out of memory. They are now checked against the schema (the specification) and stop with an error naming the key. Values the schema rejects (such as numbers written as strings) are errors now, also where they happened to work. <code>baseMesh.maxSizeRatio</code> must be greater than 1 (up to 1 never finished).
+    Also fixed: a traceback when <code>case</code> is a file, <code>featureCaps: 1</code> read as true, and integer values written as <code>3.0</code> rejected. The meshes of the public examples are unchanged.</p></li>
   <li><time datetime="2026-11-27">2026-11-27</time><span class="ver">v1.0.0</span>
     <p><strong>First stable version.</strong> The meshDict specification is frozen: within 1.x, keys are not removed, renamed, or given a new meaning (<a href="manual.html#compat">meshDict compatibility</a>). A test holds the 1.0 keys with their types, allowed values, and required keys, and stops changes that would break them.
     All the v1.0 conditions are met: CI passes, no known leaks, the public examples pass OpenFOAM's <code>checkMesh</code>, wheels are distributed, and the meshDict specification is frozen. The <a href="https://github.com/mmer547/cutmesh/blob/main/CHANGELOG.en.md">CHANGELOG</a> collects the changes of every version. Meshes are unchanged.</p></li>
