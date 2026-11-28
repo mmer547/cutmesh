@@ -103,6 +103,22 @@ class QualityGate(unittest.TestCase):
                 del pair[side]["quality"][key]
                 self.assertIn("not measured", run_bench.gate(*pair)[0])
 
+    def test_volume_ratio_05(self):
+        # up 10 % of the baseline at most, or 5 faces where 10 % is fewer (integers, no rounding)
+        for base, worst in ((446, 490), (100, 110), (20, 25), (0, 5)):
+            baseline = gres(quality={"nVolRatio05": base})
+            self.assertEqual(run_bench.gate(gres(quality={"nVolRatio05": worst}), baseline), [], base)
+            self.assertEqual(run_bench.gate(gres(quality={"nVolRatio05": base - 3}), baseline), [], base)
+            g = run_bench.gate(gres(quality={"nVolRatio05": worst + 1}), baseline)
+            self.assertEqual(g, [f"nVolRatio05 {base} -> {worst + 1}"], base)
+        self.assertEqual(run_bench.gate(gres(quality={"nVolRatio05": 794}), gres(quality={"nVolRatio05": 446})),
+                         ["nVolRatio05 446 -> 794"])
+        # a baseline from before the measure (none in it): not compared, whatever the run has
+        self.assertEqual(run_bench.gate(gres(quality={"nVolRatio05": 10 ** 6}), gres()), [])
+        # measured in the baseline but not in this run: no pass
+        g = run_bench.gate(gres(), gres(quality={"nVolRatio05": 446}))
+        self.assertTrue(len(g) == 1 and "nVolRatio05 not measured" in g[0], g)
+
     def test_existing_non_orth(self):
         # a baseline that already has faces over 70 degrees: not more of them
         o = gres(quality={"nNonOrth70": 4})
@@ -171,6 +187,15 @@ class MeshMetrics(unittest.TestCase):
         neighbour = np.array([1, 2, 0])
         self.assertEqual(low_volume_ratio_faces(volumes, owner, neighbour), 2)
         self.assertEqual(low_volume_ratio_faces(volumes, owner, neighbour[:0]), 0)
+        # another ratio: the comparison is strict at it too
+        volumes = np.array([1., .05, .049, .5])
+        owner = np.array([0, 2, 0, 3])
+        neighbour = np.array([1, 0, 3])
+        self.assertEqual(low_volume_ratio_faces(volumes, owner, neighbour, .05), 1)
+        self.assertEqual(low_volume_ratio_faces(volumes, owner, neighbour, .06), 2)
+        self.assertEqual(low_volume_ratio_faces(volumes, owner, neighbour, .5), 2)
+        self.assertEqual(low_volume_ratio_faces(volumes, owner, neighbour, .51), 3)
+        self.assertEqual(low_volume_ratio_faces(volumes, owner, neighbour), 0)
 
     def test_feature_edges(self):
         import numpy as np
