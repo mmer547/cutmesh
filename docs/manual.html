@@ -295,7 +295,7 @@ python -m cutmesh.layers CASE [layerDict.json] [-out CASE2] [-noCheck] [-ascii |
   <tr><td><code>maxThicknessSlope</code></td><td>壁に沿った総厚の変化の上限（層の端を徐々に細らせる）</td><td>0.5</td></tr>
 </table></div>
 <p>このほか <code>minNormalCos</code>, <code>wallNonOrthMargin</code>, <code>cornerStretch</code>, <code>mergeWallPoints</code>,
-<code>concaveSlide</code>, <code>nRings</code>, <code>nSmooth</code>, <code>nIter</code>, <code>nCollapseIter</code> があります（README の「境界層」）。
+<code>concaveSlide</code>, <code>nRings</code>, <code>nSmooth</code>, <code>nIter</code>, <code>nCollapseIter</code> があります（<a href="https://github.com/mmer547/cutmesh/blob/main/docs/guide.md#境界層cutmeshlayerspy">詳細ガイドの「境界層」</a>）。
 <code>"addLayers": {}</code> は既定値で層を追加します。狭い隙間がある形状では <code>finalLayerThickness</code> を 0.15 程度にすると、
 目標の厚さに達する節点が大きく増えます。ログに、目標の厚さに達した壁節点・薄くなった節点・層なしの節点の割合が出ます。</p>
 

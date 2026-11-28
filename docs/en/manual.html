@@ -295,7 +295,7 @@ python -m cutmesh.layers CASE [layerDict.json] [-out CASE2] [-noCheck] [-ascii |
   <tr><td><code>maxThicknessSlope</code></td><td>Limit changes in total thickness along the wall so the layers taper gradually.</td><td>0.5</td></tr>
 </table></div>
 <p>Additional settings include <code>minNormalCos</code>, <code>wallNonOrthMargin</code>, <code>cornerStretch</code>, <code>mergeWallPoints</code>,
-<code>concaveSlide</code>, <code>nRings</code>, <code>nSmooth</code>, <code>nIter</code>, and <code>nCollapseIter</code>. See <a href="https://github.com/mmer547/cutmesh/blob/main/README.en.md#boundary-layers-cutmeshlayerspy">Boundary layers in the README</a>.
+<code>concaveSlide</code>, <code>nRings</code>, <code>nSmooth</code>, <code>nIter</code>, and <code>nCollapseIter</code>. See <a href="https://github.com/mmer547/cutmesh/blob/main/docs/en/guide.md#boundary-layers-cutmeshlayerspy">Boundary layers in the detailed guide</a>.
 Use <code>"addLayers": {}</code> to add layers with the defaults. For narrow gaps, a <code>finalLayerThickness</code> of about 0.15 lets many more vertices reach the target thickness.
 The log reports the percentages of wall vertices at the target thickness, with thinner layers, and without layers.</p>
 
