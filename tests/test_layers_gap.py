@@ -67,6 +67,19 @@ class LayersInGap(unittest.TestCase):
         h = self.h
         return (X[:, 2] > 3.3 * h) & (X[:, 2] < 5.7 * h) & (X[:, 0] > 1.3 * h) & (X[:, 0] < 4.7 * h)
 
+    def test_absolute_sizes_without_min_thickness(self):
+        """relativeSizes false: minThickness left out stays relative to the cell size (read
+        as a length, its default 0.05 dropped every layer thinner than that)"""
+        R = self.slot_mesh()
+        nC = lambda M: int(max(np.max(M["owner"]), np.max(M["neighbour"]))) + 1
+        spec = {"nLayers": 2, "relativeSizes": False, "finalLayerThickness": 0.3 * self.h}
+        L = add_layers(R, spec, log=lambda s: None)
+        Lrel = add_layers(R, {"nLayers": 2}, log=lambda s: None)       # the same thickness, relative
+        self.assertGreater(nC(L) - nC(R), 0.8 * (nC(Lrel) - nC(R)))
+        # given, it is a length: 0.05 (5 h) is thicker than the layers, which collapse
+        L2 = add_layers(R, dict(spec, minThickness=0.05), log=lambda s: None)
+        self.assertEqual(nC(L2), nC(R))
+
     def test_one_side_only(self):
         # layers on one slot wall only: the other wall (no layers) still limits them
         h, gf = self.h, 0.3

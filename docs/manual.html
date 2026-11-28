@@ -246,7 +246,7 @@ OpenFOAM-12 では、このメッシュでも縁のない円筒ゾーンでも�
   <tr><td><code>rOuter</code></td><td>最外ブロックの外半径（自動配置）</td><td>STL の半径 + <code>2/3 × cellSize</code></td></tr>
   <tr><td><code>cellSize</code></td><td>自動配置の目標寸法（半径方向・周方向のセル幅）</td><td><code>baseCellSize</code> と <code>dz</code> の小さい方</td></tr>
   <tr><td><code>core</code>, <code>blocks</code></td><td>ブロックを手で指定する場合（下記）。両方書くか、両方書かない</td><td>自動配置</td></tr>
-  <tr><td><code>maxSizeRatio</code></td><td>ブロック境界をまたぐセル寸法の比の上限</td><td>2.5</td></tr>
+  <tr><td><code>maxSizeRatio</code></td><td>ブロック境界をまたぐセル寸法の比の上限（1 より大きい値）</td><td>2.5</td></tr>
 </table></div>
 <p><strong>自動配置</strong>（<code>core</code> と <code>blocks</code> を書かない場合）</p>
 <ul>
@@ -288,7 +288,7 @@ python -m cutmesh.layers CASE [layerDict.json] [-out CASE2] [-noCheck] [-ascii |
   <tr><td><code>expansionRatio</code></td><td>壁から内側への層厚の比</td><td>1.2</td></tr>
   <tr><td><code>finalLayerThickness</code></td><td>最も内側の層の厚さ（<code>relativeSizes</code> なら局所セル寸法比）</td><td>0.3</td></tr>
   <tr><td><code>relativeSizes</code></td><td>厚さを局所セル寸法に対する比で与える</td><td>true</td></tr>
-  <tr><td><code>minThickness</code></td><td>総厚がこれ未満の所は層を付けない</td><td>0.05</td></tr>
+  <tr><td><code>minThickness</code></td><td>総厚がこれ未満の所は層を付けない（<code>relativeSizes</code> なら局所セル寸法比。<code>relativeSizes</code> が false でも、省いたときは局所セル寸法の 0.05 倍）</td><td>0.05</td></tr>
   <tr><td><code>maxNonOrtho</code></td><td>非直交角 [deg] がこれを超えるセルは不正とみなし、そこで層を薄くする</td><td>65</td></tr>
   <tr><td><code>maxSkewness</code></td><td>歪度がこれを超える面のセルは不正とみなす（<code>null</code> で無効）</td><td>4</td></tr>
   <tr><td><code>maxGapFraction</code></td><td>総厚を、向かい合う壁までの距離のこの割合以下に抑える（0 で無効）</td><td>0.3</td></tr>

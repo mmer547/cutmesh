@@ -727,7 +727,7 @@
     },
     "maxSizeRatio": {
      "type": "number",
-     "description": "Maximum cell size ratio across block boundaries",
+     "description": "Maximum cell size ratio across block boundaries (greater than 1: cells halve in size, so a ratio up to 1 cannot be met)",
      "default": 2.5,
      "exclusiveMinimum": 0,
      "x-advanced": true
@@ -837,7 +837,7 @@
     },
     "minThickness": {
      "type": "number",
-     "description": "Omit layers where their total thickness would fall below this value.",
+     "description": "Omit layers where their total thickness would fall below this value (relative to the local cell size when relativeSizes is enabled; when it is disabled and this is left out, 0.05 x the local cell size).",
      "default": 0.05,
      "minimum": 0
     },

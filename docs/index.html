@@ -40,6 +40,12 @@
 
 <h2 id="news">更新情報</h2>
 <ul class="news">
+  <li><time datetime="2026-11-28">2026-11-28</time><span class="ver">v1.0.1</span>
+    <p><strong>不具合の修正。</strong>v1.0.0 の点検で見つかった不具合を直しました（<a href="https://github.com/mmer547/cutmesh/issues/68">#68</a>）。
+    スライディングメッシュで作ったケースを MRF の設定で作り直すと、前回の <code>constant/dynamicMeshDict</code> が残り、ゾーンがメッシュの回転と MRF の両方で回っていました。cutmesh が書いた <code>dynamicMeshDict</code> と <code>MRFProperties</code> は、そのメッシュに該当するゾーンがなければ消します（自分で書いたファイルは消さずに警告します）。
+    <code>addLayers</code> の <code>relativeSizes: false</code>（厚さを絶対値で指定）では、<code>minThickness</code> の既定値 0.05 が 5 cm と読まれて層がまったく付きませんでした。省いたときは局所セル寸法の 0.05 倍にします。<strong>このケースだけメッシュが変わります。</strong>
+    <code>addLayers</code> と <code>baseMesh</code> の値の大半を入力チェックが見ておらず、不正な値でトレースバックや無限ループ、メモリの使い果たしになっていました。スキーマ（仕様）に沿って調べ、項目名つきのエラーで止めます。スキーマが不正とする値（数値を文字列で書いたものなど）は、たまたま動いていたものもエラーになります。<code>baseMesh.maxSizeRatio</code> は 1 より大きい値にしてください（1 以下は終わりませんでした）。
+    ほかに、<code>case</code> がファイルのときのトレースバック、<code>featureCaps: 1</code> を true と扱っていたこと、<code>3.0</code> のような整数値の小数を整数として受け付けないことを直しました。公開の例のメッシュは変わりません。</p></li>
   <li><time datetime="2026-11-27">2026-11-27</time><span class="ver">v1.0.0</span>
     <p><strong>最初の安定版。</strong>meshDict の仕様を固定しました。1.x のあいだ、キーの削除・改名・意味の変更はしません（<a href="manual.html#compat">meshDict の互換性</a>）。1.0 のキーと型・選択肢・必須のキーの一覧をテストに持ち、壊れる変更はテストで止まります。
     v1.0 の条件（CI がすべて通る、既知のリークがない、公開の例が OpenFOAM の <code>checkMesh</code> を通る、wheel で配布、meshDict の仕様の固定）をすべて満たしました。版ごとの変更を <a href="https://github.com/mmer547/cutmesh/blob/main/CHANGELOG.md">CHANGELOG</a> にまとめました。メッシュは変わりません。</p></li>

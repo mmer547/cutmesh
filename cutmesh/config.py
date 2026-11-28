@@ -12,6 +12,8 @@ upgrade_keys(cfg): top-level keys renamed or retired (DEPRECATED_KEYS) read as t
 Keys starting with "_" or "//" are comments and are not checked.
 """
 import difflib
+import functools
+import json
 import math
 import os
 
@@ -59,11 +61,61 @@ def _is_comment(k):
 
 
 def _is_int(v):
+    """an integer; a float with an integer value (3.0) counts, as in JSON schema"""
+    if isinstance(v, float):
+        return math.isfinite(v) and v.is_integer()
     return isinstance(v, int) and not isinstance(v, bool)
 
 
 def _is_num(v):
     return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+_TYPE_OK = {
+    "integer": _is_int,
+    "number": _is_num,
+    "boolean": lambda v: isinstance(v, bool),
+    "string": lambda v: isinstance(v, str),
+    "array": lambda v: isinstance(v, list),
+    "object": lambda v: isinstance(v, dict),
+    "null": lambda v: v is None,
+}
+_TYPE_WORD = {"integer": "an integer", "number": "a number", "boolean": "true or false", "string": "a string",
+              "array": "a list [...]", "object": "an object {...}", "null": "null"}
+
+
+def _type_words(types):
+    w = [_TYPE_WORD[t] for t in types]
+    return w[0] if len(w) == 1 else ", ".join(w[:-1]) + " or " + w[-1]
+
+
+@functools.lru_cache(maxsize=1)
+def _schema():
+    from .schema import meshdict_schema
+    return meshdict_schema("en")
+
+
+def _schema_props(key):
+    """the property schemas of the top-level object key (cutmesh/schema.py)"""
+    return _schema()["properties"][key]["properties"]
+
+
+def _ints(v, p):
+    """v with the floats of integer value (3.0) turned into int where the schema p wants an
+    integer (the mesher uses them as counts)"""
+    if not isinstance(p, dict):
+        return v
+    t = p.get("type")
+    types = t if isinstance(t, list) else [t]
+    if isinstance(v, float) and "integer" in types and "number" not in types and v.is_integer():
+        return int(v)
+    if isinstance(v, list) and isinstance(p.get("items"), dict):
+        return [_ints(x, p["items"]) for x in v]
+    if isinstance(v, dict):
+        props = p.get("properties", {})
+        extra = p.get("additionalProperties")
+        return {k: _ints(x, props.get(k, extra)) for k, x in v.items()}
+    return v
 
 
 class _Checker:
@@ -104,6 +156,46 @@ class _Checker:
                    + ("inf" if hi is None else f"{hi:g}") + (")" if hi_open else "]"))
             self.err(f"{name} must be in {rng}, got {v!r}")
             return False
+        return True
+
+    def by_schema(self, v, p, name):
+        """v against the property schema p (cutmesh/schema.py): type, allowed values, bounds,
+        items, nested objects (required keys, unknown keys).  True when usable."""
+        t = p.get("type")
+        types = t if isinstance(t, list) else ([t] if t else [])
+        if types and not any(_TYPE_OK[x](v) for x in types):
+            self.err(f"{name} must be {_type_words(types)}, got {v!r}")
+            return False
+        if v is None:
+            return True
+        if "enum" in p and not any(v == e and isinstance(v, bool) == isinstance(e, bool) for e in p["enum"]):
+            self.err(f"{name} must be one of {', '.join(json.dumps(e) for e in p['enum'])}, got {v!r}")
+            return False
+        if _is_num(v):
+            lo, lo_open = (p["exclusiveMinimum"], True) if "exclusiveMinimum" in p else (p.get("minimum"), False)
+            hi, hi_open = (p["exclusiveMaximum"], True) if "exclusiveMaximum" in p else (p.get("maximum"), False)
+            if (lo is not None or hi is not None) and not self.num(v, name, lo, hi, lo_open, hi_open):
+                return False
+        if isinstance(v, list):
+            n = len(v)
+            if n < p.get("minItems", 0) or n > p.get("maxItems", n):
+                want = (f"{p['minItems']}" if p.get("minItems") == p.get("maxItems")
+                        else f"{p.get('minItems', 0)} to {p.get('maxItems', 'any number of')}")
+                self.err(f"{name} must have {want} items, got {v!r}")
+                return False
+            if isinstance(p.get("items"), dict):
+                return all([self.by_schema(x, p["items"], f"{name}[{i}]") for i, x in enumerate(v)])
+        if isinstance(v, dict) and "properties" in p:
+            ok = True
+            for k in p.get("required", []):
+                if k not in v:
+                    self.err(f"{name}: {k} is required")
+                    ok = False
+            self.unknown(v, set(p["properties"]), f"in {name}: ")
+            for k, x in v.items():
+                if k in p["properties"]:
+                    ok = self.by_schema(x, p["properties"][k], f"{name}.{k}") and ok
+            return ok
         return True
 
     def bool_(self, v, name):
@@ -178,6 +270,8 @@ def validate_config(cfg, log=None, layer_keys=None):
         c.num(cfg["baseCellSize"], "baseCellSize", lo=0, lo_open=True)
     if not isinstance(cfg.get("case", "."), str):
         c.err(f"case must be a directory name, got {cfg['case']!r}")
+    # (that the case is not a file is checked by mesher.run on the directory actually used:
+    # -case overrides it)
 
     for k in ("bufferLayers", "padding", "fillThinGaps", "fillThinWalls", "thinCutCells"):
         c.int_(cfg[k], k)
@@ -201,7 +295,8 @@ def validate_config(cfg, log=None, layer_keys=None):
               f" (openfoam.org), got {cfg['openfoam']!r}")
     if cfg["writeFormat"] not in ("binary", "ascii"):
         c.err(f"writeFormat must be \"binary\" or \"ascii\", got {cfg['writeFormat']!r}")
-    if cfg["featureCaps"] not in ("domain", "zone", "both", True, False, None):
+    fc = cfg["featureCaps"]
+    if not (fc is None or isinstance(fc, bool) or (isinstance(fc, str) and fc in ("domain", "zone", "both"))):
         c.err(f"featureCaps must be \"domain\", \"zone\", \"both\" or false, got {cfg['featureCaps']!r}")
 
     sr = cfg["surfaceRefinement"]
@@ -308,26 +403,38 @@ def validate_config(cfg, log=None, layer_keys=None):
         p = al.get("patches")
         if p is not None and (not isinstance(p, list) or not all(isinstance(x, str) for x in p)):
             c.err(f"addLayers.patches must be a list of patch names, got {p!r}")
-        if "nLayers" in al:
-            c.int_(al["nLayers"], "addLayers.nLayers", lo=1)
+        props = _schema_props("addLayers")
+        for k, v in al.items():
+            if k in props and k != "patches":
+                c.by_schema(v, props[k], "addLayers." + k)
 
     bm = cfg.get("baseMesh")
     if bm is not None and c.dict_(bm, "baseMesh"):
         c.unknown(bm, BASEMESH_KEYS, "in baseMesh: ")
-        if bm.get("type", "cartesian") not in ("cartesian", "cylindrical"):
-            c.err(f"baseMesh.type must be \"cartesian\" or \"cylindrical\", got {bm['type']!r}")
+        props = _schema_props("baseMesh")
+        ok = {k: c.by_schema(v, props[k], "baseMesh." + k) for k, v in bm.items() if k in props}
+        if ok.get("axis") and not any(bm["axis"]):
+            c.err("baseMesh.axis must not be zero")
+        if ok.get("maxSizeRatio") and bm["maxSizeRatio"] <= 1:
+            # the cells across a block face halve in size: a ratio up to 1 is never met (it
+            # refined without end)
+            c.err(f"baseMesh.maxSizeRatio must be greater than 1, got {bm['maxSizeRatio']!r}")
+        if ok.get("zRange") and not bm["zRange"][0] < bm["zRange"][1]:
+            c.err(f"baseMesh.zRange must be [low, high] with low < high, got {bm['zRange']!r}")
         if bm.get("type") == "cylindrical":
             if ("core" in bm) != ("blocks" in bm):
                 c.err("baseMesh: give both core and blocks, or neither (automatic layout)")
             if "core" in bm and ("rOuter" in bm or "cellSize" in bm):
                 c.err("baseMesh: rOuter and cellSize are for the automatic layout (without core and blocks)")
-            for k in ("rOuter", "cellSize"):
-                if k in bm:
-                    c.num(bm[k], "baseMesh." + k, lo=0, lo_open=True)
 
     if c.errors:
         raise ConfigError("meshDict: " + str(len(c.errors)) + " problem(s):\n  "
                           + "\n  ".join(c.errors))
+    # counts given as 3.0 (valid JSON schema integers) are used as int
+    props = _schema()["properties"]
+    for k in list(cfg):
+        if k in props:
+            cfg[k] = _ints(cfg[k], props[k])
 
 
 def check_names(cfg, names, log):
