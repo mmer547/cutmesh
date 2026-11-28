@@ -1,0 +1,36 @@
+{
+ "name": "wheel_gaps",
+ "description": "Four wheels intersect the tunnel floor. The yawed cases retain known high skewness or low adjacent-cell volume ratios (issue #71).",
+ "defaults": {
+  "expect": "valid",
+  "meshDict": {
+   "baseCellSize": 0.08,
+   "surfaceRefinement": {
+    "default": 0,
+    "floor": 1,
+    "body": 4,
+    "wheelArea": 5
+   },
+   "patchTypes": {
+    "inlet": "patch",
+    "outlet": "patch",
+    "walls": "symmetry"
+   }
+  }
+ },
+ "cases": [
+  {
+   "name": "car_wheels",
+   "stl": "../data/synthetic/car_wheels.stl",
+   "expect": "pass"
+  },
+  {
+   "name": "car_wheels_yaw7",
+   "stl": "../data/synthetic/car_wheels_yaw7.stl"
+  },
+  {
+   "name": "car_wheels_gap1_yaw7",
+   "stl": "../data/synthetic/car_wheels_gap1_yaw7.stl"
+  }
+ ]
+}

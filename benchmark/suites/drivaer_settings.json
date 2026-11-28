@@ -1,0 +1,31 @@
+{
+ "name": "drivaer_settings",
+ "description": "Shapes meshed with the settings of the DrivAer Case 2a mesh of issue #71 (no merging of small cut cells, no exact feature cut, one thin-wall split). With them the thin-wall junction split of 6d0975a raised the faces with an adjacent volume ratio below 0.05 on thin_walls from 446 to 794, as it raised those below 0.01 on DrivAer from 17 to 57; with the default settings both versions give nearly the same counts.",
+ "defaults": {
+  "cellsAcross": 24,
+  "expect": "valid",
+  "meshDict": {
+   "surfaceRefinement": {"default": 2},
+   "mergeRatio": 0,
+   "exactFeatureCut": false,
+   "fillThinWalls": 1
+  }
+ },
+ "cases": [
+  {
+   "name": "thin_walls_drivaer",
+   "stl": "../data/synthetic/thin_walls.stl",
+   "note": "synthetic thin_walls (plates under a ceiling) with the DrivAer settings"
+  },
+  {
+   "name": "car_wheels_gap1_yaw7_drivaer",
+   "stl": "../data/synthetic/car_wheels_gap1_yaw7.stl",
+   "note": "wheel_gaps car_wheels_gap1_yaw7 with the DrivAer settings",
+   "meshDict": {
+    "baseCellSize": 0.08,
+    "surfaceRefinement": {"default": 0, "floor": 1, "body": 4, "wheelArea": 5},
+    "patchTypes": {"inlet": "patch", "outlet": "patch", "walls": "symmetry"}
+   }
+  }
+ ]
+}

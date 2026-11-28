@@ -1,0 +1,79 @@
+{
+ "suite": "scale",
+ "mesherRevision": "588953b9081bacbebbd15d66d4885a147fbb6bb0",
+ "platform": "Windows AMD64 AMD64 Family 26 Model 112 Stepping 0, AuthenticAMD | Python 3.11.9 | NumPy 2.4.6",
+ "results": [
+  {
+   "name": "tilted_1m",
+   "status": "WARN",
+   "quality": {
+    "nPoints": 1127550,
+    "nCells": 983387,
+    "nFaces": 3146322,
+    "nInternalFaces": 3041900,
+    "upperTriangular": true,
+    "maxClosedness": 1.5974114446082328e-16,
+    "openCellEdges": 0,
+    "duplicateCellEdges": 0,
+    "minVol": 1.5906338965076177e-13,
+    "maxVol": 1.5183007273243815e-07,
+    "totalVol": 0.021077442528505422,
+    "nNegVol": 0,
+    "maxNonOrth": 67.02100320894077,
+    "avgNonOrth": 4.672044855107929,
+    "nNonOrth70": 0,
+    "maxSkewness": 12.739388453815701,
+    "nSkew4": 10,
+    "nBadPyramids": 0,
+    "nBadTetDecomp": 422,
+    "minFaceArea": 4.1531545554720235e-21,
+    "nVolRatio01": 7,
+    "minVolRel": 0.0005792021471124689
+   },
+   "featureEdges": {
+    "samples": 21576,
+    "mean": 0.06507788677134672,
+    "p95": 0.41745799644257026,
+    "max": 1.3330914331320778,
+    "over02": 0.1293566926214312
+   },
+   "layers": null
+  },
+  {
+   "name": "tilted_8m",
+   "status": "WARN",
+   "quality": {
+    "nPoints": 8902668,
+    "nCells": 8257094,
+    "nFaces": 25662355,
+    "nInternalFaces": 25190132,
+    "upperTriangular": true,
+    "maxClosedness": 1.6152367994052106e-16,
+    "openCellEdges": 0,
+    "duplicateCellEdges": 0,
+    "minVol": 1.1795223710247836e-14,
+    "maxVol": 1.492814541555146e-08,
+    "totalVol": 0.021078406458617076,
+    "nNegVol": 0,
+    "maxNonOrth": 69.3629843591666,
+    "avgNonOrth": 2.5837251660981906,
+    "nNonOrth70": 0,
+    "maxSkewness": 5.90076819402423,
+    "nSkew4": 16,
+    "nBadPyramids": 0,
+    "nBadTetDecomp": 894,
+    "minFaceArea": 2.422412491509504e-11,
+    "nVolRatio01": 14,
+    "minVolRel": 0.0004368601374165866
+   },
+   "featureEdges": {
+    "samples": 45789,
+    "mean": 0.047102169145710276,
+    "p95": 0.35785060767840554,
+    "max": 1.3072794955156337,
+    "over02": 0.09877918277315513
+   },
+   "layers": null
+  }
+ ]
+}

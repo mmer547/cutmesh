@@ -90,6 +90,9 @@ run_bench.py SUITE --baseline OLD/results.json --gate        # 品質ゲート�
 | 非直交性 | 70° を超える面が 0（基準ですでにあるケースは、増えないこと） |
 | 歪度 | 4 を超える面が増えない |
 | 体積 | 0 以下のセルが 0 |
+| 隣接体積比 | 小さい方のセル体積を大きい方で割った値が 0.01 未満の内部面数（`nVolRatio01`）が増えない |
+| 隣接体積比（0.05） | 同じ値が 0.05 未満の内部面数（`nVolRatio05`）の増え方が、基準の 10% 以内（10% が 5 面に満たないときは 5 面以内）。基準にこの値があるときだけ比べる |
+| 最小体積 | `minVolRel`（最小体積 / 最小格子幅³）が基準値の 90% 以上 |
 | セル数 | 基準の ±3% 以内 |
 | 境界層 | 全厚の層が付いた壁の点の割合（ログの `wall points with full thickness`）が 1 ポイント以上下がらない |
 | 特徴線 | STL の特徴線のずれが悪くならない: 最小セルの 0.2 倍より離れた点の割合が +0.5 ポイント以内、95 パーセンタイルが +0.02 hmin 以内 |
@@ -105,6 +108,66 @@ run_bench.py SUITE --baseline OLD/results.json --gate        # 品質ゲート�
 合格にせず `WORSE ... not measured` になります。その場合は基準を測り直してください。
 基準で判定したケースがこの実行で `SKIP` になった（STL がない環境など）ときも、`WORSE ... skipped in this run` になります
 （両方で `SKIP` のケースは判定しません）。
+
+体積の指標（`nVolRatio01`・`nVolRatio05`・`minVolRel`）は、判定状態（PASS / WARN など）には使いません。
+結果と `summary.md` に記録し、`--gate` で基準と比べるときだけ使います。
+内部面の数は面ごとに1回数え、境界面と、体積比がちょうど 0.01（`nVolRatio05` では 0.05）の面は数えません。
+`nVolRatio05` は後から加えた指標なので、それより前に作った基準（`baselines/gate/` の各ファイルと
+`wheel_gaps.json`）にはありません。その基準では比べず、ほかの項目だけで判定します。
+
+基準ファイルの使い分け:
+
+| ファイル | 中身 | 使う場面 |
+|---|---|---|
+| `baselines/gate/*.json` | `588953b` のメッシャーで測った品質ゲート用の基準（16 コア Ryzen AI MAX+ 395、Windows） | 同じマシンでの `--gate` |
+| `baselines/wheel_gaps.json`・`baselines/drivaer_settings.json` | それぞれのスイートの品質ゲート用の基準（前者は上と同じ Windows、後者は Linux） | そのスイートの `--gate` |
+| `baselines/` 直下のそのほか | 以前の版で作った格子の記録 | 判定状態・セル数・時間の推移を見る `--baseline` |
+
+メッシュの細部はマシンごとに違うので、`--gate` の基準は、変更前のコードを同じマシンで回した `results.json` にするのが確実です。
+基準を作ったマシンと違うマシンでは、上の基準は目安になります。
+たとえば `python benchmark/run_bench.py benchmark/suites/large.json --baseline benchmark/baselines/gate/large.json --gate --no-images` で大規模ケースを比較できます。
+
+### 接地した車輪と車体のすきま（`wheel_gaps`）
+
+風洞内の車体に4輪を加え、各タイヤが床と2 mm交わる位置まで沈めます。各形状は1004三角形で、
+傾けるケースでは風洞を含む領域全体を z 軸まわりに7°回します。格子幅は背景で80 mm、車輪付近で2.5 mmです。
+
+| ケース | 車輪と車体のすきま | 角度 | 基準格子で確認する現象 |
+|---|---:|---:|---|
+| `car_wheels` | 5 mm | 0° | 最大歪度2.00、体積比0.01未満の面は0 |
+| `car_wheels_yaw7` | 5 mm | 7° | 歪度4を超える面が2面 |
+| `car_wheels_gap1_yaw7` | 1 mm | 7° | 最小体積1.52×10⁻¹³ m³、体積比0.01未満の面が4面 |
+
+リポジトリのルートで次を実行します。
+
+```sh
+python benchmark/make_synthetic.py
+python benchmark/run_bench.py benchmark/suites/wheel_gaps.json --baseline benchmark/baselines/wheel_gaps.json --gate --no-images
+```
+
+### DrivAer の設定で作るケース（`drivaer_settings`）
+
+Issue #71 の DrivAer Case 2a のメッシュと同じ設定（`mergeRatio: 0`、`exactFeatureCut: false`、`fillThinWalls: 1`）で、
+公開の人工形状を作るスイートです。DrivAer のデータを使わずに、その設定で起きる悪化を捕まえるためのものです。
+
+| ケース | 形状 |
+|---|---|
+| `thin_walls_drivaer` | `synthetic` の `thin_walls`（天井の下に並んだ薄い板） |
+| `car_wheels_gap1_yaw7_drivaer` | `wheel_gaps` の `car_wheels_gap1_yaw7`（車輪と車体のすきま 1 mm、7° 傾けた風洞） |
+
+`6d0975a`（薄い壁の接合部の分割）は、DrivAer で体積比 0.01 未満の面を 17 から 57 に増やしました。
+このスイートでは、その前の `c2d06a42` を基準にすると、`thin_walls_drivaer` の `nVolRatio05` が 446 から 794 に増えて
+`--gate` で失敗します。既定の設定では、両方の版でほとんど同じ数になります。
+
+```sh
+python benchmark/make_synthetic.py
+python benchmark/run_bench.py benchmark/suites/drivaer_settings.json --baseline benchmark/baselines/drivaer_settings.json --gate --no-images
+```
+
+基準（`baselines/drivaer_settings.json`）は `588953b` のメッシャーで、Linux で作りました。`6d0975a` を含むので、
+`thin_walls_drivaer` は 794 面です。ほかのマシンでは、変更前のコードで作った `results.json` を基準にしてください。
+`thin_walls_drivaer` は WARN です。`fillThinWalls: 1` ではリーク検査で約 3 万本の線が固体の壁を横切っており
+（既定の `fillThinWalls: 2` では出ない）、その警告が出るためです。
 
 `baseCellSize` を指定しないケースは「外接箱の最長辺 / `cellsAcross`」（既定 24）で決めます。
 Thingi10K などは単位や大きさがばらばらなので、この方法で揃えます。
